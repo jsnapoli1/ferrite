@@ -61,6 +61,8 @@ pub async fn events(State(s): State<AppState>, headers: HeaderMap, Query(q): Que
 async fn event_loop(s: AppState, actor: Actor, mut socket: WebSocket) {
     let key = actor.hub_key();
     let (conn, mut rx) = s.core.hub.connect(&key);
+    // Call sessions opened on this socket, so their SFU connections end with it.
+    let mut sessions: Vec<String> = Vec::new();
     let hello = json!({"type": "hello", "conn": conn, "actor": actor});
     if socket.send(Message::Text(hello.to_string().into())).await.is_err() {
         s.core.hub.disconnect(&key, conn);
@@ -80,7 +82,13 @@ async fn event_loop(s: AppState, actor: Actor, mut socket: WebSocket) {
             msg = socket.recv() => match msg {
                 Some(Ok(Message::Text(text))) => {
                     let reply = match serde_json::from_str::<Value>(&text) {
-                        Ok(v) => handle_client_event(&s, &actor, conn, v).await,
+                        Ok(v) => {
+                            let r = handle_client_event(&s, &actor, conn, v).await;
+                            if let Some(sess) = r.as_ref().filter(|r| r["type"] == "call.self").and_then(|r| r["session"].as_str()) {
+                                sessions.push(sess.to_string());
+                            }
+                            r
+                        }
                         Err(_) => Some(json!({"type": "error", "error": "invalid JSON"})),
                     };
                     if let Some(r) = reply {
@@ -96,6 +104,11 @@ async fn event_loop(s: AppState, actor: Actor, mut socket: WebSocket) {
     }
     s.core.hub.disconnect(&key, conn);
     s.core.leave_calls_of_connection(&key, conn).await;
+    if let Some(sfu) = &s.sfu {
+        for sess in sessions {
+            sfu.disconnect(&sess);
+        }
+    }
 }
 
 async fn handle_client_event(s: &AppState, actor: &Actor, conn: u64, v: Value) -> Option<Value> {
@@ -116,8 +129,20 @@ async fn handle_client_event(s: &AppState, actor: &Actor, conn: u64, v: Value) -
                 let (room_id, session) = (str_of("room_id"), str_of("session"));
                 if s.core.owns_session(&room_id, &session, &actor.hub_key(), conn) {
                     s.core.leave_call(&room_id, &session).await?;
+                    if let Some(sfu) = &s.sfu {
+                        sfu.disconnect(&session);
+                    }
                 }
                 Ok(None)
+            }
+            "sfu.offer" => {
+                let (room_id, session) = (str_of("room_id"), str_of("session"));
+                if !s.core.owns_session(&room_id, &session, &actor.hub_key(), conn) {
+                    return Err(Error::Forbidden);
+                }
+                let sfu = s.sfu.as_ref().ok_or_else(|| Error::Unavailable("the SFU is not running on this server".into()))?;
+                let answer = sfu.connect(&room_id, &session, v["sdp"].clone()).map_err(Error::bad)?;
+                Ok(Some(json!({"type": "sfu.answer", "room_id": room_id, "session": session, "sdp": answer})))
             }
             "call.signal" => {
                 let (room_id, session) = (str_of("room_id"), str_of("session"));

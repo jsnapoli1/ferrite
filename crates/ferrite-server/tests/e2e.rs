@@ -28,6 +28,8 @@ async fn start(tweak: impl FnOnce(&mut Config)) -> Server {
         public_url: url.clone(),
         ..Config::default()
     };
+    // Tests run in parallel: give each server its own ephemeral SFU port.
+    cfg.sfu.udp_bind = "127.0.0.1:0".into();
     tweak(&mut cfg);
     let core = Core::open(cfg).await.unwrap();
     let state = AppState::new(core.clone());
@@ -1125,4 +1127,205 @@ async fn craft_bridge_drives_app_mcp_and_writes_back() {
     );
     let docx = alice.get("/api/files/resolve?path=/Contract.docx").await["entry"].clone();
     assert!(docx["lock"].is_null(), "lock released");
+}
+
+#[tokio::test]
+async fn caldav_carddav_sync_and_mcp_tools() {
+    let srv = start(|_| {}).await;
+    let (alice, _bob, _) = admin_and_user(&srv.url).await;
+    let tok = alice.post("/api/me/tokens", json!({"name": "phone", "scopes": ["groupware", "mcp"]})).await["secret"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let files_only = alice.post("/api/me/tokens", json!({"name": "f", "scopes": ["files"]})).await["secret"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+    let basic = |t: &str| format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("alice:{t}")));
+    let dav = |m: &str, path: &str| {
+        http.request(Method::from_bytes(m.as_bytes()).unwrap(), format!("{}{path}", srv.url))
+            .header("Authorization", basic(&tok))
+    };
+    // Discovery.
+    let r = http.get(format!("{}/.well-known/caldav", srv.url)).send().await.unwrap();
+    assert_eq!(r.status(), StatusCode::MOVED_PERMANENTLY);
+    assert_eq!(r.headers()["location"], "/remote.php/dav/");
+    let r = dav("PROPFIND", "/remote.php/dav/")
+        .header("Depth", "0")
+        .body("<d:propfind xmlns:d=\"DAV:\"><d:prop><d:current-user-principal/></d:prop></d:propfind>")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::MULTI_STATUS);
+    let xml = r.text().await.unwrap();
+    assert!(
+        xml.contains("<cal:calendar-home-set><d:href>/remote.php/dav/calendars/alice/</d:href>"),
+        "{xml}"
+    );
+    assert!(xml.contains("/remote.php/dav/addressbooks/users/alice/"));
+    let r = http
+        .request(Method::from_bytes(b"PROPFIND").unwrap(), format!("{}/remote.php/dav/", srv.url))
+        .header("Authorization", basic(&files_only))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN, "files-only tokens can't sync calendars");
+    let home = dav("PROPFIND", "/remote.php/dav/calendars/alice/")
+        .header("Depth", "1")
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(home.contains("<d:href>/remote.php/dav/calendars/alice/personal/</d:href>"), "{home}");
+    assert!(home.contains("<cal:comp name=\"VEVENT\"/>"));
+    // Create, read, query.
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//test//EN\r\nBEGIN:VEVENT\r\nUID:launch-1\r\nDTSTART:20261105T140000Z\r\nDTEND:20261105T150000Z\r\nSUMMARY:Launch review & demo\r\nX-CUSTOM:keep me\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let r = dav("PUT", "/remote.php/dav/calendars/alice/personal/launch-1.ics")
+        .header("If-None-Match", "*")
+        .header("Content-Type", "text/calendar")
+        .body(ics)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let etag = r.headers()["etag"].to_str().unwrap().to_string();
+    assert_eq!(
+        dav("GET", "/remote.php/dav/calendars/alice/personal/launch-1.ics")
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
+        ics
+    );
+    let r = dav("PUT", "/remote.php/dav/calendars/alice/personal/launch-1.ics")
+        .header("If-Match", "\"stale\"")
+        .body(ics)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::PRECONDITION_FAILED);
+    let r = dav("PUT", "/remote.php/dav/calendars/alice/personal/other.ics").body(ics).send().await.unwrap();
+    assert_eq!(r.status(), StatusCode::CONFLICT, "same UID twice in one calendar");
+    let query = |start: &str, end: &str| {
+        format!(
+            "<c:calendar-query xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\"><d:prop><d:getetag/><c:calendar-data/></d:prop><c:filter><c:comp-filter name=\"VCALENDAR\"><c:comp-filter name=\"VEVENT\"><c:time-range start=\"{start}\" end=\"{end}\"/></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>"
+        )
+    };
+    let hit = dav("REPORT", "/remote.php/dav/calendars/alice/personal/")
+        .header("Depth", "1")
+        .body(query("20261101T000000Z", "20261201T000000Z"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(hit.contains("Launch review &amp; demo") && hit.contains(&etag.replace('"', "&quot;")), "{hit}");
+    let miss = dav("REPORT", "/remote.php/dav/calendars/alice/personal/")
+        .body(query("20270101T000000Z", "20270201T000000Z"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(!miss.contains("launch-1"));
+    let mg = dav("REPORT", "/remote.php/dav/calendars/alice/personal/")
+        .body("<c:calendar-multiget xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\"><d:prop><c:calendar-data/></d:prop><d:href>/remote.php/dav/calendars/alice/personal/launch-1.ics</d:href><d:href>/remote.php/dav/calendars/alice/personal/missing.ics</d:href></c:calendar-multiget>")
+        .send().await.unwrap().text().await.unwrap();
+    assert!(mg.contains("X-CUSTOM:keep me") && mg.contains("404 Not Found"));
+    // Sync tokens: initial full sync, then no changes, then a stale token forces a resync.
+    let sync = |token: &str| {
+        dav("REPORT", "/remote.php/dav/calendars/alice/personal/").body(format!("<d:sync-collection xmlns:d=\"DAV:\"><d:sync-token>{token}</d:sync-token><d:sync-level>1</d:sync-level><d:prop><d:getetag/></d:prop></d:sync-collection>"))
+    };
+    let full = sync("").send().await.unwrap().text().await.unwrap();
+    let token = full.split("<d:sync-token>").nth(1).unwrap().split('<').next().unwrap().to_string();
+    assert!(full.contains("launch-1.ics"));
+    let same = sync(&token).send().await.unwrap().text().await.unwrap();
+    assert!(!same.contains("launch-1.ics"));
+    dav("DELETE", "/remote.php/dav/calendars/alice/personal/launch-1.ics").send().await.unwrap();
+    let r = sync(&token).send().await.unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+    assert!(r.text().await.unwrap().contains("valid-sync-token"));
+    // New calendars from clients.
+    let r = dav("MKCALENDAR", "/remote.php/dav/calendars/alice/work/")
+        .body("<c:mkcalendar xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\"><d:set><d:prop><d:displayname>Work</d:displayname></d:prop></d:set></c:mkcalendar>")
+        .send().await.unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let cals = alice.get("/api/calendar/calendars").await;
+    assert_eq!(cals["calendars"].as_array().unwrap().len(), 2);
+    // CardDAV.
+    let vcf = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:ada\r\nFN:Ada Lovelace\r\nEMAIL:ada@example.org\r\nEND:VCARD\r\n";
+    let books = dav("PROPFIND", "/remote.php/dav/addressbooks/users/alice/")
+        .header("Depth", "1")
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(books.contains("<card:addressbook/>") && books.contains("/remote.php/dav/addressbooks/users/alice/contacts/"));
+    assert_eq!(
+        dav("PUT", "/remote.php/dav/addressbooks/users/alice/contacts/ada.vcf")
+            .body(vcf)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CREATED
+    );
+    let aq = dav("REPORT", "/remote.php/dav/addressbooks/users/alice/contacts/")
+        .body("<card:addressbook-query xmlns:d=\"DAV:\" xmlns:card=\"urn:ietf:params:xml:ns:carddav\"><d:prop><card:address-data/></d:prop></card:addressbook-query>")
+        .send().await.unwrap().text().await.unwrap();
+    assert!(aq.contains("FN:Ada Lovelace"));
+    let r = dav("PUT", "/remote.php/dav/addressbooks/users/alice/contacts/bad.vcf")
+        .body(ics)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN, "events don't go in address books");
+    // The assistant's tools see and change the same data.
+    let c = mcp_call(&srv.url, &tok, "tools/call", json!({"name": "calendar_create_event", "arguments": {"summary": "Dentist", "start": "2026-11-10T09:00:00Z", "end": "2026-11-10T09:30:00Z", "location": "Main St"}})).await;
+    let id = c["result"]["structuredContent"]["event"]["id"].as_str().unwrap().to_string();
+    let u = mcp_call(
+        &srv.url,
+        &tok,
+        "tools/call",
+        json!({"name": "calendar_update_event", "arguments": {"event_id": id, "start": "2026-11-11T10:00:00Z"}}),
+    )
+    .await;
+    let ev = &u["result"]["structuredContent"]["event"];
+    assert_eq!(ev["ends_at"], "2026-11-11T10:30:00Z", "duration kept: {u}");
+    assert_eq!(ev["location"], "Main St");
+    let l = mcp_call(
+        &srv.url,
+        &tok,
+        "tools/call",
+        json!({"name": "calendar_events", "arguments": {"from": "2026-11-01", "to": "2026-12-01"}}),
+    )
+    .await;
+    assert_eq!(l["result"]["structuredContent"]["events"][0]["summary"], "Dentist");
+    let found = mcp_call(
+        &srv.url,
+        &tok,
+        "tools/call",
+        json!({"name": "contacts_search", "arguments": {"query": "lovelace"}}),
+    )
+    .await;
+    assert_eq!(found["result"]["structuredContent"]["contacts"][0]["emails"][0], "ada@example.org");
+    // And phones see the assistant's event over CalDAV.
+    let all = dav("REPORT", "/remote.php/dav/calendars/alice/personal/")
+        .body(query("20261101T000000Z", "20261201T000000Z"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(all.contains("SUMMARY:Dentist") && all.contains("DTSTART:20261111T100000Z"), "{all}");
 }

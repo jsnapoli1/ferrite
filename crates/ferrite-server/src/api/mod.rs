@@ -2,11 +2,12 @@
 
 pub mod boards;
 pub mod files;
+pub mod groupware;
 pub mod talk;
 
 use crate::AppState;
 use crate::ai::{ChatTurn, NewProvider};
-use crate::auth::{Auth, session_cookie};
+use crate::auth::{Auth, MaybeAuth, session_cookie};
 use crate::error::{ApiError, ApiResult};
 use crate::external::NewMcpServer;
 use axum::extract::{Path, Query, State};
@@ -58,6 +59,7 @@ pub fn router() -> Router<AppState> {
         .merge(files::router())
         .merge(talk::router())
         .merge(boards::router())
+        .merge(groupware::router())
         .route("/api/{*rest}", get(not_found).post(not_found).put(not_found).patch(not_found).delete(not_found))
 }
 
@@ -71,8 +73,9 @@ fn ok() -> Json<Value> {
 
 // ---- session ------------------------------------------------------------------
 
-async fn status(State(s): State<AppState>) -> ApiResult<Json<Value>> {
+async fn status(State(s): State<AppState>, MaybeAuth(auth): MaybeAuth) -> ApiResult<Json<Value>> {
     Ok(Json(json!({
+        "signed_in": auth.is_some(),
         "product": "Ferrite",
         "version": env!("CARGO_PKG_VERSION"),
         "setup_needed": s.core.user_count().await? == 0,
@@ -222,7 +225,7 @@ async fn create_token(State(s): State<AppState>, auth: Auth, Json(t): Json<NewTo
         // Tokens mint tokens only from an interactive session.
         return Err(ApiError(Error::Forbidden));
     }
-    const KNOWN: &[&str] = &["*", "files", "talk", "boards", "docs", "craft", "ai", "mcp", "admin"];
+    const KNOWN: &[&str] = &["*", "files", "talk", "boards", "docs", "groupware", "craft", "ai", "mcp", "admin"];
     if let Some(bad) = t.scopes.iter().find(|x| !KNOWN.contains(&x.as_str())) {
         return Err(ApiError(Error::bad(format!("unknown scope {bad}"))));
     }
@@ -356,6 +359,7 @@ async fn stats(State(s): State<AppState>, auth: Auth) -> ApiResult<Json<Value>> 
         "online_users": s.core.hub.online_count(),
         "live_documents": s.core.collab.active().len(),
         "rss_bytes": crate::rss_bytes(),
+        "sfu": s.sfu.as_ref().map(|x| x.stats()),
     })))
 }
 
@@ -406,6 +410,7 @@ async fn client_config(State(s): State<AppState>, _auth: Auth) -> ApiResult<Json
         "public_url": s.core.config.public_url,
         "version": env!("CARGO_PKG_VERSION"),
         "mcp_url": format!("{}/mcp", s.core.config.public_url),
+        "sfu": {"enabled": s.sfu.is_some()},
     })))
 }
 

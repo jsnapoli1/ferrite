@@ -1,1 +1,40 @@
 /* public view */
+
+.pub { min-height: 100vh; display: flex; flex-direction: column; background: radial-gradient(1200px 600px at 10% -10%, var(--accent-soft), transparent), var(--bg); }
+.pub-bar { height: var(--header-h); display: flex; align-items: center; gap: 12px; padding: 0 24px; }
+.pub-bar .spacer { flex: 1; }
+.pub-brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; color: var(--text); letter-spacing: -.01em; }
+.pub-brand:hover { text-decoration: none; }
+.pub-main { flex: 1; width: min(880px, 100%); margin: 0 auto; padding: 12px 16px 32px; }
+.pub-foot { text-align: center; padding: 18px; }
+.pub-card { padding: 24px; }
+.pub-head { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; min-width: 0; }
+.pub-head h1 { margin: 0 0 2px; overflow-wrap: anywhere; }
+.fl-icon.pub-icon { width: 48px; height: 48px; border-radius: 12px; }
+.fl-icon.pub-icon .icon { width: 24px; height: 24px; }
+.pub-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.pub-toolbar .fl-crumbs { flex: 1; min-width: 0; }
+.pub-crumbs ol { font-size: 15px; }
+.pub-list { overflow: hidden; }
+.pub-row { min-height: 56px; }
+.pub-row:focus-visible { outline: none; background: var(--surface-2); box-shadow: inset 3px 0 0 var(--accent); }
+.pub-thumb { width: 34px; height: 34px; border-radius: 8px; object-fit: cover; flex: none; background: var(--surface-2); }
+.pub-drop-hint { display: flex; align-items: center; gap: 6px; margin: 12px 0 0; }
+.pub-image { display: block; width: 100%; padding: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: repeating-conic-gradient(var(--surface-2) 0 25%, var(--surface) 0 50%) 0 0 / 16px 16px; cursor: zoom-in; margin-bottom: 16px; }
+.pub-image img { display: block; max-width: 100%; max-height: 60vh; margin: 0 auto; }
+.pub-file-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+.pub-lock, .pub-404 { width: min(420px, 100%); margin: 40px auto 0; text-align: center; }
+.pub-lock form { text-align: left; margin-top: 8px; }
+.pub-lock h1 { overflow-wrap: anywhere; }
+.pub-lock-icon { width: 64px; height: 64px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; margin: 0 auto 14px; }
+.pub-lock-icon .icon-lg { width: 30px; height: 30px; }
+.pub-404 { padding: 36px 28px; }
+.pub-404-code { font-size: 64px; font-weight: 800; letter-spacing: -.04em; line-height: 1; margin-bottom: 10px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+@media (max-width: 600px) {
+  .pub-bar { padding: 0 16px; }
+  .pub-card { padding: 16px; }
+  .pub-main { padding: 4px 12px 24px; }
+  .pub-head { align-items: flex-start; }
+}

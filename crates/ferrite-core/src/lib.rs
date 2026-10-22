@@ -14,6 +14,7 @@ pub mod db;
 pub mod error;
 pub mod events;
 pub mod files;
+pub mod groupware;
 pub mod notify;
 pub mod search;
 pub mod shares;

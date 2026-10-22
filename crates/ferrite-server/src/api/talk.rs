@@ -321,9 +321,8 @@ struct GuestBody {
 /// Joins a public room as a guest; the returned secret goes in `X-Guest-Token`.
 async fn guest_join(State(s): State<AppState>, Path(token): Path<String>, Json(b): Json<GuestBody>) -> ApiResult<Json<Value>> {
     let (actor, room, secret) = s.core.create_guest(&token, &b.name).await?;
-    Ok(Json(
-        json!({"guest": actor, "secret": secret, "room": {"token": room.token, "name": room.name, "description": room.description}}),
-    ))
+    let info = guest_room_info(&s, &room).await?;
+    Ok(Json(json!({"guest": actor, "secret": secret, "room": info})))
 }
 
 /// Public information about a public room (for the guest join page).
@@ -332,5 +331,23 @@ async fn guest_room(State(s): State<AppState>, Path(token): Path<String>) -> Api
     if room.kind != "public" {
         return Err(ApiError(Error::NotFound));
     }
-    Ok(Json(json!({"room": {"token": room.token, "name": room.name, "description": room.description}})))
+    Ok(Json(json!({"room": guest_room_info(&s, &room).await?})))
+}
+
+/// What a guest may know about a public room: enough to filter live events and show its state.
+async fn guest_room_info(s: &AppState, room: &ferrite_core::talk::Room) -> ApiResult<Value> {
+    let participants: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM participants WHERE room_id = ?")
+        .bind(&room.id)
+        .fetch_one(&s.core.db)
+        .await
+        .map_err(Error::from)?;
+    Ok(json!({
+        "id": room.id,
+        "token": room.token,
+        "name": room.name,
+        "description": room.description,
+        "read_only": room.read_only,
+        "ai_enabled": room.ai_enabled,
+        "participant_count": participants,
+    }))
 }

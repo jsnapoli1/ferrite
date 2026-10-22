@@ -119,7 +119,8 @@ pub async fn authenticate(state: &AppState, headers: &HeaderMap, method: &Method
                     user_id: user.id.clone(),
                     kind: "password".into(),
                     name: "basic".into(),
-                    scopes: "files".into(),
+                    // Passwords over Basic auth serve sync clients only (files and groupware).
+                    scopes: "files,groupware".into(),
                     created_at: ferrite_core::util::now(),
                     last_used_at: None,
                     expires_at: None,

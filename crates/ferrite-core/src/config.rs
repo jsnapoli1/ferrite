@@ -27,6 +27,29 @@ pub struct Config {
     pub craft: CraftConfig,
     /// Cookies are marked `Secure` when true (set when served over HTTPS).
     pub secure_cookies: bool,
+    /// Built-in SFU for Talk calls.
+    pub sfu: SfuSettings,
+}
+
+/// Settings of the built-in Selective Forwarding Unit (calls beyond a handful of people).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SfuSettings {
+    pub enabled: bool,
+    /// UDP address for call media. Open this port in your firewall.
+    pub udp_bind: String,
+    /// IP addresses advertised to browsers (default: this machine's primary IP and loopback).
+    pub advertise: Vec<String>,
+}
+
+impl Default for SfuSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            udp_bind: "0.0.0.0:10000".into(),
+            advertise: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +92,7 @@ impl Default for Config {
             ice_servers: Vec::new(),
             craft: CraftConfig::default(),
             secure_cookies: false,
+            sfu: SfuSettings::default(),
         }
     }
 }
@@ -91,6 +115,12 @@ impl Config {
         }
         if let Ok(v) = std::env::var("FERRITE_OPEN_REGISTRATION") {
             cfg.open_registration = v == "1" || v.eq_ignore_ascii_case("true");
+        }
+        if let Ok(v) = std::env::var("FERRITE_SFU_UDP") {
+            cfg.sfu.udp_bind = v;
+        }
+        if let Ok(v) = std::env::var("FERRITE_SFU") {
+            cfg.sfu.enabled = !(v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("off"));
         }
         if let Ok(v) = std::env::var("FERRITE_CRAFT_BIN_DIR") {
             cfg.craft.bin_dir = Some(v.into());

@@ -6,6 +6,7 @@ pub mod auth;
 pub mod craft_bridge;
 pub mod error;
 pub mod external;
+pub mod groupdav;
 pub mod mcp_http;
 pub mod public;
 pub mod tools;
@@ -27,6 +28,9 @@ pub struct AppState {
     pub ai: Arc<ai::AiService>,
     pub mcp: Arc<ferrite_mcp::Server<tools::McpHandler>>,
     pub throttle: Arc<auth::Throttle>,
+    /// Built-in SFU for calls; None when disabled or its UDP port is unavailable (calls then
+    /// fall back to peer-to-peer).
+    pub sfu: Option<Arc<ferrite_sfu::Sfu>>,
 }
 
 impl AppState {
@@ -40,12 +44,14 @@ impl AppState {
         });
         let ai = ai::AiService::new(core.clone(), tools.clone());
         let mcp = Arc::new(ferrite_mcp::Server::new(tools::McpHandler { tools: tools.clone() }));
+        let sfu = start_sfu(&core.config.sfu);
         AppState {
             core,
             tools,
             ai,
             mcp,
             throttle: Arc::new(auth::Throttle::default()),
+            sfu,
         }
     }
 
@@ -89,10 +95,38 @@ pub fn router(state: AppState) -> Router {
         .route("/dav/files/{user}", webdav.clone())
         .route("/dav/files/{user}/", webdav.clone())
         .route("/dav/files/{user}/{*path}", webdav)
+        .route("/.well-known/caldav", any(groupdav::well_known))
+        .route("/.well-known/carddav", any(groupdav::well_known))
+        .route("/remote.php/dav", any(groupdav::handle))
+        .route("/remote.php/dav/", any(groupdav::handle))
+        .route("/remote.php/dav/principals/{*rest}", any(groupdav::handle))
+        .route("/remote.php/dav/calendars/{*rest}", any(groupdav::handle))
+        .route("/remote.php/dav/addressbooks/{*rest}", any(groupdav::handle))
         .fallback(web::serve)
         .layer(DefaultBodyLimit::disable())
         .layer(tower_http::compression::CompressionLayer::new())
         .with_state(state)
+}
+
+fn start_sfu(cfg: &ferrite_core::config::SfuSettings) -> Option<Arc<ferrite_sfu::Sfu>> {
+    if !cfg.enabled {
+        return None;
+    }
+    let bind = match cfg.udp_bind.parse() {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(addr = %cfg.udp_bind, error = %e, "invalid sfu.udp_bind; calls will be peer-to-peer");
+            return None;
+        }
+    };
+    let advertise = cfg.advertise.iter().filter_map(|a| a.parse().ok()).collect();
+    match ferrite_sfu::Sfu::start(ferrite_sfu::SfuConfig { bind, advertise }) {
+        Ok(s) => Some(Arc::new(s)),
+        Err(e) => {
+            tracing::warn!(addr = %cfg.udp_bind, error = %e, "SFU could not start; calls will be peer-to-peer");
+            None
+        }
+    }
 }
 
 /// Resident memory of this process (Linux), for the admin dashboard and benchmarks.

@@ -205,8 +205,8 @@ table.table { width: 100%; border-collapse: collapse; }
 .table td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .table tr.clickable { cursor: pointer; }
 .table tr.clickable:hover td { background: var(--surface-2); }
-.icon { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; vertical-align: middle; }
-.icon.sm { width: 15px; height: 15px; }
+svg.icon { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; vertical-align: middle; }
+svg.icon.sm { width: 15px; height: 15px; }
 .icon-lg { width: 28px; height: 28px; stroke: currentColor; fill: none; stroke-width: 1.5; }
 .spinner { width: 18px; height: 18px; border: 2px solid var(--surface-3); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; display: inline-block; }
 @keyframes spin { to { transform: rotate(360deg); } }

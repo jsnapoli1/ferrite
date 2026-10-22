@@ -63,6 +63,7 @@ fn scope_of(tool: &str) -> &'static str {
         "boards" => "boards",
         "docs" | "sheet" | "mindmap" | "canvas" => "docs",
         "craft" => "craft",
+        "calendar" | "contacts" => "groupware",
         _ => "read",
     }
 }
@@ -184,6 +185,36 @@ fn definitions() -> &'static Vec<Tool> {
                 ("items", "array", "Items like {\"type\": \"note\", \"text\": \"…\", \"x\": 0, \"y\": 0, \"color\": \"#fde68a\"} or {\"type\": \"file\", \"ref\": \"/Docs/spec.pdf\"}", true),
             ]),
             Tool::new("canvas_connect", "Connect canvas items", "Draw an arrow between two canvas items.", &[("path", "string", p, true), ("from", "string", "Item id", true), ("to", "string", "Item id", true), ("label", "string", "Arrow label", false)]),
+            // Calendar and contacts
+            Tool::new("calendar_events", "Calendar events", "Events and tasks in your calendars between two times (default: the next 7 days).", &[
+                ("from", "string", "Start (RFC 3339 or YYYY-MM-DD); default now", false),
+                ("to", "string", "End (RFC 3339 or YYYY-MM-DD); default from + 7 days", false),
+            ]).read_only(),
+            Tool::new("calendar_create_event", "Create event", "Add an event to your calendar (it syncs to phones over CalDAV).", &[
+                ("summary", "string", "Title", true),
+                ("start", "string", "Start (RFC 3339, e.g. 2026-11-05T14:00:00Z, or YYYY-MM-DD for all-day)", true),
+                ("end", "string", "End (default: 1 hour later, or the next day for all-day)", false),
+                ("description", "string", "Notes", false),
+                ("location", "string", "Location", false),
+                ("calendar", "string", "Calendar name (default: the first calendar)", false),
+            ]),
+            Tool::new("calendar_update_event", "Update event", "Change an event's title, time, description or location; other details (alarms, attendees, recurrence) are kept.", &[
+                ("event_id", "string", "Event id from calendar_events", true),
+                ("summary", "string", "New title", false),
+                ("start", "string", "New start", false),
+                ("end", "string", "New end", false),
+                ("description", "string", "New notes", false),
+                ("location", "string", "New location", false),
+            ]),
+            Tool::new("calendar_delete_event", "Delete event", "Delete an event or task.", &[("event_id", "string", "Event id", true)]).destructive(),
+            Tool::new("contacts_search", "Search contacts", "Find contacts by name, email, phone or organization.", &[("query", "string", "Search text (empty for all)", false)]).read_only(),
+            Tool::new("contacts_create", "Create contact", "Add a contact to your address book (syncs over CardDAV).", &[
+                ("name", "string", "Full name", true),
+                ("emails", "string[]", "Email addresses", false),
+                ("phones", "string[]", "Phone numbers", false),
+                ("org", "string", "Organization", false),
+                ("note", "string", "Note", false),
+            ]),
             // Everything else
             Tool::new("search", "Search", "Search everything you can access: files, messages, cards.", &[("query", "string", "Words to search for", true), ("kinds", "string[]", "Limit to file, message and/or card", false)]).read_only(),
             Tool::new("notifications", "Notifications", "Your unread notifications.", &[]).read_only(),
@@ -892,6 +923,80 @@ impl FerriteTools {
                 Ok(ToolResult::json(json!({"edge_id": id})))
             }
 
+            "calendar_events" => {
+                let from = match opt(a, "from") {
+                    Some(f) => parse_when(f)?.0,
+                    None => Utc::now(),
+                };
+                let to = match opt(a, "to") {
+                    Some(t) => parse_when(t)?.0,
+                    None => from + chrono::Duration::days(7),
+                };
+                Ok(ToolResult::json(
+                    json!({"from": from, "to": to, "events": core.events_between(uid, from, to).await?}),
+                ))
+            }
+            "calendar_create_event" => {
+                let (start, all_day) = parse_when(s(a, "start")?)?;
+                let end = opt(a, "end").map(parse_when).transpose()?.map(|e| e.0);
+                let e = ferrite_core::groupware::EventInput {
+                    summary: s(a, "summary")?.to_string(),
+                    start,
+                    end,
+                    all_day,
+                    description: opt(a, "description").map(String::from),
+                    location: opt(a, "location").map(String::from),
+                    calendar: opt(a, "calendar").map(String::from),
+                };
+                Ok(ToolResult::json(json!({"event": core.create_event(uid, &e).await?})))
+            }
+            "calendar_update_event" => {
+                let id = s(a, "event_id")?;
+                let far = Utc::now() + chrono::Duration::days(365 * 50);
+                let current = core
+                    .events_between(uid, chrono::DateTime::<Utc>::MIN_UTC, far)
+                    .await?
+                    .into_iter()
+                    .find(|e| e.id == id)
+                    .ok_or(Error::NotFound)?;
+                let (start, all_day) = match opt(a, "start") {
+                    Some(t) => parse_when(t)?,
+                    None => (current.starts_at.ok_or_else(|| Error::bad("event has no start"))?, current.all_day),
+                };
+                let end = match opt(a, "end") {
+                    Some(t) => Some(parse_when(t)?.0),
+                    // Keep the duration when only the start moves.
+                    None => match (current.starts_at, current.ends_at) {
+                        (Some(s0), Some(e0)) => Some(start + (e0 - s0)),
+                        _ => None,
+                    },
+                };
+                let e = ferrite_core::groupware::EventInput {
+                    summary: opt(a, "summary").map(String::from).unwrap_or(current.summary),
+                    start,
+                    end,
+                    all_day,
+                    description: Some(opt(a, "description").map(String::from).unwrap_or(current.description)),
+                    location: Some(opt(a, "location").map(String::from).unwrap_or(current.location)),
+                    calendar: None,
+                };
+                Ok(ToolResult::json(json!({"event": core.update_event(uid, id, &e).await?})))
+            }
+            "calendar_delete_event" => {
+                core.delete_event(uid, s(a, "event_id")?).await?;
+                Ok(ToolResult::text("Deleted."))
+            }
+            "contacts_search" => Ok(ToolResult::json(json!({"contacts": core.contacts(uid, opt(a, "query")).await?}))),
+            "contacts_create" => {
+                let c = ferrite_core::groupware::ContactInput {
+                    name: s(a, "name")?.to_string(),
+                    emails: strings(a, "emails"),
+                    phones: strings(a, "phones"),
+                    org: opt(a, "org").map(String::from),
+                    note: opt(a, "note").map(String::from),
+                };
+                Ok(ToolResult::json(json!({"contact": core.create_contact(uid, &c).await?})))
+            }
             "search" => {
                 let kinds = strings(a, "kinds");
                 let kinds_ref: Vec<&str> = kinds.iter().map(String::as_str).collect();
@@ -931,6 +1036,17 @@ impl FerriteTools {
             other => Err(Error::bad(format!("unknown tool {other}"))),
         }
     }
+}
+
+/// Parses RFC 3339 date-times or YYYY-MM-DD dates (the latter as all-day).
+fn parse_when(v: &str) -> Result<(DateTime<Utc>, bool), Error> {
+    if let Ok(t) = DateTime::parse_from_rfc3339(v) {
+        return Ok((t.with_timezone(&Utc), false));
+    }
+    if let Ok(d) = chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d") {
+        return d.and_hms_opt(0, 0, 0).map(|t| (t.and_utc(), true)).ok_or_else(|| Error::bad("invalid date"));
+    }
+    Err(Error::bad(format!("{v:?} is not RFC 3339 (2026-11-05T14:00:00Z) or YYYY-MM-DD")))
 }
 
 fn parse_due(s: Option<&str>) -> Result<Option<DateTime<Utc>>, Error> {
@@ -1008,7 +1124,7 @@ impl Handler for McpHandler {
 
     fn instructions(&self) -> Option<String> {
         Some(
-            "Ferrite is a self-hosted collaboration server: files and sharing, Talk (chat and calls), kanban boards, \
+            "Ferrite is a self-hosted collaboration server: files and sharing, Talk (chat and calls), kanban boards, calendars and contacts, \
              live documents (Markdown text, CSV sheets, mind maps, canvases that arrange files and mind maps), and the \
              ArtCraft Crafting Apps for Office/Adobe-style documents. Paths are relative to the user's home. \
              Prefer docs_* tools for live documents so people editing see changes instantly."

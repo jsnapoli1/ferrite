@@ -346,7 +346,11 @@ async function boot() {
   });
   if (match(location.pathname, PUBLIC_ROUTES)) {
     // Public pages work without an account, but show the signed-in experience if there is one.
-    try { state.me = await api.get('/api/me'); } catch (_) { state.me = null; }
+    // Ask /api/status first so a signed-out visitor never triggers a 401 in the console.
+    try {
+      const st = await api.get('/api/status');
+      state.me = st.signed_in ? await api.get('/api/me') : null;
+    } catch (_) { state.me = null; }
     return route();
   }
   let status;

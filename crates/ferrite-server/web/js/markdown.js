@@ -19,9 +19,10 @@ const INLINE = /(`+)([\s\S]*?[^`])\1(?!`)|\*\*([\s\S]+?)\*\*|__([\s\S]+?)__|~~([
 export function inline(text, opts = {}) {
   const out = [];
   let last = 0;
-  INLINE.lastIndex = 0;
+  // A fresh regex per call: the recursive calls below would otherwise reset a shared lastIndex.
+  const re = new RegExp(INLINE.source, 'g');
   let m;
-  while ((m = INLINE.exec(text))) {
+  while ((m = re.exec(text))) {
     if (m.index > last) out.push(document.createTextNode(text.slice(last, m.index)));
     if (m[2] !== undefined) out.push(h('code', m[2]));
     else if (m[3] !== undefined || m[4] !== undefined) out.push(h('strong', inline(m[3] ?? m[4], opts)));
@@ -37,7 +38,7 @@ export function inline(text, opts = {}) {
       const isMe = opts.me && name.toLowerCase() === opts.me.toLowerCase();
       out.push(h(`span.mention${isMe ? '.me' : ''}`, `@${name}`));
     }
-    last = INLINE.lastIndex;
+    last = re.lastIndex;
   }
   if (last < text.length) out.push(document.createTextNode(text.slice(last)));
   return out;

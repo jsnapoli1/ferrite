@@ -377,17 +377,17 @@ impl Core {
             .fetch_optional(&self.db)
             .await?;
             let unread_mention = if row.unread > 0 {
+                // LIKE narrows the candidates; `mentions` then applies the same token rules as the
+                // web client so `@bobby` is not a mention of `bob`.
                 let pat = format!("%@{}%", me.username);
-                sqlx::query_scalar::<_, i64>(
-                    "SELECT COUNT(*) FROM messages WHERE room_id = ? AND id > ? AND deleted = 0 AND (body LIKE ? OR body LIKE '%@all%')",
-                )
-                .bind(&room.id)
-                .bind(row.last_read_message_id)
-                .bind(pat)
-                .fetch_one(&self.db)
-                .await?
-                    > 0
-                    || room.kind == "one_to_one"
+                let bodies: Vec<String> =
+                    sqlx::query_scalar("SELECT body FROM messages WHERE room_id = ? AND id > ? AND deleted = 0 AND (body LIKE ? OR body LIKE '%@all%')")
+                        .bind(&room.id)
+                        .bind(row.last_read_message_id)
+                        .bind(pat)
+                        .fetch_all(&self.db)
+                        .await?;
+                room.kind == "one_to_one" || bodies.iter().any(|b| mentions(b, &me.username) || mentions(b, "all"))
             } else {
                 false
             };
@@ -1182,20 +1182,24 @@ impl Core {
     }
 
     pub async fn leave_call(&self, room_id: &str, session: &str) -> Result<()> {
-        let (left, ended) = match self.talk.calls.get_mut(room_id) {
+        let (left, remaining) = match self.talk.calls.get_mut(room_id) {
             Some(mut members) => {
                 let before = members.len();
                 members.retain(|m| m.session != session);
-                (before != members.len(), members.is_empty())
+                (before != members.len(), members.len())
             }
-            None => (false, false),
+            None => (false, 0),
         };
+        let ended = remaining == 0;
         if ended {
             self.talk.calls.remove_if(room_id, |_, m| m.is_empty());
         }
         if left {
-            self.publish_room(room_id, &json!({"type": "call.left", "room_id": room_id, "session": session}))
-                .await?;
+            self.publish_room(
+                room_id,
+                &json!({"type": "call.left", "room_id": room_id, "session": session, "remaining": remaining, "ended": ended}),
+            )
+            .await?;
             if ended {
                 self.post_system(room_id, "Call ended").await?;
             }
@@ -1276,5 +1280,50 @@ mod tests {
     fn mentions_are_parsed() {
         assert_eq!(mention_names("hi @alice and @bob.smith, also @all."), vec!["alice", "bob.smith", "all"]);
         assert!(mention_names("mail me at a@b.com").is_empty());
+    }
+}
+
+/// Whether `body` contains an `@name` mention, using the web client's token rules: the `@` must
+/// not follow a word character, and the name is the longest run of `[A-Za-z0-9._-]` ending in an
+/// alphanumeric (so a trailing full stop is punctuation, but `@bobby` is not `@bob`).
+pub fn mentions(body: &str, name: &str) -> bool {
+    let bytes = body.as_bytes();
+    let token = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-');
+    let mut i = 0;
+    while let Some(off) = body[i..].find('@') {
+        let at = i + off;
+        i = at + 1;
+        if at > 0 && (bytes[at - 1].is_ascii_alphanumeric() || matches!(bytes[at - 1], b'_' | b'@')) {
+            continue;
+        }
+        let mut end = at + 1;
+        while end < bytes.len() && token(bytes[end]) {
+            end += 1;
+        }
+        while end > at + 1 && !bytes[end - 1].is_ascii_alphanumeric() {
+            end -= 1;
+        }
+        if body[at + 1..end].eq_ignore_ascii_case(name) {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod mention_tests {
+    use super::mentions;
+
+    #[test]
+    fn mention_tokens() {
+        assert!(mentions("hi @bob", "bob"));
+        assert!(mentions("thanks @Bob.", "bob"));
+        assert!(mentions("@bob, look", "bob"));
+        assert!(!mentions("hi @bobby", "bob"));
+        assert!(!mentions("mail bob@bob.org", "bob"));
+        assert!(mentions("ping @all please", "all"));
+        assert!(!mentions("@ballot", "all"));
+        assert!(mentions("@bob.smith hi", "bob.smith"));
+        assert!(!mentions("@bob.smith hi", "bob"));
     }
 }
