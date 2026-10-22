@@ -15,6 +15,7 @@ pub mod error;
 pub mod events;
 pub mod files;
 pub mod groupware;
+pub mod mailer;
 pub mod notify;
 pub mod recur;
 pub mod search;
@@ -40,6 +41,8 @@ pub struct Inner {
     pub message_events: broadcast::Sender<Arc<talk::Message>>,
     /// Server secret used to derive unlock proofs; generated on first start.
     pub secret: String,
+    /// SMTP connection pool for the server's own mail, created on first use.
+    pub smtp_transport: tokio::sync::OnceCell<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
 }
 
 #[derive(Clone)]
@@ -78,6 +81,7 @@ impl Core {
             collab: collab::CollabManager::default(),
             message_events,
             secret,
+            smtp_transport: tokio::sync::OnceCell::new(),
         })))
     }
 

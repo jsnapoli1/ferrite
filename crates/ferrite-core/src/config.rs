@@ -29,6 +29,8 @@ pub struct Config {
     pub secure_cookies: bool,
     /// Built-in SFU for Talk calls.
     pub sfu: SfuSettings,
+    /// Outgoing mail for the server's own messages (invitations, security notices).
+    pub smtp: Option<crate::mailer::SmtpSettings>,
 }
 
 /// Settings of the built-in Selective Forwarding Unit (calls beyond a handful of people).
@@ -93,6 +95,7 @@ impl Default for Config {
             craft: CraftConfig::default(),
             secure_cookies: false,
             sfu: SfuSettings::default(),
+            smtp: None,
         }
     }
 }
