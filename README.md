@@ -1,8 +1,8 @@
 # Ferrite
 
 Ferrite is a self-hosted collaboration server written in Rust: file sync and sharing, Talk
-(chat, video calls, guests), boards, live documents, mind maps, canvases, calendars and
-contacts. It integrates the [ArtCraft Crafting Apps](#artcraft-crafting-apps), and it is
+(chat, video calls, guests), boards, live documents, mind maps, canvases, calendars,
+contacts and mail. It integrates the [ArtCraft Crafting Apps](#artcraft-crafting-apps), and it is
 built around **MCP and AI**. It covers much of what Nextcloud does. It is designed so that a
 small machine (a mini PC, a NAS, a Raspberry-class board) runs it comfortably, including calls.
 
@@ -31,15 +31,16 @@ cargo build --release
 |---|---|
 | **Files** | Upload/download (drag and drop, multi-file progress), folders, rename/move/copy, favorites, recent, quotas, **versions** (restore any), **trash** (30-day retention, restore), **locks**, content-addressed storage with **deduplication** (BLAKE3), full-text search inside text files, previews for images, PDF, text, audio and video. |
 | **Sharing** | Share with users, groups or a Talk conversation (read / edit / create / delete / reshare bits). Public links can have a password, an expiry, and an "upload" mode (file drop). |
-| **Talk** | Group, public, one-to-one and note-to-self conversations. Markdown, replies, reactions, edits, deletes, @mentions with unread badges, typing indicators, polls, file sharing (from Files or by upload, drop or paste). **Guests** join public conversations by link. **Video/audio calls** with screen sharing, raise hand, speaker detection, and mute/camera indicators; routed through the built-in **SFU**, with peer-to-peer as the fallback. **Moderation:** lobby (with an opening time), room passwords, who may start calls, ask to mute / mute everyone, lower hands (a raised-hands queue), remove from a call. **Breakout rooms** (automatic, manual or free choice) with live moves, broadcast, help requests and a timer. |
+| **Talk** | Group, public, one-to-one and note-to-self conversations. Markdown, replies, reactions, edits, deletes, @mentions with unread badges, typing indicators, polls, file sharing (from Files or by upload, drop or paste). **Guests** join public conversations by link. **Video/audio calls** at up to **720p, 30 fps** with screen sharing, raise hand, speaker detection, and mute/camera indicators; routed through the built-in **SFU** with simulcast (each person receives the resolution their screen shows), with peer-to-peer as the fallback. **Server-side recording** (one WebM per person, no re-encoding). **Moderation:** lobby (with an opening time), room passwords, who may start calls, ask to mute / mute everyone, lower hands (a raised-hands queue), remove from a call. **Breakout rooms** (automatic, manual or free choice) with live moves, broadcast, help requests and a timer. |
 | **Boards** | Kanban boards with columns, cards (drag or keyboard), labels, due dates, assignees, comments, links to files/folders/conversations/URLs, read-only members and archive. |
 | **Live documents** | Real-time co-editing (CRDT, Yjs-compatible) of **Markdown/text**, **spreadsheets** (formulas: arithmetic, refs, SUM/AVERAGE/MIN/MAX/COUNT), **mind maps** (`.fmind`) and **canvases** (`.fcanvas`: notes, frames, files, embedded mind maps and boards, arrows). They show peers' presence and cursors, and save automatically, with versions. |
-| **Calendar and contacts** | CalDAV and CardDAV at Nextcloud-compatible URLs. Month/week/list views. **Recurring events are expanded** (RRULE, EXDATE, RDATE, overridden instances), DST-correct with IANA time zones. Changes from any client or tab appear live. Contacts can be edited. |
+| **Calendar and contacts** | CalDAV and CardDAV at Nextcloud-compatible URLs. Month/week/list views. **Recurring events are expanded** (RRULE, EXDATE, RDATE, overridden instances), DST-correct with IANA time zones. Changes from any client or tab appear live. **Sharing** with users and groups (read-only or read-write) and public subscription links. **Invitations** with RSVPs: Ferrite users get them in their calendar, everyone else by email with Accept/Maybe/Decline links (no account needed); the server schedules, so nobody gets an invitation twice. Contacts can be edited. |
 | **Mail** | Webmail for your existing **IMAP/SMTP accounts** (settings found automatically for well-known providers). Three panes (one at a time on phones), **conversations**, HTML mail sanitized and shown in a sandboxed frame with **remote images blocked** until you ask, attachments (download or **save to Files**), read/flag/move/archive/delete with multi-select and keyboard shortcuts, search (cached mail and the mail server), replies and forwards with quoting, attachments from upload or Files, drafts and sent mail filed on the server. **New mail arrives live** (IMAP IDLE) with a notification. Passwords are encrypted at rest. |
 | **Search** | One search across files, messages, cards, events, contacts and mail. Full text always; **semantic** (by meaning) when an embedding model is configured. |
-| **MCP** | Ferrite is an **MCP server**: 68 tools, resources and prompts over Streamable HTTP and stdio, for both protocol eras. It is also an **MCP client**: it uses the Crafting Apps' MCP servers and any MCP servers you add. |
+| **MCP** | Ferrite is an **MCP server**: 76 tools, resources and prompts over Streamable HTTP and stdio, for both protocol eras. It is also an **MCP client**: it uses the Crafting Apps' MCP servers and any MCP servers you add. |
 | **AI** | Bring your own model: any **OpenAI-compatible** server (Ollama, llama.cpp, LM Studio, vLLM, …) or **Anthropic's Claude API**. The assistant uses the same MCP tools with the user's own permissions, and is **read-only unless the user allows changes**. Typing `@assistant` in any conversation brings in the Talk bot. Per-user consent. |
-| **Admin** | Users, groups, quotas, disabling, password reset, app tokens with scopes, server stats (memory, dedup savings, SFU traffic). |
+| **Notifications** | Live in the app, and **Web Push** to browsers and phones (installable app; iPhone from the Home Screen): mentions, direct messages, shares, assignments, invitations and incoming calls (Join/Dismiss), with per-category settings. |
+| **Admin** | Users, groups, quotas, disabling, password reset, app tokens with scopes, server stats (memory, dedup savings, SFU traffic and recordings). |
 | **Sign-in security** | **Two-factor authentication** (TOTP authenticator apps, one-time recovery codes; optionally required for everyone) and **single sign-on** with any OpenID Connect provider (Keycloak, Authentik, Entra ID, Google, …). |
 
 The web app is embedded in the binary: no build step, no CDN, light and dark themes, and
@@ -54,17 +55,17 @@ server, so latencies at high connection counts include its own CPU contention.
 
 | Measurement | Result |
 |---|---|
-| Release binary (web app, Yjs and the IANA time-zone database included) | 31 MB |
-| Resident memory, idle after start | **19 MB** |
-| Memory per live WebSocket (Talk/event connection) | **13.5 KiB** |
-| 1,000 live sockets (50 users × 20): total RSS | 34 MB |
-| 5,000 live sockets (100 users × 50): total RSS | 87 MB |
-| Chat fan-out, 1,000 sockets, 200 messages at ~50/s: deliveries | 200,000 of 200,000 · ~29,600/s |
-| Fan-out latency, post → every socket (1,000 sockets) | p50 10 ms · p95 16 ms · p99 20 ms |
-| Fan-out latency (5,000 sockets, 500,000 deliveries) | p50 38 ms · p95 61 ms · p99 71 ms |
-| Message history page (50 messages, auth + permission checks), 32 concurrent clients | ~1,150–1,190 requests/s |
-| WebDAV, 64 MiB file | upload ~270 MiB/s · download ~500 MiB/s |
-| 3-person video call through the SFU (headless Chromium, fake camera) | each participant decodes ~20 fps from both others over **one** connection |
+| Release binary (web app, Yjs and the IANA time-zone database included) | 40 MB |
+| Resident memory, idle after start | **26 MB** (5.7 MB heap; the rest is mapped pages of the binary, which the kernel can drop under pressure) |
+| Memory per live WebSocket (Talk/event connection) | **14.4–14.8 KiB** |
+| 1,000 live sockets (50 users × 20): total RSS | 42 MB |
+| 5,000 live sockets (100 users × 50): total RSS | 98 MB |
+| Chat fan-out, 1,000 sockets, 200 messages at ~50/s: deliveries | 200,000 of 200,000 · ~30,700/s |
+| Fan-out latency, post → every socket (1,000 sockets) | p50 9 ms · p95 13 ms · p99 16 ms |
+| Fan-out latency (5,000 sockets, 500,000 deliveries) | p50 33 ms · p95 54 ms · p99 63 ms |
+| Message history page (50 messages, auth + permission checks), 32 concurrent clients | ~1,170–1,370 requests/s |
+| WebDAV, 64 MiB file | upload ~260–320 MiB/s · download ~510–550 MiB/s |
+| Video calls, 720p60 test camera (`e2e/callfps.mjs`), worst receiver | **30 fps** for 2 and 3 people, through the SFU and peer to peer (was 20–24 fps before the capture cap was lifted) |
 
 Reproduce:
 
@@ -80,6 +81,8 @@ FERRITE_DATA_DIR=/tmp/fe-bench ./target/release/ferrite serve &
 - An in-process event hub, so there's no Redis or NATS, and an in-process SFU (str0m) on one UDP port, so there's no Janus.
 - Content-addressed blobs that are stored once.
 - 4 KiB WebSocket read buffers.
+- In calls, senders pause simulcast layers nobody is watching, so small machines spend their CPU on frame rate, not on unseen 720p encodes.
+- HTTP clients for push, single sign-on and providers are created on first use.
 - Batched queries on hot paths.
 - glibc tuning so that argon2's 19 MiB password-hashing buffers go back to the OS.
 
@@ -89,7 +92,7 @@ FERRITE_DATA_DIR=/tmp/fe-bench ./target/release/ferrite serve &
 - Larger calls use the High-performance Backend, "composed by two elements: the signaling server and the WebRTC gateway" (Janus) ([Nextcloud portal](https://portal.nextcloud.com/article/Nextcloud-Talk/High-Performance-Backend/Installation-of-Nextcloud-Talk-High-Performance-Backend)), and that signaling server "connects to a NATS server" ([nextcloud-spreed-signaling](https://github.com/strukturag/nextcloud-spreed-signaling)).
 
 Ferrite ships the equivalent of that whole stack (persistent sockets, signaling and an SFU) in
-the same 19 MB process. I have not run Nextcloud on this machine, so this README makes no
+the same process (26 MB idle). I have not run Nextcloud on this machine, so this README makes no
 side-by-side performance claims.
 
 ## Talk and calls
@@ -101,7 +104,11 @@ side-by-side performance claims.
   - The first offer/answer goes over the WebSocket; later renegotiation runs over a WebRTC data channel.
   - Open **UDP 10000** (configurable) on the server.
   - When the SFU is disabled or its port is busy, calls fall back to a peer-to-peer mesh automatically. The server tells all participants which transport to use, so they always agree.
-- Capture is capped at 640×360 / 24 fps, which keeps calls light on small machines and links.
+- **Video quality and frame rate:** cameras and screens are captured at up to 720p, 30 fps.
+  - Through the SFU, each sender encodes three simulcast layers (320×180, 640×360, 1280×720, all at 30 fps). Each receiver asks for the layer its tile needs, from the tile's size on screen (the smallest while the tab is hidden). The SFU switches layers only on keyframes, and tells every sender the highest layer anyone wants, so unwatched layers are paused.
+  - When bandwidth or CPU is short, cameras keep their frame rate and lower resolution first; screen shares balance both so text stays readable.
+  - Peer to peer, each connection gets its own encode, halved in resolution once there are several peers.
+- **Recording** (moderators, through the SFU): the SFU writes every participant's audio and best video layer straight into one WebM file per person, with no decoding or re-encoding. Everyone in the call sees a "Recording" indicator and the chat gets notices. When it stops (by a moderator, when the call ends, or after 4 hours), the files go into the moderator's Files under `Talk/Recordings/<conversation> <date time>/` and are shared into the chat. Peer-to-peer calls can't be recorded, since the server never sees their media.
 - **TURN:** on a LAN nothing extra is needed. Across NATs, add a TURN server under `ice_servers` (see [Configuration](#configuration)).
 - **Guests** open `https://your-server/join/<token>`, pick a name (and the room password, when set), and can chat, react, vote and join calls. They cannot share files or administer the room.
 - **Moderation:** moderators can hold everyone else in a **lobby** (optionally until a set time), ask people to mute, lower hands, remove someone from the call, and limit starting calls to moderators. **Breakout rooms** are child conversations of the main one: participants' clients move into their room's chat and call when they start and come back when they stop (by hand or on a timer); their chats stay readable.
@@ -156,7 +163,7 @@ HTTP client configuration:
 { "mcpServers": { "ferrite": { "url": "https://your-server/mcp", "headers": { "Authorization": "Bearer <app token>" } } } }
 ```
 
-**Tools (68)**, each annotated read-only or destructive, and each limited by the token's scopes:
+**Tools (76)**, each annotated read-only or destructive, and each limited by the token's scopes:
 
 | Group | Tools |
 |---|---|
@@ -165,7 +172,7 @@ HTTP client configuration:
 | Boards | `boards_list` `boards_get` `boards_create` `boards_add_card` `boards_update_card` `boards_move_card` `boards_assign` `boards_comment` `boards_link` `boards_my_cards` |
 | Live documents | `docs_create` `docs_read` `docs_append` `docs_replace` `sheet_set` `mindmap_add` `mindmap_update` `canvas_add` `canvas_connect` |
 | Mail | `mail_accounts` `mail_list` `mail_read` `mail_search` `mail_draft` `mail_send` `mail_mark` `mail_move` `mail_delete` |
-| Calendar and contacts | `calendar_events` `calendar_create_event` `calendar_update_event` `calendar_delete_event` `contacts_search` `contacts_create` `contacts_update` |
+| Calendar and contacts | `calendar_events` `calendar_create_event` `calendar_update_event` `calendar_delete_event` `calendar_share` `calendar_unshare` `calendar_respond` `contacts_search` `contacts_create` `contacts_update` |
 | Everything else | `search` (hybrid full-text + semantic) `notifications` `activity` `users_search` |
 | Crafting Apps | `craft_apps` `craft_open` `craft_call` `craft_close` |
 
@@ -244,6 +251,14 @@ credential = "secret"
 [push]
 contact = "mailto:admin@example.org"        # VAPID contact for push services (default: public_url)
 
+[smtp]                                      # the server's own mail: invitations, security notices
+host = "smtp.example.org"
+port = 587
+security = "starttls"                       # "starttls" (587), "tls" (465) or "none" (local relay only)
+username = "ferrite@example.org"
+password = "…"
+from = "Ferrite <ferrite@example.org>"
+
 [craft]
 bin_dir = "/opt/craft/bin"                  # where <app>-cli binaries live (PATH is also searched)
 [craft.commands.gridcraft]                  # optional per-app override of the MCP launch command
@@ -303,6 +318,10 @@ ferrite 2fa-reset bob                           # turn off bob's two-factor auth
 - **User files** are served with `Content-Security-Policy: sandbox`, and only safe types render inline. Everything else downloads.
 - **AI:** the assistant and the Talk bot act through the same tools with the **requesting user's** permissions, and are read-only unless the user allows changes for that request. Stdio MCP servers (which run commands) can only be added by admins.
 - **Crafting Apps** run confined to a per-session work folder, and the original file is locked while they work.
+- **Mail account passwords** are encrypted at rest (ChaCha20-Poly1305, key derived from the server secret, bound to the account) and never returned by the API. HTML mail is sanitized on the server and shown in a sandboxed frame without scripts; remote images load only when asked.
+- **Web Push** endpoints must be `https` and resolve to public addresses (checked at subscribe time and before every send), so subscriptions can't be used to reach internal services. Payloads are end-to-end encrypted to the device.
+- **Recording** is limited to moderators (checked on the server), everyone in the call sees that it's on, and the files go only to the moderator's Files and the conversation.
+- **Invitation links** for external guests carry an HMAC of organizer, event and attendee; answers are recorded only on a button press, so mail scanners opening links change nothing.
 
 ## Nextcloud parity
 
@@ -333,7 +352,7 @@ This is an honest map against Nextcloud's core feature set: ✅ done, 🟡 parti
 | Collaborative text | ✅ | Markdown |
 | Collaborative office (Collabora/OnlyOffice) | 🟡 | Live spreadsheets and text built in. Word/Excel/PowerPoint and more through the Crafting Apps (desktop over WebDAV, or headless via MCP), but no in-browser rendering of .docx/.xlsx/.pptx |
 | Mind maps and whiteboards | ✅ | Canvases with embedded files, mind maps and boards |
-| Calendar (CalDAV) | ✅ | Recurrence expansion. VTODO tasks are read-only in the web UI (editable by CalDAV clients). Calendar sharing between users and invitations/scheduling (iTIP) not implemented |
+| Calendar (CalDAV) | ✅ | Recurrence expansion, sharing (users, groups, public links), invitations with server-side scheduling (RFC 6638) and email RSVPs. Replies emailed back from guests' own mail clients aren't read (they use the link). VTODO tasks are read-only in the web UI |
 | Contacts (CardDAV) | ✅ | |
 | Mail | ✅ | Webmail for IMAP/SMTP accounts (no POP3, no OAuth sign-in: use app passwords; no mail filters or vacation replies) |
 | Activity stream, notifications | ✅ | |
@@ -352,21 +371,24 @@ This is an honest map against Nextcloud's core feature set: ✅ done, 🟡 parti
 ```
 crates/
   ferrite-core     domain logic: auth, files, blobs, shares, Talk, boards, live docs (yrs),
-                   groupware + recurrence, search, Craft registry, SQLite migrations
+                   groupware + recurrence, calendar sharing and scheduling, mail (IMAP sync), 2FA and SSO,
+                   push queue, search, Craft registry, SQLite migrations
   ferrite-mcp      MCP protocol: server (both eras, HTTP + stdio) and client
   ferrite-ai       providers (OpenAI-compatible, Anthropic) and the tool-using agent loop
-  ferrite-sfu      selective forwarding unit (str0m)
+  ferrite-sfu      selective forwarding unit (str0m): simulcast layer selection, WebM recording
   ferrite-server   the `ferrite` binary: REST, WebSockets, WebDAV/CalDAV/CardDAV, MCP endpoint,
                    AI service, semantic indexer, Craft bridge, embedded web app (web/)
 e2e/               Playwright browser tests
 docs/bench/        benchmark results
 ```
 
-**Rust tests:** `cargo test --workspace` runs 77 tests. They include end-to-end tests that
+**Rust tests:** `cargo test --workspace` runs 125 tests. They include end-to-end tests that
 start real servers and cover:
 - login/CSRF and tokens
 - files, sharing, WebDAV, CalDAV/CardDAV
 - Talk with call signaling, lobby, passwords, call moderation and breakout rooms
+- 2FA and single sign-on (RFC 6238 vectors, mock OpenID Connect providers), Web Push (RFC 8291 vectors, a mock push service), calendar sharing and invitations (an SMTP sink)
+- the WebM muxer, checked by decoding and seeking real VP8/Opus frames with ffmpeg (when installed)
 - live co-editing over WebSockets
 - MCP in both protocol eras
 - the assistant and Talk bot against a mock model
@@ -390,12 +412,15 @@ cd e2e && FERRITE_URL=http://127.0.0.1:8821 node files.mjs
 | `smoke.mjs` | App shell, navigation, no console errors |
 | `files.mjs` | Files, sharing dialog, public links (password, upload), versions, trash, Settings (profile, AI, tokens/MCP, MCP servers, Craft, admin), the assistant against a mock model, mobile layouts |
 | `talk.mjs` | Two-user chat (mentions, unread, replies, reactions, edit/delete, typing, polls, files), a video call (connect, mute/hand/camera/screen-share indicators, leave), guest join, deep links, narrow layouts |
-| `sfu.mjs` | Three-person call through the SFU: one connection each, ~20 fps decoded from both others, server forwarding counters, clean leave |
+| `sfu.mjs` | Three-person call through the SFU: one connection each, video decoded from both others, server forwarding counters, clean leave, and a live switch to a larger simulcast layer when a tile grows |
+| `callfps.mjs` | Frame-rate probe for N people (`PEOPLE`, `CAMERA=<y4m>` for a 720p60 test camera, `MIN_FPS` to fail below a rate): per-layer encode rate, resolution and limitation reason, decoded fps per receiver |
+| `recording.mjs` | Recording permissions, indicator, one WebM per person in Files and in the chat, ffprobe-checked VP8/Opus content and duration, automatic stop when the call ends |
 | `moderation.mjs` | Lobby (waiting screen, who waits, live opening), guest password, raised-hands queue, ask to mute, mute everyone, remove and rejoin, who may start calls, breakout rooms (manual assignment, live chat and call moves for users and a guest, broadcast, help request, stop and return), phone and dark layouts |
 | `boards.mjs` | Boards, card modal, drag and keyboard moves, read-only members, and the four live editors with two users co-editing |
 | `calendar.mjs` | Month/week/list, create/edit/move events, recurring series across DST (Europe/Berlin), EXDATE, series edits, live refresh across tabs, contacts create/edit/search/delete, phone layouts |
 | `search.mjs` | Search results for files, events and contacts open the right views |
 | `security.mjs` | 2FA set-up in Settings, sign-in with a TOTP code (computed in the test) and with a recovery code, the admin's 2FA view, SSO through a mock OpenID Connect provider served by the script (cancel and success); needs the `[[oidc]]` block from its header |
+| `invites.mjs` | Calendar sharing and public links, guests with suggestions, invitation by email (the script runs an SMTP sink; set `[smtp]` to 127.0.0.1:8836), answers from the dialog and from the public page, read-only and read-write shares |
 | `push.mjs` | Service worker and manifest, Settings → Notifications, pushes to a mock push service decrypted independently, push handling and notification clicks in the service worker (run the server with `FERRITE_PUSH_ALLOW_INSECURE=1`) |
 | `mail.mjs` | Mail against a real Dovecot/Postfix server (`mail-server.sh start` first): account setup, folders, threads, sanitized HTML and remote images, attachments to Files, keyboard shortcuts, reply/compose with autocomplete and attachments, live arrival over IDLE, archive/delete, drafts, search, dark and phone layouts |
 
