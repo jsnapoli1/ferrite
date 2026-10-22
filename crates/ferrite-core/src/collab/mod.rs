@@ -82,7 +82,9 @@ impl DocKind {
     pub fn empty_json(self) -> Value {
         match self {
             DocKind::Mindmap => json!({"format": codec::MINDMAP_FORMAT, "version": 1, "nodes": []}),
-            DocKind::Canvas => json!({"format": codec::CANVAS_FORMAT, "version": 1, "items": [], "edges": []}),
+            DocKind::Canvas => {
+                json!({"format": codec::CANVAS_FORMAT, "version": 1, "items": [], "edges": []})
+            }
             _ => Value::Null,
         }
     }
@@ -257,7 +259,11 @@ impl Core {
         };
         let node = self.node(&s.node_id).await?;
         let parent = node.parent_id.clone().ok_or(Error::NotFound)?;
-        let opts = WriteOpts { keep_version, from_collab: true, ..Default::default() };
+        let opts = WriteOpts {
+            keep_version,
+            from_collab: true,
+            ..Default::default()
+        };
         // The owner is always allowed to write; locks held by others make sessions read-only,
         // so no edits (and no flushes) can happen while a Craft app holds the file.
         let lock_token = self.lock_of(&node.id).await?.map(|l| l.token);
@@ -299,7 +305,15 @@ impl Core {
             }
             out
         };
-        Ok((CollabConn { session, rx, read_only, client_ids: HashSet::new() }, initial))
+        Ok((
+            CollabConn {
+                session,
+                rx,
+                read_only,
+                client_ids: HashSet::new(),
+            },
+            initial,
+        ))
     }
 
     /// Handles one binary frame from a client; returns frames to send back to it.
@@ -320,7 +334,10 @@ impl Core {
                         continue;
                     }
                     let update = Update::decode_v1(&u).map_err(|e| Error::bad(format!("bad update: {e}")))?;
-                    aw.doc().transact_mut().apply_update(update).map_err(|e| Error::bad(format!("cannot apply update: {e}")))?;
+                    aw.doc()
+                        .transact_mut()
+                        .apply_update(update)
+                        .map_err(|e| Error::bad(format!("cannot apply update: {e}")))?;
                 }
                 Message::Awareness(update) => {
                     conn.client_ids.extend(update.clients.keys().copied());
@@ -402,9 +419,16 @@ impl Core {
             return Err(Error::bad("title required"));
         }
         let ext = kind.extension();
-        let name = if title.to_ascii_lowercase().ends_with(&format!(".{ext}")) { title.to_string() } else { format!("{title}.{ext}") };
+        let name = if title.to_ascii_lowercase().ends_with(&format!(".{ext}")) {
+            title.to_string()
+        } else {
+            format!("{title}.{ext}")
+        };
         let stem = name.trim_end_matches(&format!(".{ext}")).to_string();
-        let opts = WriteOpts { create_only: true, ..WriteOpts::user() };
+        let opts = WriteOpts {
+            create_only: true,
+            ..WriteOpts::user()
+        };
         self.write_bytes(user_id, parent_id, &name, &kind.initial_content(&stem), opts).await
     }
 

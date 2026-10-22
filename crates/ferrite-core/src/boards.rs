@@ -117,7 +117,12 @@ pub struct CardUpdate {
 
 impl Core {
     pub async fn board(&self, id: &str) -> Result<Board> {
-        Ok(sqlx::query_as("SELECT id, owner_id, title, color, archived, created_at FROM boards WHERE id = ?").bind(id).fetch_one(&self.db).await?)
+        Ok(
+            sqlx::query_as("SELECT id, owner_id, title, color, archived, created_at FROM boards WHERE id = ?")
+                .bind(id)
+                .fetch_one(&self.db)
+                .await?,
+        )
     }
 
     /// Returns the board and whether the user may edit it; NotFound when they can't see it.
@@ -145,21 +150,29 @@ impl Core {
     }
 
     pub async fn accessible_board_ids(&self, user_id: &str) -> Result<Vec<String>> {
-        Ok(sqlx::query_scalar("SELECT id FROM boards WHERE owner_id = ?1 UNION SELECT board_id FROM board_members WHERE user_id = ?1")
-            .bind(user_id)
-            .fetch_all(&self.db)
-            .await?)
+        Ok(
+            sqlx::query_scalar("SELECT id FROM boards WHERE owner_id = ?1 UNION SELECT board_id FROM board_members WHERE user_id = ?1")
+                .bind(user_id)
+                .fetch_all(&self.db)
+                .await?,
+        )
     }
 
     async fn board_audience(&self, board: &Board) -> Result<Vec<String>> {
-        let mut users: Vec<String> = sqlx::query_scalar("SELECT user_id FROM board_members WHERE board_id = ?").bind(&board.id).fetch_all(&self.db).await?;
+        let mut users: Vec<String> = sqlx::query_scalar("SELECT user_id FROM board_members WHERE board_id = ?")
+            .bind(&board.id)
+            .fetch_all(&self.db)
+            .await?;
         users.push(board.owner_id.clone());
         Ok(users)
     }
 
     async fn board_changed(&self, board: &Board, what: &str) -> Result<()> {
         let aud = self.board_audience(board).await?;
-        self.hub.publish(aud.iter().map(String::as_str), &json!({"type": "boards.changed", "board_id": board.id, "what": what}));
+        self.hub.publish(
+            aud.iter().map(String::as_str),
+            &json!({"type": "boards.changed", "board_id": board.id, "what": what}),
+        );
         Ok(())
     }
 
@@ -180,10 +193,22 @@ impl Core {
             .await?;
         let defaults = ["To do".to_string(), "Doing".to_string(), "Done".to_string()];
         for (i, s) in stacks.unwrap_or(&defaults).iter().enumerate() {
-            sqlx::query("INSERT INTO stacks (id, board_id, title, position) VALUES (?, ?, ?, ?)").bind(new_id()).bind(&id).bind(s).bind(i as f64).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO stacks (id, board_id, title, position) VALUES (?, ?, ?, ?)")
+                .bind(new_id())
+                .bind(&id)
+                .bind(s)
+                .bind(i as f64)
+                .execute(&mut *tx)
+                .await?;
         }
         for (t, c) in [("Urgent", "#ef4444"), ("Idea", "#a855f7"), ("Blocked", "#f59e0b")] {
-            sqlx::query("INSERT INTO board_labels (id, board_id, title, color) VALUES (?, ?, ?, ?)").bind(new_id()).bind(&id).bind(t).bind(c).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO board_labels (id, board_id, title, color) VALUES (?, ?, ?, ?)")
+                .bind(new_id())
+                .bind(&id)
+                .bind(t)
+                .bind(c)
+                .execute(&mut *tx)
+                .await?;
         }
         tx.commit().await?;
         self.board(&id).await
@@ -213,22 +238,26 @@ impl Core {
         .bind(board_id)
         .fetch_all(&self.db)
         .await?;
-        let label_rows: Vec<(String, String)> = sqlx::query_as("SELECT cl.card_id, cl.label_id FROM card_labels cl JOIN cards c ON c.id = cl.card_id WHERE c.board_id = ?")
-            .bind(board_id)
-            .fetch_all(&self.db)
-            .await?;
-        let assignee_rows: Vec<(String, String)> = sqlx::query_as("SELECT ca.card_id, ca.user_id FROM card_assignees ca JOIN cards c ON c.id = ca.card_id WHERE c.board_id = ?")
-            .bind(board_id)
-            .fetch_all(&self.db)
-            .await?;
-        let links: Vec<CardLink> = sqlx::query_as("SELECT l.id, l.card_id, l.kind, l.target, l.title FROM card_links l JOIN cards c ON c.id = l.card_id WHERE c.board_id = ?")
-            .bind(board_id)
-            .fetch_all(&self.db)
-            .await?;
-        let comment_counts: Vec<(String, i64)> = sqlx::query_as("SELECT cc.card_id, COUNT(*) FROM card_comments cc JOIN cards c ON c.id = cc.card_id WHERE c.board_id = ? GROUP BY cc.card_id")
-            .bind(board_id)
-            .fetch_all(&self.db)
-            .await?;
+        let label_rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT cl.card_id, cl.label_id FROM card_labels cl JOIN cards c ON c.id = cl.card_id WHERE c.board_id = ?")
+                .bind(board_id)
+                .fetch_all(&self.db)
+                .await?;
+        let assignee_rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT ca.card_id, ca.user_id FROM card_assignees ca JOIN cards c ON c.id = ca.card_id WHERE c.board_id = ?")
+                .bind(board_id)
+                .fetch_all(&self.db)
+                .await?;
+        let links: Vec<CardLink> =
+            sqlx::query_as("SELECT l.id, l.card_id, l.kind, l.target, l.title FROM card_links l JOIN cards c ON c.id = l.card_id WHERE c.board_id = ?")
+                .bind(board_id)
+                .fetch_all(&self.db)
+                .await?;
+        let comment_counts: Vec<(String, i64)> =
+            sqlx::query_as("SELECT cc.card_id, COUNT(*) FROM card_comments cc JOIN cards c ON c.id = cc.card_id WHERE c.board_id = ? GROUP BY cc.card_id")
+                .bind(board_id)
+                .fetch_all(&self.db)
+                .await?;
         let mut stack_views: Vec<StackView> = stacks.into_iter().map(|s| StackView { stack: s, cards: vec![] }).collect();
         for card in cards {
             let view = CardView {
@@ -242,7 +271,10 @@ impl Core {
                 s.cards.push(view);
             }
         }
-        let labels: Vec<Label> = sqlx::query_as("SELECT id, board_id, title, color FROM board_labels WHERE board_id = ? ORDER BY title").bind(board_id).fetch_all(&self.db).await?;
+        let labels: Vec<Label> = sqlx::query_as("SELECT id, board_id, title, color FROM board_labels WHERE board_id = ? ORDER BY title")
+            .bind(board_id)
+            .fetch_all(&self.db)
+            .await?;
         let mut members: Vec<MemberView> = sqlx::query_as(
             "SELECT m.user_id, u.username, u.display_name, m.can_edit FROM board_members m JOIN users u ON u.id = m.user_id WHERE m.board_id = ? ORDER BY u.display_name",
         )
@@ -250,20 +282,46 @@ impl Core {
         .fetch_all(&self.db)
         .await?;
         let owner = self.user(&board.owner_id).await?;
-        members.insert(0, MemberView { user_id: owner.id, username: owner.username, display_name: owner.display_name, can_edit: true });
-        Ok(BoardView { board, can_edit, stacks: stack_views, labels, members })
+        members.insert(
+            0,
+            MemberView {
+                user_id: owner.id,
+                username: owner.username,
+                display_name: owner.display_name,
+                can_edit: true,
+            },
+        );
+        Ok(BoardView {
+            board,
+            can_edit,
+            stacks: stack_views,
+            labels,
+            members,
+        })
     }
 
     pub async fn update_board(&self, user_id: &str, board_id: &str, title: Option<&str>, color: Option<&str>, archived: Option<bool>) -> Result<Board> {
         let board = self.board_for_edit(user_id, board_id).await?;
         if let Some(t) = title.map(str::trim).filter(|t| !t.is_empty()) {
-            sqlx::query("UPDATE boards SET title = ? WHERE id = ?").bind(t).bind(board_id).execute(&self.db).await?;
+            sqlx::query("UPDATE boards SET title = ? WHERE id = ?")
+                .bind(t)
+                .bind(board_id)
+                .execute(&self.db)
+                .await?;
         }
         if let Some(c) = color {
-            sqlx::query("UPDATE boards SET color = ? WHERE id = ?").bind(c).bind(board_id).execute(&self.db).await?;
+            sqlx::query("UPDATE boards SET color = ? WHERE id = ?")
+                .bind(c)
+                .bind(board_id)
+                .execute(&self.db)
+                .await?;
         }
         if let Some(a) = archived {
-            sqlx::query("UPDATE boards SET archived = ? WHERE id = ?").bind(a).bind(board_id).execute(&self.db).await?;
+            sqlx::query("UPDATE boards SET archived = ? WHERE id = ?")
+                .bind(a)
+                .bind(board_id)
+                .execute(&self.db)
+                .await?;
         }
         self.board_changed(&board, "board").await?;
         self.board(board_id).await
@@ -275,9 +333,15 @@ impl Core {
             return Err(Error::Forbidden);
         }
         let aud = self.board_audience(&board).await?;
-        sqlx::query("DELETE FROM fts WHERE object_kind = 'card' AND scope = ?").bind(board_id).execute(&self.db).await?;
+        sqlx::query("DELETE FROM fts WHERE object_kind = 'card' AND scope = ?")
+            .bind(board_id)
+            .execute(&self.db)
+            .await?;
         sqlx::query("DELETE FROM boards WHERE id = ?").bind(board_id).execute(&self.db).await?;
-        self.hub.publish(aud.iter().map(String::as_str), &json!({"type": "boards.changed", "board_id": board_id, "what": "deleted"}));
+        self.hub.publish(
+            aud.iter().map(String::as_str),
+            &json!({"type": "boards.changed", "board_id": board_id, "what": "deleted"}),
+        );
         Ok(())
     }
 
@@ -297,7 +361,14 @@ impl Core {
             .execute(&self.db)
             .await?;
         let me = self.user(user_id).await?;
-        self.notify(&u.id, "board", &format!("{} shared the board “{}” with you", me.display_name, board.title), "", &format!("/boards/{board_id}")).await?;
+        self.notify(
+            &u.id,
+            "board",
+            &format!("{} shared the board “{}” with you", me.display_name, board.title),
+            "",
+            &format!("/boards/{board_id}"),
+        )
+        .await?;
         self.board_changed(&board, "members").await
     }
 
@@ -306,7 +377,11 @@ impl Core {
         if board.owner_id != user_id && member_id != user_id {
             return Err(Error::Forbidden);
         }
-        sqlx::query("DELETE FROM board_members WHERE board_id = ? AND user_id = ?").bind(board_id).bind(member_id).execute(&self.db).await?;
+        sqlx::query("DELETE FROM board_members WHERE board_id = ? AND user_id = ?")
+            .bind(board_id)
+            .bind(member_id)
+            .execute(&self.db)
+            .await?;
         self.board_changed(&board, "members").await
     }
 
@@ -318,29 +393,56 @@ impl Core {
         if title.is_empty() {
             return Err(Error::bad("stack title required"));
         }
-        let pos: f64 = sqlx::query_scalar("SELECT CAST(COALESCE(MAX(position), -1) + 1 AS REAL) FROM stacks WHERE board_id = ?").bind(board_id).fetch_one(&self.db).await?;
+        let pos: f64 = sqlx::query_scalar("SELECT CAST(COALESCE(MAX(position), -1) + 1 AS REAL) FROM stacks WHERE board_id = ?")
+            .bind(board_id)
+            .fetch_one(&self.db)
+            .await?;
         let id = new_id();
-        sqlx::query("INSERT INTO stacks (id, board_id, title, position) VALUES (?, ?, ?, ?)").bind(&id).bind(board_id).bind(title).bind(pos).execute(&self.db).await?;
+        sqlx::query("INSERT INTO stacks (id, board_id, title, position) VALUES (?, ?, ?, ?)")
+            .bind(&id)
+            .bind(board_id)
+            .bind(title)
+            .bind(pos)
+            .execute(&self.db)
+            .await?;
         self.board_changed(&board, "stacks").await?;
-        Ok(sqlx::query_as("SELECT id, board_id, title, position FROM stacks WHERE id = ?").bind(&id).fetch_one(&self.db).await?)
+        Ok(sqlx::query_as("SELECT id, board_id, title, position FROM stacks WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&self.db)
+            .await?)
     }
 
     async fn stack(&self, id: &str) -> Result<Stack> {
-        Ok(sqlx::query_as("SELECT id, board_id, title, position FROM stacks WHERE id = ?").bind(id).fetch_one(&self.db).await?)
+        Ok(sqlx::query_as("SELECT id, board_id, title, position FROM stacks WHERE id = ?")
+            .bind(id)
+            .fetch_one(&self.db)
+            .await?)
     }
 
     pub async fn update_stack(&self, user_id: &str, stack_id: &str, title: Option<&str>, index: Option<usize>) -> Result<()> {
         let stack = self.stack(stack_id).await?;
         let board = self.board_for_edit(user_id, &stack.board_id).await?;
         if let Some(t) = title.map(str::trim).filter(|t| !t.is_empty()) {
-            sqlx::query("UPDATE stacks SET title = ? WHERE id = ?").bind(t).bind(stack_id).execute(&self.db).await?;
+            sqlx::query("UPDATE stacks SET title = ? WHERE id = ?")
+                .bind(t)
+                .bind(stack_id)
+                .execute(&self.db)
+                .await?;
         }
         if let Some(idx) = index {
-            let mut ids: Vec<String> = sqlx::query_scalar("SELECT id FROM stacks WHERE board_id = ? AND id != ? ORDER BY position").bind(&board.id).bind(stack_id).fetch_all(&self.db).await?;
+            let mut ids: Vec<String> = sqlx::query_scalar("SELECT id FROM stacks WHERE board_id = ? AND id != ? ORDER BY position")
+                .bind(&board.id)
+                .bind(stack_id)
+                .fetch_all(&self.db)
+                .await?;
             ids.insert(idx.min(ids.len()), stack_id.to_string());
             let mut tx = self.db.begin().await?;
             for (i, id) in ids.iter().enumerate() {
-                sqlx::query("UPDATE stacks SET position = ? WHERE id = ?").bind(i as f64).bind(id).execute(&mut *tx).await?;
+                sqlx::query("UPDATE stacks SET position = ? WHERE id = ?")
+                    .bind(i as f64)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
             }
             tx.commit().await?;
         }
@@ -350,7 +452,10 @@ impl Core {
     pub async fn delete_stack(&self, user_id: &str, stack_id: &str) -> Result<()> {
         let stack = self.stack(stack_id).await?;
         let board = self.board_for_edit(user_id, &stack.board_id).await?;
-        sqlx::query("DELETE FROM fts WHERE object_kind = 'card' AND object_id IN (SELECT id FROM cards WHERE stack_id = ?)").bind(stack_id).execute(&self.db).await?;
+        sqlx::query("DELETE FROM fts WHERE object_kind = 'card' AND object_id IN (SELECT id FROM cards WHERE stack_id = ?)")
+            .bind(stack_id)
+            .execute(&self.db)
+            .await?;
         sqlx::query("DELETE FROM stacks WHERE id = ?").bind(stack_id).execute(&self.db).await?;
         self.board_changed(&board, "stacks").await
     }
@@ -358,11 +463,17 @@ impl Core {
     // ---- cards ---------------------------------------------------------------
 
     pub async fn card(&self, id: &str) -> Result<Card> {
-        Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {CARD_COLS} FROM cards WHERE id = ?"))).bind(id).fetch_one(&self.db).await?)
+        Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {CARD_COLS} FROM cards WHERE id = ?")))
+            .bind(id)
+            .fetch_one(&self.db)
+            .await?)
     }
 
     async fn index_card(&self, card: &Card) -> Result<()> {
-        sqlx::query("DELETE FROM fts WHERE object_kind = 'card' AND object_id = ?").bind(&card.id).execute(&self.db).await?;
+        sqlx::query("DELETE FROM fts WHERE object_kind = 'card' AND object_id = ?")
+            .bind(&card.id)
+            .execute(&self.db)
+            .await?;
         sqlx::query("INSERT INTO fts (object_kind, object_id, scope, title, body) VALUES ('card', ?, ?, ?, ?)")
             .bind(&card.id)
             .bind(&card.board_id)
@@ -380,7 +491,10 @@ impl Core {
         if title.is_empty() || title.len() > 500 {
             return Err(Error::bad("card title must be 1-500 characters"));
         }
-        let pos: f64 = sqlx::query_scalar("SELECT CAST(COALESCE(MAX(position), -1) + 1 AS REAL) FROM cards WHERE stack_id = ?").bind(stack_id).fetch_one(&self.db).await?;
+        let pos: f64 = sqlx::query_scalar("SELECT CAST(COALESCE(MAX(position), -1) + 1 AS REAL) FROM cards WHERE stack_id = ?")
+            .bind(stack_id)
+            .fetch_one(&self.db)
+            .await?;
         let id = new_id();
         let t = now();
         sqlx::query(
@@ -409,21 +523,45 @@ impl Core {
         let board = self.board_for_edit(user_id, &card.board_id).await?;
         let mut tx = self.db.begin().await?;
         if let Some(t) = up.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
-            sqlx::query("UPDATE cards SET title = ? WHERE id = ?").bind(t).bind(card_id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE cards SET title = ? WHERE id = ?")
+                .bind(t)
+                .bind(card_id)
+                .execute(&mut *tx)
+                .await?;
         }
         if let Some(d) = &up.description {
-            sqlx::query("UPDATE cards SET description = ? WHERE id = ?").bind(d).bind(card_id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE cards SET description = ? WHERE id = ?")
+                .bind(d)
+                .bind(card_id)
+                .execute(&mut *tx)
+                .await?;
         }
         if let Some(due) = up.due_at {
-            sqlx::query("UPDATE cards SET due_at = ? WHERE id = ?").bind(due).bind(card_id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE cards SET due_at = ? WHERE id = ?")
+                .bind(due)
+                .bind(card_id)
+                .execute(&mut *tx)
+                .await?;
         }
         if let Some(d) = up.done {
-            sqlx::query("UPDATE cards SET done = ? WHERE id = ?").bind(d).bind(card_id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE cards SET done = ? WHERE id = ?")
+                .bind(d)
+                .bind(card_id)
+                .execute(&mut *tx)
+                .await?;
         }
         if let Some(a) = up.archived {
-            sqlx::query("UPDATE cards SET archived = ? WHERE id = ?").bind(a).bind(card_id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE cards SET archived = ? WHERE id = ?")
+                .bind(a)
+                .bind(card_id)
+                .execute(&mut *tx)
+                .await?;
         }
-        sqlx::query("UPDATE cards SET updated_at = ? WHERE id = ?").bind(now()).bind(card_id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE cards SET updated_at = ? WHERE id = ?")
+            .bind(now())
+            .bind(card_id)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         let card = self.card(card_id).await?;
         self.index_card(&card).await?;
@@ -447,7 +585,13 @@ impl Core {
         ids.insert(index.min(ids.len()), card_id.to_string());
         let mut tx = self.db.begin().await?;
         for (i, id) in ids.iter().enumerate() {
-            sqlx::query("UPDATE cards SET stack_id = ?, position = ?, updated_at = ? WHERE id = ?").bind(stack_id).bind(i as f64).bind(now()).bind(id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE cards SET stack_id = ?, position = ?, updated_at = ? WHERE id = ?")
+                .bind(stack_id)
+                .bind(i as f64)
+                .bind(now())
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
         }
         tx.commit().await?;
         self.board_changed(&board, "cards").await?;
@@ -457,7 +601,10 @@ impl Core {
     pub async fn delete_card(&self, user_id: &str, card_id: &str) -> Result<()> {
         let card = self.card(card_id).await?;
         let board = self.board_for_edit(user_id, &card.board_id).await?;
-        sqlx::query("DELETE FROM fts WHERE object_kind = 'card' AND object_id = ?").bind(card_id).execute(&self.db).await?;
+        sqlx::query("DELETE FROM fts WHERE object_kind = 'card' AND object_id = ?")
+            .bind(card_id)
+            .execute(&self.db)
+            .await?;
         sqlx::query("DELETE FROM cards WHERE id = ?").bind(card_id).execute(&self.db).await?;
         self.board_changed(&board, "cards").await
     }
@@ -465,13 +612,25 @@ impl Core {
     pub async fn create_label(&self, user_id: &str, board_id: &str, title: &str, color: &str) -> Result<Label> {
         let board = self.board_for_edit(user_id, board_id).await?;
         let id = new_id();
-        sqlx::query("INSERT INTO board_labels (id, board_id, title, color) VALUES (?, ?, ?, ?)").bind(&id).bind(board_id).bind(title.trim()).bind(color).execute(&self.db).await?;
+        sqlx::query("INSERT INTO board_labels (id, board_id, title, color) VALUES (?, ?, ?, ?)")
+            .bind(&id)
+            .bind(board_id)
+            .bind(title.trim())
+            .bind(color)
+            .execute(&self.db)
+            .await?;
         self.board_changed(&board, "labels").await?;
-        Ok(sqlx::query_as("SELECT id, board_id, title, color FROM board_labels WHERE id = ?").bind(&id).fetch_one(&self.db).await?)
+        Ok(sqlx::query_as("SELECT id, board_id, title, color FROM board_labels WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&self.db)
+            .await?)
     }
 
     pub async fn delete_label(&self, user_id: &str, label_id: &str) -> Result<()> {
-        let board_id: String = sqlx::query_scalar("SELECT board_id FROM board_labels WHERE id = ?").bind(label_id).fetch_one(&self.db).await?;
+        let board_id: String = sqlx::query_scalar("SELECT board_id FROM board_labels WHERE id = ?")
+            .bind(label_id)
+            .fetch_one(&self.db)
+            .await?;
         let board = self.board_for_edit(user_id, &board_id).await?;
         sqlx::query("DELETE FROM board_labels WHERE id = ?").bind(label_id).execute(&self.db).await?;
         self.board_changed(&board, "labels").await
@@ -480,14 +639,25 @@ impl Core {
     pub async fn set_card_label(&self, user_id: &str, card_id: &str, label_id: &str, on: bool) -> Result<()> {
         let card = self.card(card_id).await?;
         let board = self.board_for_edit(user_id, &card.board_id).await?;
-        let lb: String = sqlx::query_scalar("SELECT board_id FROM board_labels WHERE id = ?").bind(label_id).fetch_one(&self.db).await?;
+        let lb: String = sqlx::query_scalar("SELECT board_id FROM board_labels WHERE id = ?")
+            .bind(label_id)
+            .fetch_one(&self.db)
+            .await?;
         if lb != card.board_id {
             return Err(Error::bad("label belongs to another board"));
         }
         if on {
-            sqlx::query("INSERT OR IGNORE INTO card_labels (card_id, label_id) VALUES (?, ?)").bind(card_id).bind(label_id).execute(&self.db).await?;
+            sqlx::query("INSERT OR IGNORE INTO card_labels (card_id, label_id) VALUES (?, ?)")
+                .bind(card_id)
+                .bind(label_id)
+                .execute(&self.db)
+                .await?;
         } else {
-            sqlx::query("DELETE FROM card_labels WHERE card_id = ? AND label_id = ?").bind(card_id).bind(label_id).execute(&self.db).await?;
+            sqlx::query("DELETE FROM card_labels WHERE card_id = ? AND label_id = ?")
+                .bind(card_id)
+                .bind(label_id)
+                .execute(&self.db)
+                .await?;
         }
         self.board_changed(&board, "cards").await
     }
@@ -503,13 +673,28 @@ impl Core {
             return Err(Error::bad("assignee must be a board member"));
         }
         if on {
-            sqlx::query("INSERT OR IGNORE INTO card_assignees (card_id, user_id) VALUES (?, ?)").bind(card_id).bind(&target.id).execute(&self.db).await?;
+            sqlx::query("INSERT OR IGNORE INTO card_assignees (card_id, user_id) VALUES (?, ?)")
+                .bind(card_id)
+                .bind(&target.id)
+                .execute(&self.db)
+                .await?;
             if target.id != user_id {
                 let me = self.user(user_id).await?;
-                self.notify(&target.id, "board", &format!("{} assigned you “{}”", me.display_name, card.title), &board.title, &format!("/boards/{}?card={card_id}", board.id)).await?;
+                self.notify(
+                    &target.id,
+                    "board",
+                    &format!("{} assigned you “{}”", me.display_name, card.title),
+                    &board.title,
+                    &format!("/boards/{}?card={card_id}", board.id),
+                )
+                .await?;
             }
         } else {
-            sqlx::query("DELETE FROM card_assignees WHERE card_id = ? AND user_id = ?").bind(card_id).bind(&target.id).execute(&self.db).await?;
+            sqlx::query("DELETE FROM card_assignees WHERE card_id = ? AND user_id = ?")
+                .bind(card_id)
+                .bind(&target.id)
+                .execute(&self.db)
+                .await?;
         }
         self.board_changed(&board, "cards").await
     }
@@ -550,11 +735,17 @@ impl Core {
             .execute(&self.db)
             .await?;
         self.board_changed(&board, "cards").await?;
-        Ok(sqlx::query_as("SELECT id, card_id, kind, target, title FROM card_links WHERE id = ?").bind(&id).fetch_one(&self.db).await?)
+        Ok(sqlx::query_as("SELECT id, card_id, kind, target, title FROM card_links WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&self.db)
+            .await?)
     }
 
     pub async fn remove_card_link(&self, user_id: &str, link_id: &str) -> Result<()> {
-        let card_id: String = sqlx::query_scalar("SELECT card_id FROM card_links WHERE id = ?").bind(link_id).fetch_one(&self.db).await?;
+        let card_id: String = sqlx::query_scalar("SELECT card_id FROM card_links WHERE id = ?")
+            .bind(link_id)
+            .fetch_one(&self.db)
+            .await?;
         let card = self.card(&card_id).await?;
         let board = self.board_for_edit(user_id, &card.board_id).await?;
         sqlx::query("DELETE FROM card_links WHERE id = ?").bind(link_id).execute(&self.db).await?;
@@ -569,9 +760,20 @@ impl Core {
             return Err(Error::bad("comment is empty"));
         }
         let id = new_id();
-        sqlx::query("INSERT INTO card_comments (id, card_id, author_id, body, created_at) VALUES (?, ?, ?, ?, ?)").bind(&id).bind(card_id).bind(user_id).bind(body).bind(now()).execute(&self.db).await?;
+        sqlx::query("INSERT INTO card_comments (id, card_id, author_id, body, created_at) VALUES (?, ?, ?, ?, ?)")
+            .bind(&id)
+            .bind(card_id)
+            .bind(user_id)
+            .bind(body)
+            .bind(now())
+            .execute(&self.db)
+            .await?;
         self.board_changed(&board, "comments").await?;
-        Ok(self.card_comments(user_id, card_id).await?.into_iter().find(|c| c.id == id).ok_or(Error::NotFound)?)
+        self.card_comments(user_id, card_id)
+            .await?
+            .into_iter()
+            .find(|c| c.id == id)
+            .ok_or(Error::NotFound)
     }
 
     pub async fn card_comments(&self, user_id: &str, card_id: &str) -> Result<Vec<CardComment>> {

@@ -126,7 +126,20 @@ pub static APPS: &[CraftApp] = &[
             ("vctemplate", Some("application/x-vectorcraft-template")),
         ],
         opens: &["svg", "svgz", "ai", "ait", "eps", "emf", "wmf", "afdesign", "afpub", "pdf"],
-        primary: &["vectorcraft", "drawcraft", "vctemplate", "svg", "svgz", "ai", "ait", "eps", "emf", "wmf", "afdesign", "afpub"],
+        primary: &[
+            "vectorcraft",
+            "drawcraft",
+            "vctemplate",
+            "svg",
+            "svgz",
+            "ai",
+            "ait",
+            "eps",
+            "emf",
+            "wmf",
+            "afdesign",
+            "afpub",
+        ],
         cli: "vectorcraft-cli",
         mcp: McpLaunch::AutomationRoots,
         repo: "https://github.com/storytold/vectorcraft",
@@ -137,8 +150,14 @@ pub static APPS: &[CraftApp] = &[
         replaces: "Adobe Photoshop",
         summary: "Edit photos and layered PSD documents",
         native: &[("pcraft", Some("application/x-photocraft"))],
-        opens: &["psd", "psb", "pdn", "ora", "kra", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "pnm", "pbm", "pgm", "ppm", "exr", "hdr", "avif", "qoi"],
-        primary: &["pcraft", "psd", "psb", "pdn", "ora", "kra", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "pnm", "pbm", "pgm", "ppm", "exr", "hdr", "avif", "qoi"],
+        opens: &[
+            "psd", "psb", "pdn", "ora", "kra", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "pnm", "pbm", "pgm", "ppm", "exr",
+            "hdr", "avif", "qoi",
+        ],
+        primary: &[
+            "pcraft", "psd", "psb", "pdn", "ora", "kra", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "pnm", "pbm", "pgm", "ppm",
+            "exr", "hdr", "avif", "qoi",
+        ],
         cli: "photocraft-cli",
         mcp: McpLaunch::AutomationRoots,
         repo: "https://github.com/storytold/photocraft",
@@ -222,8 +241,12 @@ pub static APPS: &[CraftApp] = &[
         replaces: "Adobe Premiere Pro",
         summary: "Edit video, color and sound",
         native: &[("fcproj", Some("application/x-filmcraft"))],
-        opens: &["mp4", "m4v", "mov", "mkv", "webm", "avi", "mxf", "ts", "mpg", "mpeg", "3gp", "edl", "fcpxml", "otio", "aaf", "omf"],
-        primary: &["fcproj", "mp4", "m4v", "mov", "mkv", "webm", "avi", "mxf", "mpg", "mpeg", "3gp", "edl", "fcpxml", "otio", "aaf", "omf"],
+        opens: &[
+            "mp4", "m4v", "mov", "mkv", "webm", "avi", "mxf", "ts", "mpg", "mpeg", "3gp", "edl", "fcpxml", "otio", "aaf", "omf",
+        ],
+        primary: &[
+            "fcproj", "mp4", "m4v", "mov", "mkv", "webm", "avi", "mxf", "mpg", "mpeg", "3gp", "edl", "fcpxml", "otio", "aaf", "omf",
+        ],
         cli: "filmcraft-cli",
         mcp: McpLaunch::AutomationRoots,
         repo: "https://github.com/storytold/filmcraft",
@@ -234,7 +257,9 @@ pub static APPS: &[CraftApp] = &[
         replaces: "Adobe Lightroom",
         summary: "Organise photos and develop raw files, non-destructively",
         native: &[("lcpreset", None)],
-        opens: &["dng", "arw", "cr2", "cr3", "nef", "raf", "orf", "rw2", "rw", "pef", "heic", "heif", "jpg", "jpeg", "png", "tif", "tiff", "webp"],
+        opens: &[
+            "dng", "arw", "cr2", "cr3", "nef", "raf", "orf", "rw2", "rw", "pef", "heic", "heif", "jpg", "jpeg", "png", "tif", "tiff", "webp",
+        ],
         primary: &["lcpreset", "dng", "arw", "cr2", "cr3", "nef", "raf", "orf", "rw2", "rw", "pef", "heic", "heif"],
         cli: "lightcraft-cli",
         mcp: McpLaunch::PositionalFolder,
@@ -283,7 +308,10 @@ mod tests {
         assert_eq!(app_for_name("Report.DOCX").unwrap().id, "wordcraft");
         assert_eq!(app_for_name("logo.svg").unwrap().id, "vectorcraft");
         assert_eq!(app_for_name("cut.fcproj").unwrap().id, "filmcraft");
-        assert_eq!(app_for_name("deck.deckcraft").unwrap().mime_for_name("deck.deckcraft"), Some("application/x-deckcraft"));
+        assert_eq!(
+            app_for_name("deck.deckcraft").unwrap().mime_for_name("deck.deckcraft"),
+            Some("application/x-deckcraft")
+        );
         assert!(app_for_name("notes.md").is_none());
         let svg: Vec<_> = apps_for_name("a.svg").iter().map(|a| a.id).collect();
         assert_eq!(svg, vec!["vectorcraft", "figcraft"]);

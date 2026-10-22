@@ -9,28 +9,48 @@ use serde_json::Value;
 use yrs::{GetString, Text, Transact};
 
 async fn next(rx: &mut ferrite_core::events::EventRx) -> Value {
-    let raw = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await.expect("event within 5s").expect("channel open");
+    let raw = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .expect("event within 5s")
+        .expect("channel open");
     serde_json::from_str(&raw).unwrap()
 }
 
 async fn core() -> (Core, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
-    let cfg = Config { data_dir: dir.path().to_path_buf(), max_versions: 3, ..Config::default() };
+    let cfg = Config {
+        data_dir: dir.path().to_path_buf(),
+        max_versions: 3,
+        ..Config::default()
+    };
     (Core::open(cfg).await.unwrap(), dir)
 }
 
 async fn user(core: &Core, name: &str) -> String {
-    core.create_user(NewUser { username: name.into(), display_name: Some(name.to_uppercase()), password: "password123".into(), ..Default::default() })
-        .await
-        .unwrap()
-        .id
+    core.create_user(NewUser {
+        username: name.into(),
+        display_name: Some(name.to_uppercase()),
+        password: "password123".into(),
+        ..Default::default()
+    })
+    .await
+    .unwrap()
+    .id
 }
 
 #[tokio::test]
 async fn auth_tokens_and_groups() {
     let (core, _d) = core().await;
     let alice = user(&core, "alice").await;
-    assert!(matches!(core.create_user(NewUser { username: "ALICE".into(), password: "password123".into(), ..Default::default() }).await, Err(Error::Conflict(_))));
+    assert!(matches!(
+        core.create_user(NewUser {
+            username: "ALICE".into(),
+            password: "password123".into(),
+            ..Default::default()
+        })
+        .await,
+        Err(Error::Conflict(_))
+    ));
     assert!(core.authenticate("alice", "password123").await.is_ok());
     assert!(matches!(core.authenticate("alice", "nope").await, Err(Error::Unauthorized)));
     assert!(matches!(core.authenticate("ghost", "password123").await, Err(Error::Unauthorized)));
@@ -52,7 +72,15 @@ async fn auth_tokens_and_groups() {
 
     // Disabling a user revokes access.
     let (_, s2) = core.create_token(&alice, "app", "x", "*", None).await.unwrap();
-    core.update_user(&alice, ferrite_core::auth::UserUpdate { disabled: Some(true), ..Default::default() }).await.unwrap();
+    core.update_user(
+        &alice,
+        ferrite_core::auth::UserUpdate {
+            disabled: Some(true),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     assert!(core.resolve_token(&s2).await.is_err());
 }
 
@@ -70,10 +98,18 @@ async fn files_versions_trash_copy_move() {
     assert_eq!(f.id, f2.id);
     assert_ne!(f.etag, f2.etag);
     // Optimistic concurrency.
-    let stale = WriteOpts { if_match: Some(f.etag.clone()), ..WriteOpts::user() };
-    assert!(matches!(core.write_bytes(&a, &docs.id, "plan.md", b"v3", stale).await, Err(Error::PreconditionFailed)));
+    let stale = WriteOpts {
+        if_match: Some(f.etag.clone()),
+        ..WriteOpts::user()
+    };
+    assert!(matches!(
+        core.write_bytes(&a, &docs.id, "plan.md", b"v3", stale).await,
+        Err(Error::PreconditionFailed)
+    ));
     for i in 3..=6 {
-        core.write_bytes(&a, &docs.id, "plan.md", format!("v{i}").as_bytes(), WriteOpts::user()).await.unwrap();
+        core.write_bytes(&a, &docs.id, "plan.md", format!("v{i}").as_bytes(), WriteOpts::user())
+            .await
+            .unwrap();
     }
     let versions = core.list_versions(&a, &f.id).await.unwrap();
     assert_eq!(versions.len(), 3, "pruned to max_versions");
@@ -96,7 +132,13 @@ async fn files_versions_trash_copy_move() {
     assert!(core.resolve_path(&a, "/Docs/plan.md").await.is_err());
     assert_eq!(core.list_trash(&a).await.unwrap().len(), 1);
     core.restore(&a, &docs.id).await.unwrap();
-    assert_eq!(core.read_file(&a, &core.resolve_path(&a, "/Docs/Nested/plan.md").await.unwrap().id).await.unwrap().1, b"v5");
+    assert_eq!(
+        core.read_file(&a, &core.resolve_path(&a, "/Docs/Nested/plan.md").await.unwrap().id)
+            .await
+            .unwrap()
+            .1,
+        b"v5"
+    );
 
     // Purging releases blobs that nothing else references.
     core.delete(&a, &docs.id).await.unwrap();
@@ -121,17 +163,47 @@ async fn dedup_quota_and_locks() {
     assert_eq!(blobs, 1, "identical content stored once");
     assert_eq!(core.quota(&a).await.unwrap().used, 2000);
 
-    core.update_user(&a, ferrite_core::auth::UserUpdate { quota_bytes: Some(Some(2500)), ..Default::default() }).await.unwrap();
-    assert!(matches!(core.write_bytes(&a, &root, "z.bin", &[1u8; 600], WriteOpts::user()).await, Err(Error::QuotaExceeded)));
+    core.update_user(
+        &a,
+        ferrite_core::auth::UserUpdate {
+            quota_bytes: Some(Some(2500)),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        core.write_bytes(&a, &root, "z.bin", &[1u8; 600], WriteOpts::user()).await,
+        Err(Error::QuotaExceeded)
+    ));
 
     // Locks block other writers but not the holder.
     let f = core.write_bytes(&a, &root, "doc.docx", b"PK..", WriteOpts::user()).await.unwrap();
     let folder = core.mkdir(&a, &root, "Team").await.unwrap();
-    core.create_share(&a, &folder.id, NewShare { kind: "user".into(), target: Some("bob".into()), permissions: None, password: None, expires_at: None, label: None }).await.unwrap();
+    core.create_share(
+        &a,
+        &folder.id,
+        NewShare {
+            kind: "user".into(),
+            target: Some("bob".into()),
+            permissions: None,
+            password: None,
+            expires_at: None,
+            label: None,
+        },
+    )
+    .await
+    .unwrap();
     let lf = core.move_node(&a, &f.id, &folder.id, "doc.docx", false).await.unwrap();
     let lock = core.lock(&a, &lf.id, "wordcraft", 600).await.unwrap();
-    assert!(matches!(core.write_bytes(&b, &folder.id, "doc.docx", b"bob", WriteOpts::user()).await, Err(Error::Locked(_))));
-    let with_token = WriteOpts { lock_token: Some(lock.token.clone()), ..WriteOpts::user() };
+    assert!(matches!(
+        core.write_bytes(&b, &folder.id, "doc.docx", b"bob", WriteOpts::user()).await,
+        Err(Error::Locked(_))
+    ));
+    let with_token = WriteOpts {
+        lock_token: Some(lock.token.clone()),
+        ..WriteOpts::user()
+    };
     core.write_bytes(&a, &folder.id, "doc.docx", b"alice", with_token).await.unwrap();
     assert!(core.unlock(&b, &lf.id).await.is_err());
     core.unlock(&a, &lf.id).await.unwrap();
@@ -155,17 +227,46 @@ async fn sharing_user_group_link() {
 
     // Read-only share to bob.
     let s = core
-        .create_share(&a, &proj.id, NewShare { kind: "user".into(), target: Some("bob".into()), permissions: Some(perm::READ), password: None, expires_at: None, label: None })
+        .create_share(
+            &a,
+            &proj.id,
+            NewShare {
+                kind: "user".into(),
+                target: Some("bob".into()),
+                permissions: Some(perm::READ),
+                password: None,
+                expires_at: None,
+                label: None,
+            },
+        )
         .await
         .unwrap();
     assert_eq!(core.resolve_path(&b, "/Project/brief.txt").await.unwrap().id, file.id);
-    assert!(core.list_dir(&b, &core.ensure_root(&b).await.unwrap()).await.unwrap().iter().any(|e| e.node.name == "Project" && e.shared_by.is_some()));
-    assert!(matches!(core.write_bytes(&b, &proj.id, "new.txt", b"x", WriteOpts::user()).await, Err(Error::Forbidden)));
+    assert!(
+        core.list_dir(&b, &core.ensure_root(&b).await.unwrap())
+            .await
+            .unwrap()
+            .iter()
+            .any(|e| e.node.name == "Project" && e.shared_by.is_some())
+    );
+    assert!(matches!(
+        core.write_bytes(&b, &proj.id, "new.txt", b"x", WriteOpts::user()).await,
+        Err(Error::Forbidden)
+    ));
     assert!(matches!(core.delete(&b, &file.id).await, Err(Error::Forbidden)));
     assert_eq!(core.notifications(&b, true, 10).await.unwrap().len(), 1);
 
     // Upgrade to edit.
-    core.update_share(&a, &s.share.id, ShareUpdate { permissions: Some(perm::ALL), ..Default::default() }).await.unwrap();
+    core.update_share(
+        &a,
+        &s.share.id,
+        ShareUpdate {
+            permissions: Some(perm::ALL),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     let bobs = core.write_bytes(&b, &proj.id, "from-bob.txt", b"hi", WriteOpts::user()).await.unwrap();
     assert_eq!(bobs.owner_id, a, "files created in a share belong to the share owner");
     assert_eq!(core.display_path(&b, &bobs).await.unwrap(), "/Project/from-bob.txt");
@@ -173,24 +274,78 @@ async fn sharing_user_group_link() {
     // Group share to carol through a group.
     let g = core.create_group("friends").await.unwrap();
     core.add_to_group(&g.id, &c).await.unwrap();
-    core.create_share(&a, &file.id, NewShare { kind: "group".into(), target: Some("friends".into()), permissions: None, password: None, expires_at: None, label: None }).await.unwrap();
+    core.create_share(
+        &a,
+        &file.id,
+        NewShare {
+            kind: "group".into(),
+            target: Some("friends".into()),
+            permissions: None,
+            password: None,
+            expires_at: None,
+            label: None,
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(core.read_file(&c, &file.id).await.unwrap().1, b"hello");
     // Re-sharing cannot exceed what you have: carol has READ|UPDATE|SHARE on a file.
-    let reshare = core.create_share(&c, &file.id, NewShare { kind: "link".into(), target: None, permissions: Some(perm::ALL), password: None, expires_at: None, label: None }).await.unwrap();
+    let reshare = core
+        .create_share(
+            &c,
+            &file.id,
+            NewShare {
+                kind: "link".into(),
+                target: None,
+                permissions: Some(perm::ALL),
+                password: None,
+                expires_at: None,
+                label: None,
+            },
+        )
+        .await
+        .unwrap();
     assert_eq!(reshare.share.permissions, perm::READ | perm::UPDATE);
 
     // Expired shares grant nothing.
     let s3 = core
-        .create_share(&a, &file.id, NewShare { kind: "user".into(), target: Some("carol".into()), permissions: None, password: None, expires_at: Some(Utc::now() + Duration::hours(1)), label: None })
+        .create_share(
+            &a,
+            &file.id,
+            NewShare {
+                kind: "user".into(),
+                target: Some("carol".into()),
+                permissions: None,
+                password: None,
+                expires_at: Some(Utc::now() + Duration::hours(1)),
+                label: None,
+            },
+        )
         .await
         .unwrap();
-    sqlx::query("UPDATE shares SET expires_at = ? WHERE id = ?").bind(Utc::now() - Duration::hours(1)).bind(&s3.share.id).execute(&core.db).await.unwrap();
+    sqlx::query("UPDATE shares SET expires_at = ? WHERE id = ?")
+        .bind(Utc::now() - Duration::hours(1))
+        .bind(&s3.share.id)
+        .execute(&core.db)
+        .await
+        .unwrap();
     core.remove_from_group(&g.id, &c).await.unwrap();
     assert!(core.read_file(&c, &file.id).await.is_err());
 
     // Public link with password.
     let link = core
-        .create_share(&a, &proj.id, NewShare { kind: "link".into(), target: None, permissions: None, password: Some("s3cret".into()), expires_at: None, label: Some("client".into()) })
+        .create_share(
+            &a,
+            &proj.id,
+            NewShare {
+                kind: "link".into(),
+                target: None,
+                permissions: None,
+                password: Some("s3cret".into()),
+                expires_at: None,
+                label: Some("client".into()),
+            },
+        )
         .await
         .unwrap();
     assert!(link.has_password && link.url.is_some());
@@ -215,14 +370,35 @@ async fn talk_rooms_messages_calls() {
     let bob = Actor::user(&b, "BOB");
 
     let (bconn, mut rx) = core.hub.connect(&b);
-    let m1 = core.post_message(&alice, &room.token, NewMessage { body: "hi @bob".into(), ..Default::default() }).await.unwrap();
+    let m1 = core
+        .post_message(
+            &alice,
+            &room.token,
+            NewMessage {
+                body: "hi @bob".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     let ev = next(&mut rx).await;
     assert_eq!(ev["type"], "talk.message");
     assert_eq!(ev["message"]["body"], "hi @bob");
 
     let rooms = core.list_rooms(&b).await.unwrap();
     assert_eq!(rooms[0].unread, 1);
-    let reply = core.post_message(&bob, &room.token, NewMessage { body: "hey".into(), reply_to: Some(m1.message.id), ..Default::default() }).await.unwrap();
+    let reply = core
+        .post_message(
+            &bob,
+            &room.token,
+            NewMessage {
+                body: "hey".into(),
+                reply_to: Some(m1.message.id),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     assert_eq!(reply.parent.as_ref().unwrap().body, "hi @bob");
     assert_eq!(core.list_rooms(&b).await.unwrap()[0].unread, 0, "posting marks earlier messages read");
 
@@ -233,7 +409,10 @@ async fn talk_rooms_messages_calls() {
     assert!(edited.message.edited_at.is_some());
     assert!(core.edit_message(&bob, m1.message.id, "nope").await.is_err());
 
-    let poll = core.create_poll(&alice, &room.token, "Lunch?", &["Pizza".into(), "Sushi".into()], false).await.unwrap();
+    let poll = core
+        .create_poll(&alice, &room.token, "Lunch?", &["Pizza".into(), "Sushi".into()], false)
+        .await
+        .unwrap();
     let voted = core.vote(&bob, poll.message.id, &[1]).await.unwrap();
     assert_eq!(voted.message.meta.0["votes"][&b], serde_json::json!([1]));
     assert!(core.vote(&bob, poll.message.id, &[0, 1]).await.is_err());
@@ -287,7 +466,16 @@ async fn talk_rooms_messages_calls() {
     let (guest, _, secret) = core.create_guest(&public.token, "Dana").await.unwrap();
     let (g2, _) = core.resolve_guest(&secret).await.unwrap();
     assert_eq!(guest, g2);
-    core.post_message(&guest, &public.token, NewMessage { body: "hello from a guest".into(), ..Default::default() }).await.unwrap();
+    core.post_message(
+        &guest,
+        &public.token,
+        NewMessage {
+            body: "hello from a guest".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     assert!(core.create_guest(&room.token, "Eve").await.is_err(), "group rooms reject guests");
 }
 
@@ -302,7 +490,10 @@ async fn boards_and_cards() {
     let todo = &view.stacks[0].stack.id;
     let done = &view.stacks[2].stack.id;
     let c1 = core.create_card(&a, todo, "Write press release", "draft **v1**", None).await.unwrap();
-    let c2 = core.create_card(&a, todo, "Book venue", "", Some(Utc::now() + Duration::days(3))).await.unwrap();
+    let c2 = core
+        .create_card(&a, todo, "Book venue", "", Some(Utc::now() + Duration::days(3)))
+        .await
+        .unwrap();
     assert!(core.board_view(&b, &board.id).await.is_err());
     core.add_board_member(&a, &board.id, "bob", true).await.unwrap();
     core.set_card_assignee(&a, &c2.id, "bob", true).await.unwrap();
@@ -352,8 +543,14 @@ async fn live_documents_edit_and_persist() {
     .unwrap();
     let frame = conn.rx.recv().await.unwrap();
     assert!(!frame.is_empty());
-    assert_eq!(String::from_utf8(core.collab_content(&a, &doc.id).await.unwrap()).unwrap(), "# Notes\n\nAdded by the assistant.\n");
-    assert_eq!(String::from_utf8(core.read_file(&a, &doc.id).await.unwrap().1).unwrap(), "# Notes\n\nAdded by the assistant.\n");
+    assert_eq!(
+        String::from_utf8(core.collab_content(&a, &doc.id).await.unwrap()).unwrap(),
+        "# Notes\n\nAdded by the assistant.\n"
+    );
+    assert_eq!(
+        String::from_utf8(core.read_file(&a, &doc.id).await.unwrap().1).unwrap(),
+        "# Notes\n\nAdded by the assistant.\n"
+    );
 
     // A real Yjs-style client update applied through the protocol.
     let client = yrs::Doc::new();
@@ -363,16 +560,29 @@ async fn live_documents_edit_and_persist() {
         t.insert(&mut txn, 0, "x");
     }
     let sv_frame = {
+        use yrs::ReadTxn;
         use yrs::sync::{Message, SyncMessage};
         use yrs::updates::encoder::Encode;
-        use yrs::ReadTxn;
         Message::Sync(SyncMessage::SyncStep1(client.transact().state_vector())).encode_v1()
     };
     let replies = core.collab_receive(&mut conn, &sv_frame).unwrap();
     assert_eq!(replies.len(), 1, "server answers sync step 1 with step 2");
 
     // Read-only viewers can't change the document.
-    let ro = core.create_share(&a, &doc.id, NewShare { kind: "user".into(), target: Some("bob".into()), permissions: Some(perm::READ), password: None, expires_at: None, label: None }).await;
+    let ro = core
+        .create_share(
+            &a,
+            &doc.id,
+            NewShare {
+                kind: "user".into(),
+                target: Some("bob".into()),
+                permissions: Some(perm::READ),
+                password: None,
+                expires_at: None,
+                label: None,
+            },
+        )
+        .await;
     assert!(ro.is_ok());
     let (bconn, _) = core.collab_open(&b, &doc.id).await.unwrap();
     assert!(bconn.read_only);
@@ -398,7 +608,9 @@ async fn live_documents_edit_and_persist() {
 
     // External writes reset live sessions.
     let (mut c2, _) = core.collab_open(&a, &mm.id).await.unwrap();
-    core.write_bytes(&a, &root, "Roadmap.fmind", b"{\"nodes\":[]}", WriteOpts::user()).await.unwrap();
+    core.write_bytes(&a, &root, "Roadmap.fmind", b"{\"nodes\":[]}", WriteOpts::user())
+        .await
+        .unwrap();
     let reset = c2.rx.recv().await.unwrap();
     assert!(ferrite_core::collab::is_reset(&reset));
     core.collab_close(c2).await;

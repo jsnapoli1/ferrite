@@ -16,7 +16,10 @@ async fn handler(State(m): State<Mock>, headers: HeaderMap, Json(body): Json<Val
 }
 
 async fn serve(path: &str, replies: Vec<Value>) -> (String, Mock) {
-    let mock = Mock { replies: Arc::new(Mutex::new(replies)), ..Default::default() };
+    let mock = Mock {
+        replies: Arc::new(Mutex::new(replies)),
+        ..Default::default()
+    };
     let app = Router::new().route(path, post(handler)).with_state(mock.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -54,16 +57,31 @@ async fn openai_compatible_agent_loop() {
         ],
     )
     .await;
-    let p = Provider::new(ProviderConfig { kind: ProviderKind::Openai, base_url: format!("{base}/v1"), api_key: Some("k".into()) });
-    let mut t = Transcript { system: "Be brief.".into(), messages: vec![] };
+    let p = Provider::new(ProviderConfig {
+        kind: ProviderKind::Openai,
+        base_url: format!("{base}/v1"),
+        api_key: Some("k".into()),
+    });
+    let mut t = Transcript {
+        system: "Be brief.".into(),
+        messages: vec![],
+    };
     p.push_user(&mut t, "When do we ship?");
-    let opts = AgentOptions { model: "llama3.2".into(), ..Default::default() };
+    let opts = AgentOptions {
+        model: "llama3.2".into(),
+        ..Default::default()
+    };
     let run = run(&p, &mut t, &Files, &opts, None).await.unwrap();
     assert_eq!(run.answer, "You ship on Friday.");
     assert_eq!(run.steps, 2);
     let reqs = mock.requests.lock().unwrap();
     // Read-only by default: the destructive tool is not offered; dotted names are sanitized.
-    let names: Vec<_> = reqs[0].1["tools"].as_array().unwrap().iter().map(|t| t["function"]["name"].as_str().unwrap().to_string()).collect();
+    let names: Vec<_> = reqs[0].1["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["function"]["name"].as_str().unwrap().to_string())
+        .collect();
     assert_eq!(names, vec!["files_read"]);
     assert_eq!(reqs[0].1["messages"][0], json!({"role": "system", "content": "Be brief."}));
     assert_eq!(reqs[0].0["authorization"], "Bearer k");
@@ -86,8 +104,15 @@ async fn anthropic_agent_loop_preserves_blocks() {
         ],
     )
     .await;
-    let p = Provider::new(ProviderConfig { kind: ProviderKind::Anthropic, base_url: base, api_key: Some("sk".into()) });
-    let mut t = Transcript { system: "sys".into(), messages: vec![] };
+    let p = Provider::new(ProviderConfig {
+        kind: ProviderKind::Anthropic,
+        base_url: base,
+        api_key: Some("sk".into()),
+    });
+    let mut t = Transcript {
+        system: "sys".into(),
+        messages: vec![],
+    };
     p.push_user(&mut t, "When?");
     let run = run(&p, &mut t, &Files, &AgentOptions::default(), None).await.unwrap();
     assert_eq!(run.answer, "Friday.");
@@ -107,7 +132,10 @@ async fn anthropic_agent_loop_preserves_blocks() {
     let msgs = reqs[1].1["messages"].as_array().unwrap();
     assert_eq!(msgs[1]["content"][0], thinking);
     assert_eq!(msgs[2]["role"], "user");
-    assert_eq!(msgs[2]["content"][0], json!({"type": "tool_result", "tool_use_id": "toolu_1", "content": "Ship on Friday."}));
+    assert_eq!(
+        msgs[2]["content"][0],
+        json!({"type": "tool_result", "tool_use_id": "toolu_1", "content": "Ship on Friday."})
+    );
 }
 
 #[tokio::test]
@@ -120,7 +148,11 @@ async fn anthropic_refusal_and_truncation() {
         ],
     )
     .await;
-    let p = Provider::new(ProviderConfig { kind: ProviderKind::Anthropic, base_url: base, api_key: None });
+    let p = Provider::new(ProviderConfig {
+        kind: ProviderKind::Anthropic,
+        base_url: base,
+        api_key: None,
+    });
     let mut t = Transcript::default();
     p.push_user(&mut t, "x");
     assert!(matches!(run(&p, &mut t, &Files, &AgentOptions::default(), None).await, Err(AiError::Refused)));
@@ -132,11 +164,23 @@ async fn anthropic_refusal_and_truncation() {
 
 #[tokio::test]
 async fn writes_are_offered_only_when_allowed() {
-    let (base, mock) = serve("/v1/chat/completions", vec![json!({"choices": [{"finish_reason": "stop", "message": {"content": "ok"}}]})]).await;
-    let p = Provider::new(ProviderConfig { kind: ProviderKind::Openai, base_url: format!("{base}/v1"), api_key: None });
+    let (base, mock) = serve(
+        "/v1/chat/completions",
+        vec![json!({"choices": [{"finish_reason": "stop", "message": {"content": "ok"}}]})],
+    )
+    .await;
+    let p = Provider::new(ProviderConfig {
+        kind: ProviderKind::Openai,
+        base_url: format!("{base}/v1"),
+        api_key: None,
+    });
     let mut t = Transcript::default();
     p.push_user(&mut t, "delete it");
-    let opts = AgentOptions { model: "m".into(), allow_writes: true, ..Default::default() };
+    let opts = AgentOptions {
+        model: "m".into(),
+        allow_writes: true,
+        ..Default::default()
+    };
     run(&p, &mut t, &Files, &opts, None).await.unwrap();
     assert_eq!(mock.requests.lock().unwrap()[0].1["tools"].as_array().unwrap().len(), 2);
 }

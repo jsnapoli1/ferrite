@@ -105,13 +105,25 @@ pub struct Actor {
 
 impl Actor {
     pub fn user(id: &str, name: &str) -> Self {
-        Self { kind: "user".into(), id: id.into(), name: name.into() }
+        Self {
+            kind: "user".into(),
+            id: id.into(),
+            name: name.into(),
+        }
     }
     pub fn bot() -> Self {
-        Self { kind: "bot".into(), id: BOT_ACTOR_ID.into(), name: "Assistant".into() }
+        Self {
+            kind: "bot".into(),
+            id: BOT_ACTOR_ID.into(),
+            name: "Assistant".into(),
+        }
     }
     pub fn system() -> Self {
-        Self { kind: "system".into(), id: "system".into(), name: "System".into() }
+        Self {
+            kind: "system".into(),
+            id: "system".into(),
+            name: "System".into(),
+        }
     }
     /// Key under which this actor's connections are registered in the hub.
     pub fn hub_key(&self) -> String {
@@ -174,15 +186,25 @@ impl Core {
     // ---- rooms ---------------------------------------------------------------
 
     pub async fn room(&self, id: &str) -> Result<Room> {
-        Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {ROOM_COLS} FROM rooms WHERE id = ?"))).bind(id).fetch_one(&self.db).await?)
+        Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {ROOM_COLS} FROM rooms WHERE id = ?")))
+            .bind(id)
+            .fetch_one(&self.db)
+            .await?)
     }
 
     pub async fn room_by_token(&self, token: &str) -> Result<Room> {
-        Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {ROOM_COLS} FROM rooms WHERE token = ?"))).bind(token).fetch_one(&self.db).await?)
+        Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {ROOM_COLS} FROM rooms WHERE token = ?")))
+            .bind(token)
+            .fetch_one(&self.db)
+            .await?)
     }
 
     pub async fn participant_role(&self, room_id: &str, user_id: &str) -> Result<Option<String>> {
-        Ok(sqlx::query_scalar("SELECT role FROM participants WHERE room_id = ? AND user_id = ?").bind(room_id).bind(user_id).fetch_optional(&self.db).await?)
+        Ok(sqlx::query_scalar("SELECT role FROM participants WHERE room_id = ? AND user_id = ?")
+            .bind(room_id)
+            .bind(user_id)
+            .fetch_optional(&self.db)
+            .await?)
     }
 
     /// Room by token if the user participates in it.
@@ -251,7 +273,11 @@ impl Core {
         let mut pair = [user_id.to_string(), other.id.clone()];
         pair.sort();
         let key = pair.join(":");
-        if let Some(id) = sqlx::query_scalar::<_, String>("SELECT id FROM rooms WHERE pair_key = ?").bind(&key).fetch_optional(&self.db).await? {
+        if let Some(id) = sqlx::query_scalar::<_, String>("SELECT id FROM rooms WHERE pair_key = ?")
+            .bind(&key)
+            .fetch_optional(&self.db)
+            .await?
+        {
             // Re-add a participant who left earlier.
             for u in &pair {
                 if self.participant_role(&id, u).await?.is_none() {
@@ -263,15 +289,17 @@ impl Core {
         let id = new_id();
         let t = now();
         let mut tx = self.db.begin().await?;
-        sqlx::query("INSERT INTO rooms (id, token, kind, name, created_by, created_at, last_activity_at, pair_key) VALUES (?, ?, 'one_to_one', '', ?, ?, ?, ?)")
-            .bind(&id)
-            .bind(short_token(10))
-            .bind(user_id)
-            .bind(t)
-            .bind(t)
-            .bind(&key)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "INSERT INTO rooms (id, token, kind, name, created_by, created_at, last_activity_at, pair_key) VALUES (?, ?, 'one_to_one', '', ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(short_token(10))
+        .bind(user_id)
+        .bind(t)
+        .bind(t)
+        .bind(&key)
+        .execute(&mut *tx)
+        .await?;
         for u in &pair {
             sqlx::query("INSERT INTO participants (room_id, user_id, role, notify, joined_at) VALUES (?, ?, 'owner', 'all', ?)")
                 .bind(&id)
@@ -287,7 +315,11 @@ impl Core {
 
     pub async fn note_to_self(&self, user_id: &str) -> Result<Room> {
         let key = format!("self:{user_id}");
-        if let Some(id) = sqlx::query_scalar::<_, String>("SELECT id FROM rooms WHERE pair_key = ?").bind(&key).fetch_optional(&self.db).await? {
+        if let Some(id) = sqlx::query_scalar::<_, String>("SELECT id FROM rooms WHERE pair_key = ?")
+            .bind(&key)
+            .fetch_optional(&self.db)
+            .await?
+        {
             return self.room(&id).await;
         }
         let id = new_id();
@@ -302,7 +334,12 @@ impl Core {
             .bind(&key)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("INSERT INTO participants (room_id, user_id, role, joined_at) VALUES (?, ?, 'owner', ?)").bind(&id).bind(user_id).bind(t).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO participants (room_id, user_id, role, joined_at) VALUES (?, ?, 'owner', ?)")
+            .bind(&id)
+            .bind(user_id)
+            .bind(t)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         self.room(&id).await
     }
@@ -375,22 +412,29 @@ impl Core {
 
     pub async fn room_view(&self, user_id: &str, token: &str) -> Result<RoomView> {
         let room = self.room_for(user_id, token).await?;
-        self.list_rooms(user_id).await?.into_iter().find(|r| r.room.id == room.id).ok_or(Error::NotFound)
+        self.list_rooms(user_id)
+            .await?
+            .into_iter()
+            .find(|r| r.room.id == room.id)
+            .ok_or(Error::NotFound)
     }
 
     pub async fn room_display_name(&self, room: &Room, viewer_id: &str) -> Result<String> {
         if room.kind == "one_to_one" {
-            let other: Option<String> = sqlx::query_scalar(
-                "SELECT u.display_name FROM participants p JOIN users u ON u.id = p.user_id WHERE p.room_id = ? AND p.user_id != ? LIMIT 1",
-            )
-            .bind(&room.id)
-            .bind(viewer_id)
-            .fetch_optional(&self.db)
-            .await?;
+            let other: Option<String> =
+                sqlx::query_scalar("SELECT u.display_name FROM participants p JOIN users u ON u.id = p.user_id WHERE p.room_id = ? AND p.user_id != ? LIMIT 1")
+                    .bind(&room.id)
+                    .bind(viewer_id)
+                    .fetch_optional(&self.db)
+                    .await?;
             if let Some(o) = other {
                 return Ok(o);
             }
-            if let Some(pair) = sqlx::query_scalar::<_, Option<String>>("SELECT pair_key FROM rooms WHERE id = ?").bind(&room.id).fetch_one(&self.db).await? {
+            if let Some(pair) = sqlx::query_scalar::<_, Option<String>>("SELECT pair_key FROM rooms WHERE id = ?")
+                .bind(&room.id)
+                .fetch_one(&self.db)
+                .await?
+            {
                 for uid in pair.split(':') {
                     if uid != viewer_id {
                         if let Ok(u) = self.user(uid).await {
@@ -448,8 +492,16 @@ impl Core {
         }
         self.add_participant_internal(&room.id, &user.id, "member").await?;
         let adder = self.user(actor_id).await?;
-        self.post_system(&room.id, &format!("{} added {}", adder.display_name, user.display_name)).await?;
-        self.notify(&user.id, "talk", &format!("{} added you to “{}”", adder.display_name, room.name), "", &format!("/talk/{}", room.token)).await?;
+        self.post_system(&room.id, &format!("{} added {}", adder.display_name, user.display_name))
+            .await?;
+        self.notify(
+            &user.id,
+            "talk",
+            &format!("{} added you to “{}”", adder.display_name, room.name),
+            "",
+            &format!("/talk/{}", room.token),
+        )
+        .await?;
         Ok(())
     }
 
@@ -472,14 +524,25 @@ impl Core {
         if actor_id != user_id {
             self.require_moderator(&room, actor_id).await?;
         }
-        sqlx::query("DELETE FROM participants WHERE room_id = ? AND user_id = ?").bind(&room.id).bind(user_id).execute(&self.db).await?;
+        sqlx::query("DELETE FROM participants WHERE room_id = ? AND user_id = ?")
+            .bind(&room.id)
+            .bind(user_id)
+            .execute(&self.db)
+            .await?;
         self.talk.audience.remove(&room.id);
         self.hub.publish([user_id], &json!({"type": "talk.rooms_changed"}));
         let u = self.user(user_id).await?;
-        let text = if actor_id == user_id { format!("{} left", u.display_name) } else { format!("{} was removed", u.display_name) };
+        let text = if actor_id == user_id {
+            format!("{} left", u.display_name)
+        } else {
+            format!("{} was removed", u.display_name)
+        };
         self.post_system(&room.id, &text).await?;
         // Remaining owners keep the room alive; an empty group room is deleted.
-        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM participants WHERE room_id = ?").bind(&room.id).fetch_one(&self.db).await?;
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM participants WHERE room_id = ?")
+            .bind(&room.id)
+            .fetch_one(&self.db)
+            .await?;
         if left == 0 && room.kind != "one_to_one" {
             sqlx::query("DELETE FROM rooms WHERE id = ?").bind(&room.id).execute(&self.db).await?;
         }
@@ -501,20 +564,44 @@ impl Core {
         Ok(())
     }
 
-    pub async fn update_room(&self, actor_id: &str, token: &str, name: Option<&str>, description: Option<&str>, read_only: Option<bool>, ai_enabled: Option<bool>) -> Result<Room> {
+    pub async fn update_room(
+        &self,
+        actor_id: &str,
+        token: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        read_only: Option<bool>,
+        ai_enabled: Option<bool>,
+    ) -> Result<Room> {
         let room = self.room_for(actor_id, token).await?;
         self.require_moderator(&room, actor_id).await?;
         if let Some(n) = name.map(str::trim).filter(|n| !n.is_empty()) {
-            sqlx::query("UPDATE rooms SET name = ? WHERE id = ?").bind(n).bind(&room.id).execute(&self.db).await?;
+            sqlx::query("UPDATE rooms SET name = ? WHERE id = ?")
+                .bind(n)
+                .bind(&room.id)
+                .execute(&self.db)
+                .await?;
         }
         if let Some(d) = description {
-            sqlx::query("UPDATE rooms SET description = ? WHERE id = ?").bind(d).bind(&room.id).execute(&self.db).await?;
+            sqlx::query("UPDATE rooms SET description = ? WHERE id = ?")
+                .bind(d)
+                .bind(&room.id)
+                .execute(&self.db)
+                .await?;
         }
         if let Some(r) = read_only {
-            sqlx::query("UPDATE rooms SET read_only = ? WHERE id = ?").bind(r).bind(&room.id).execute(&self.db).await?;
+            sqlx::query("UPDATE rooms SET read_only = ? WHERE id = ?")
+                .bind(r)
+                .bind(&room.id)
+                .execute(&self.db)
+                .await?;
         }
         if let Some(a) = ai_enabled {
-            sqlx::query("UPDATE rooms SET ai_enabled = ? WHERE id = ?").bind(a).bind(&room.id).execute(&self.db).await?;
+            sqlx::query("UPDATE rooms SET ai_enabled = ? WHERE id = ?")
+                .bind(a)
+                .bind(&room.id)
+                .execute(&self.db)
+                .await?;
         }
         let updated = self.room(&room.id).await?;
         self.publish_room(&room.id, &json!({"type": "talk.room_updated", "room": updated})).await?;
@@ -527,10 +614,20 @@ impl Core {
             if !matches!(n, "all" | "mentions" | "none") {
                 return Err(Error::bad("notify must be all, mentions or none"));
             }
-            sqlx::query("UPDATE participants SET notify = ? WHERE room_id = ? AND user_id = ?").bind(n).bind(&room.id).bind(user_id).execute(&self.db).await?;
+            sqlx::query("UPDATE participants SET notify = ? WHERE room_id = ? AND user_id = ?")
+                .bind(n)
+                .bind(&room.id)
+                .bind(user_id)
+                .execute(&self.db)
+                .await?;
         }
         if let Some(f) = favorite {
-            sqlx::query("UPDATE participants SET favorite = ? WHERE room_id = ? AND user_id = ?").bind(f).bind(&room.id).bind(user_id).execute(&self.db).await?;
+            sqlx::query("UPDATE participants SET favorite = ? WHERE room_id = ? AND user_id = ?")
+                .bind(f)
+                .bind(&room.id)
+                .bind(user_id)
+                .execute(&self.db)
+                .await?;
         }
         Ok(())
     }
@@ -541,7 +638,10 @@ impl Core {
             return Err(Error::Forbidden);
         }
         let audience = self.room_audience(&room.id).await?;
-        sqlx::query("DELETE FROM fts WHERE object_kind = 'message' AND scope = ?").bind(&room.id).execute(&self.db).await?;
+        sqlx::query("DELETE FROM fts WHERE object_kind = 'message' AND scope = ?")
+            .bind(&room.id)
+            .execute(&self.db)
+            .await?;
         sqlx::query("DELETE FROM rooms WHERE id = ?").bind(&room.id).execute(&self.db).await?;
         self.talk.audience.remove(&room.id);
         self.talk.calls.remove(&room.id);
@@ -554,8 +654,14 @@ impl Core {
         if let Some(a) = self.talk.audience.get(room_id) {
             return Ok(a.clone());
         }
-        let mut keys: Vec<String> = sqlx::query_scalar("SELECT user_id FROM participants WHERE room_id = ?").bind(room_id).fetch_all(&self.db).await?;
-        let guests: Vec<String> = sqlx::query_scalar("SELECT id FROM guests WHERE room_id = ?").bind(room_id).fetch_all(&self.db).await?;
+        let mut keys: Vec<String> = sqlx::query_scalar("SELECT user_id FROM participants WHERE room_id = ?")
+            .bind(room_id)
+            .fetch_all(&self.db)
+            .await?;
+        let guests: Vec<String> = sqlx::query_scalar("SELECT id FROM guests WHERE room_id = ?")
+            .bind(room_id)
+            .fetch_all(&self.db)
+            .await?;
         keys.extend(guests.into_iter().map(|g| format!("guest:{g}")));
         let arc = Arc::new(keys);
         self.talk.audience.insert(room_id.to_string(), arc.clone());
@@ -591,7 +697,11 @@ impl Core {
             .execute(&self.db)
             .await?;
         self.talk.audience.remove(&room.id);
-        let actor = Actor { kind: "guest".into(), id, name: format!("{name} (guest)") };
+        let actor = Actor {
+            kind: "guest".into(),
+            id,
+            name: format!("{name} (guest)"),
+        };
         self.post_system(&room.id, &format!("{} joined", actor.name)).await?;
         Ok((actor, room, secret))
     }
@@ -606,7 +716,14 @@ impl Core {
         if room.kind != "public" {
             return Err(Error::Unauthorized);
         }
-        Ok((Actor { kind: "guest".into(), id: row.0, name: row.2 }, room))
+        Ok((
+            Actor {
+                kind: "guest".into(),
+                id: row.0,
+                name: row.2,
+            },
+            room,
+        ))
     }
 
     /// Checks that an actor may read/write a room.
@@ -614,7 +731,11 @@ impl Core {
         match actor.kind.as_str() {
             "user" => self.participant_role(&room.id, &actor.id).await?.map(|_| ()).ok_or(Error::NotFound),
             "guest" => {
-                let ok: Option<String> = sqlx::query_scalar("SELECT id FROM guests WHERE id = ? AND room_id = ?").bind(&actor.id).bind(&room.id).fetch_optional(&self.db).await?;
+                let ok: Option<String> = sqlx::query_scalar("SELECT id FROM guests WHERE id = ? AND room_id = ?")
+                    .bind(&actor.id)
+                    .bind(&room.id)
+                    .fetch_optional(&self.db)
+                    .await?;
                 ok.map(|_| ()).ok_or(Error::NotFound)
             }
             "bot" | "system" => Ok(()),
@@ -625,7 +746,10 @@ impl Core {
     // ---- messages ------------------------------------------------------------
 
     pub async fn message(&self, id: i64) -> Result<Message> {
-        Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {MSG_COLS} FROM messages WHERE id = ?"))).bind(id).fetch_one(&self.db).await?)
+        Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {MSG_COLS} FROM messages WHERE id = ?")))
+            .bind(id)
+            .fetch_one(&self.db)
+            .await?)
     }
 
     async fn post_system(&self, room_id: &str, text: &str) -> Result<Message> {
@@ -650,7 +774,11 @@ impl Core {
         .bind(t)
         .fetch_one(&mut *tx)
         .await?;
-        sqlx::query("UPDATE rooms SET last_activity_at = ? WHERE id = ?").bind(t).bind(room_id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE rooms SET last_activity_at = ? WHERE id = ?")
+            .bind(t)
+            .bind(room_id)
+            .execute(&mut *tx)
+            .await?;
         if kind != "system" {
             sqlx::query("INSERT INTO fts (object_kind, object_id, scope, title, body) VALUES ('message', ?, ?, ?, ?)")
                 .bind(id.to_string())
@@ -672,7 +800,8 @@ impl Core {
         tx.commit().await?;
         let msg = self.message(id).await?;
         let view = self.message_view(msg.clone()).await?;
-        self.publish_room(room_id, &json!({"type": "talk.message", "room_id": room_id, "message": view})).await?;
+        self.publish_room(room_id, &json!({"type": "talk.message", "room_id": room_id, "message": view}))
+            .await?;
         let _ = self.message_events.send(Arc::new(msg.clone()));
         Ok(msg)
     }
@@ -691,10 +820,11 @@ impl Core {
         if body.len() > MAX_MESSAGE_LEN {
             return Err(Error::bad("message is too long"));
         }
-        if room.read_only && actor.kind != "bot" {
-            if actor.kind != "user" || !matches!(self.participant_role(&room.id, &actor.id).await?.as_deref(), Some("owner" | "moderator")) {
-                return Err(Error::Forbidden);
-            }
+        if room.read_only
+            && actor.kind != "bot"
+            && (actor.kind != "user" || !matches!(self.participant_role(&room.id, &actor.id).await?.as_deref(), Some("owner" | "moderator")))
+        {
+            return Err(Error::Forbidden);
         }
         if let Some(parent) = nm.reply_to {
             let p = self.message(parent).await.map_err(|_| Error::bad("reply target not found"))?;
@@ -702,7 +832,9 @@ impl Core {
                 return Err(Error::bad("reply target is in another conversation"));
             }
         }
-        let msg = self.insert_message(&room.id, actor, kind, body, nm.reply_to, nm.meta.unwrap_or_else(|| json!({}))).await?;
+        let msg = self
+            .insert_message(&room.id, actor, kind, body, nm.reply_to, nm.meta.unwrap_or_else(|| json!({})))
+            .await?;
         self.notify_mentions(&room, actor, &msg).await?;
         self.message_view(msg).await
     }
@@ -716,7 +848,11 @@ impl Core {
             if p.user_id == actor.id {
                 continue;
             }
-            let notify: String = sqlx::query_scalar("SELECT notify FROM participants WHERE room_id = ? AND user_id = ?").bind(&room.id).bind(&p.user_id).fetch_one(&self.db).await?;
+            let notify: String = sqlx::query_scalar("SELECT notify FROM participants WHERE room_id = ? AND user_id = ?")
+                .bind(&room.id)
+                .bind(&p.user_id)
+                .fetch_one(&self.db)
+                .await?;
             let mentioned = everyone || names.iter().any(|n| n.eq_ignore_ascii_case(&p.username));
             let wants = match notify.as_str() {
                 "all" => true,
@@ -725,7 +861,13 @@ impl Core {
             };
             // Online users see the message live; only notify those who aren't connected.
             if wants && !self.hub.is_online(&p.user_id) {
-                let title = if room.kind == "one_to_one" { format!("{} sent you a message", actor.name) } else if mentioned { format!("{} mentioned you in “{room_name}”", actor.name) } else { format!("New message in “{room_name}”") };
+                let title = if room.kind == "one_to_one" {
+                    format!("{} sent you a message", actor.name)
+                } else if mentioned {
+                    format!("{} mentioned you in “{room_name}”", actor.name)
+                } else {
+                    format!("New message in “{room_name}”")
+                };
                 let preview: String = msg.body.chars().take(140).collect();
                 self.notify(&p.user_id, "talk", &title, &preview, &format!("/talk/{}", room.token)).await?;
             }
@@ -734,7 +876,10 @@ impl Core {
     }
 
     pub async fn message_view(&self, message: Message) -> Result<MessageView> {
-        let rows: Vec<(String, String)> = sqlx::query_as("SELECT emoji, actor_id FROM reactions WHERE message_id = ? ORDER BY created_at").bind(message.id).fetch_all(&self.db).await?;
+        let rows: Vec<(String, String)> = sqlx::query_as("SELECT emoji, actor_id FROM reactions WHERE message_id = ? ORDER BY created_at")
+            .bind(message.id)
+            .fetch_all(&self.db)
+            .await?;
         let mut reactions: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for (emoji, actor) in rows {
             reactions.entry(emoji).or_default().push(actor);
@@ -757,19 +902,23 @@ impl Core {
         self.actor_in_room(actor, &room).await?;
         let limit = limit.clamp(1, 200);
         let mut msgs: Vec<Message> = if let Some(a) = after {
-            sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {MSG_COLS} FROM messages WHERE room_id = ? AND id > ? ORDER BY id ASC LIMIT ?")))
-                .bind(&room.id)
-                .bind(a)
-                .bind(limit)
-                .fetch_all(&self.db)
-                .await?
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                "SELECT {MSG_COLS} FROM messages WHERE room_id = ? AND id > ? ORDER BY id ASC LIMIT ?"
+            )))
+            .bind(&room.id)
+            .bind(a)
+            .bind(limit)
+            .fetch_all(&self.db)
+            .await?
         } else {
-            let mut v: Vec<Message> = sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {MSG_COLS} FROM messages WHERE room_id = ? AND id < ? ORDER BY id DESC LIMIT ?")))
-                .bind(&room.id)
-                .bind(before.unwrap_or(i64::MAX))
-                .bind(limit)
-                .fetch_all(&self.db)
-                .await?;
+            let mut v: Vec<Message> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                "SELECT {MSG_COLS} FROM messages WHERE room_id = ? AND id < ? ORDER BY id DESC LIMIT ?"
+            )))
+            .bind(&room.id)
+            .bind(before.unwrap_or(i64::MAX))
+            .bind(limit)
+            .fetch_all(&self.db)
+            .await?;
             v.reverse();
             v
         };
@@ -789,10 +938,20 @@ impl Core {
         if body.is_empty() || body.len() > MAX_MESSAGE_LEN {
             return Err(Error::bad("invalid message"));
         }
-        sqlx::query("UPDATE messages SET body = ?, edited_at = ? WHERE id = ?").bind(body).bind(now()).bind(id).execute(&self.db).await?;
-        sqlx::query("UPDATE fts SET body = ? WHERE object_kind = 'message' AND object_id = ?").bind(body).bind(id.to_string()).execute(&self.db).await?;
+        sqlx::query("UPDATE messages SET body = ?, edited_at = ? WHERE id = ?")
+            .bind(body)
+            .bind(now())
+            .bind(id)
+            .execute(&self.db)
+            .await?;
+        sqlx::query("UPDATE fts SET body = ? WHERE object_kind = 'message' AND object_id = ?")
+            .bind(body)
+            .bind(id.to_string())
+            .execute(&self.db)
+            .await?;
         let view = self.message_view(self.message(id).await?).await?;
-        self.publish_room(&msg.room_id, &json!({"type": "talk.message_updated", "room_id": msg.room_id, "message": view})).await?;
+        self.publish_room(&msg.room_id, &json!({"type": "talk.message_updated", "room_id": msg.room_id, "message": view}))
+            .await?;
         Ok(view)
     }
 
@@ -803,11 +962,18 @@ impl Core {
         if msg.actor_id != actor.id && !is_mod {
             return Err(Error::Forbidden);
         }
-        sqlx::query("UPDATE messages SET deleted = 1, body = '', meta = '{}' WHERE id = ?").bind(id).execute(&self.db).await?;
-        sqlx::query("DELETE FROM fts WHERE object_kind = 'message' AND object_id = ?").bind(id.to_string()).execute(&self.db).await?;
+        sqlx::query("UPDATE messages SET deleted = 1, body = '', meta = '{}' WHERE id = ?")
+            .bind(id)
+            .execute(&self.db)
+            .await?;
+        sqlx::query("DELETE FROM fts WHERE object_kind = 'message' AND object_id = ?")
+            .bind(id.to_string())
+            .execute(&self.db)
+            .await?;
         sqlx::query("DELETE FROM reactions WHERE message_id = ?").bind(id).execute(&self.db).await?;
         let view = self.message_view(self.message(id).await?).await?;
-        self.publish_room(&room.id, &json!({"type": "talk.message_updated", "room_id": room.id, "message": view})).await?;
+        self.publish_room(&room.id, &json!({"type": "talk.message_updated", "room_id": room.id, "message": view}))
+            .await?;
         Ok(())
     }
 
@@ -819,12 +985,24 @@ impl Core {
             return Err(Error::bad("invalid reaction"));
         }
         if add {
-            sqlx::query("INSERT OR IGNORE INTO reactions (message_id, actor_id, emoji, created_at) VALUES (?, ?, ?, ?)").bind(id).bind(&actor.id).bind(emoji).bind(now()).execute(&self.db).await?;
+            sqlx::query("INSERT OR IGNORE INTO reactions (message_id, actor_id, emoji, created_at) VALUES (?, ?, ?, ?)")
+                .bind(id)
+                .bind(&actor.id)
+                .bind(emoji)
+                .bind(now())
+                .execute(&self.db)
+                .await?;
         } else {
-            sqlx::query("DELETE FROM reactions WHERE message_id = ? AND actor_id = ? AND emoji = ?").bind(id).bind(&actor.id).bind(emoji).execute(&self.db).await?;
+            sqlx::query("DELETE FROM reactions WHERE message_id = ? AND actor_id = ? AND emoji = ?")
+                .bind(id)
+                .bind(&actor.id)
+                .bind(emoji)
+                .execute(&self.db)
+                .await?;
         }
         let view = self.message_view(msg).await?;
-        self.publish_room(&room.id, &json!({"type": "talk.message_updated", "room_id": room.id, "message": view})).await?;
+        self.publish_room(&room.id, &json!({"type": "talk.message_updated", "room_id": room.id, "message": view}))
+            .await?;
         Ok(view)
     }
 
@@ -836,7 +1014,11 @@ impl Core {
             .bind(user_id)
             .execute(&self.db)
             .await?;
-        self.publish_room(&room.id, &json!({"type": "talk.read", "room_id": room.id, "user_id": user_id, "message_id": message_id})).await?;
+        self.publish_room(
+            &room.id,
+            &json!({"type": "talk.read", "room_id": room.id, "user_id": user_id, "message_id": message_id}),
+        )
+        .await?;
         Ok(())
     }
 
@@ -846,7 +1028,10 @@ impl Core {
         self.actor_in_room(actor, &room).await?;
         let audience = self.room_audience(&room.id).await?;
         let me = actor.hub_key();
-        self.hub.publish(audience.iter().filter(|k| **k != me).map(String::as_str), &json!({"type": "talk.typing", "room_id": room.id, "actor": actor}));
+        self.hub.publish(
+            audience.iter().filter(|k| **k != me).map(String::as_str),
+            &json!({"type": "talk.typing", "room_id": room.id, "actor": actor}),
+        );
         Ok(())
     }
 
@@ -858,7 +1043,17 @@ impl Core {
             return Err(Error::bad("a poll needs a question and 2-20 options"));
         }
         let meta = json!({"question": question.trim(), "options": opts, "multiple": multiple, "votes": {}, "closed": false});
-        self.post_message(actor, token, NewMessage { body: question.trim().to_string(), reply_to: None, kind: Some("poll".into()), meta: Some(meta) }).await
+        self.post_message(
+            actor,
+            token,
+            NewMessage {
+                body: question.trim().to_string(),
+                reply_to: None,
+                kind: Some("poll".into()),
+                meta: Some(meta),
+            },
+        )
+        .await
     }
 
     pub async fn vote(&self, actor: &Actor, message_id: i64, choices: &[usize]) -> Result<MessageView> {
@@ -892,9 +1087,14 @@ impl Core {
     }
 
     async fn update_meta(&self, msg: &Message, meta: Value) -> Result<MessageView> {
-        sqlx::query("UPDATE messages SET meta = ? WHERE id = ?").bind(Json(&meta)).bind(msg.id).execute(&self.db).await?;
+        sqlx::query("UPDATE messages SET meta = ? WHERE id = ?")
+            .bind(Json(&meta))
+            .bind(msg.id)
+            .execute(&self.db)
+            .await?;
         let view = self.message_view(self.message(msg.id).await?).await?;
-        self.publish_room(&msg.room_id, &json!({"type": "talk.message_updated", "room_id": msg.room_id, "message": view})).await?;
+        self.publish_room(&msg.room_id, &json!({"type": "talk.message_updated", "room_id": msg.room_id, "message": view}))
+            .await?;
         Ok(view)
     }
 
@@ -902,22 +1102,44 @@ impl Core {
     pub async fn share_file_to_room(&self, user_id: &str, token: &str, node_id: &str, caption: &str) -> Result<MessageView> {
         let room = self.room_for(user_id, token).await?;
         let (node, _) = self.node_for(user_id, node_id, crate::files::perm::READ).await?;
-        let existing: Option<String> = sqlx::query_scalar("SELECT id FROM shares WHERE node_id = ? AND target_room = ?").bind(&node.id).bind(&room.id).fetch_optional(&self.db).await?;
+        let existing: Option<String> = sqlx::query_scalar("SELECT id FROM shares WHERE node_id = ? AND target_room = ?")
+            .bind(&node.id)
+            .bind(&room.id)
+            .fetch_optional(&self.db)
+            .await?;
         if existing.is_none() {
-            self.create_share(user_id, &node.id, crate::shares::NewShare {
-                kind: "room".into(),
-                target: Some(room.token.clone()),
-                permissions: Some(crate::files::perm::READ),
-                password: None,
-                expires_at: None,
-                label: None,
-            })
+            self.create_share(
+                user_id,
+                &node.id,
+                crate::shares::NewShare {
+                    kind: "room".into(),
+                    target: Some(room.token.clone()),
+                    permissions: Some(crate::files::perm::READ),
+                    password: None,
+                    expires_at: None,
+                    label: None,
+                },
+            )
             .await?;
         }
         let me = self.user(user_id).await?;
         let meta = json!({"node_id": node.id, "name": node.name, "size": node.size, "mime": node.mime, "kind": node.kind});
-        let body = if caption.trim().is_empty() { node.name.clone() } else { caption.trim().to_string() };
-        self.post_message(&Actor::user(user_id, &me.display_name), token, NewMessage { body, reply_to: None, kind: Some("file".into()), meta: Some(meta) }).await
+        let body = if caption.trim().is_empty() {
+            node.name.clone()
+        } else {
+            caption.trim().to_string()
+        };
+        self.post_message(
+            &Actor::user(user_id, &me.display_name),
+            token,
+            NewMessage {
+                body,
+                reply_to: None,
+                kind: Some("file".into()),
+                meta: Some(meta),
+            },
+        )
+        .await
     }
 
     // ---- calls ---------------------------------------------------------------
@@ -932,7 +1154,16 @@ impl Core {
         let room = self.room_by_token(token).await?;
         self.actor_in_room(actor, &room).await?;
         let session = short_token(16);
-        let member = CallMember { session: session.clone(), actor: actor.clone(), conn, audio, video, screen: false, hand: false, joined_at: now() };
+        let member = CallMember {
+            session: session.clone(),
+            actor: actor.clone(),
+            conn,
+            audio,
+            video,
+            screen: false,
+            hand: false,
+            joined_at: now(),
+        };
         let (others, started) = {
             let mut entry = self.talk.calls.entry(room.id.clone()).or_default();
             // One session per connection: rejoining replaces the previous one.
@@ -945,7 +1176,8 @@ impl Core {
         if started {
             self.post_system(&room.id, &format!("{} started a call", actor.name)).await?;
         }
-        self.publish_room(&room.id, &json!({"type": "call.joined", "room_id": room.id, "member": member})).await?;
+        self.publish_room(&room.id, &json!({"type": "call.joined", "room_id": room.id, "member": member}))
+            .await?;
         Ok((session, others, room))
     }
 
@@ -962,7 +1194,8 @@ impl Core {
             self.talk.calls.remove_if(room_id, |_, m| m.is_empty());
         }
         if left {
-            self.publish_room(room_id, &json!({"type": "call.left", "room_id": room_id, "session": session})).await?;
+            self.publish_room(room_id, &json!({"type": "call.left", "room_id": room_id, "session": session}))
+                .await?;
             if ended {
                 self.post_system(room_id, "Call ended").await?;
             }
@@ -985,7 +1218,15 @@ impl Core {
         }
     }
 
-    pub async fn update_call_state(&self, room_id: &str, session: &str, audio: Option<bool>, video: Option<bool>, screen: Option<bool>, hand: Option<bool>) -> Result<()> {
+    pub async fn update_call_state(
+        &self,
+        room_id: &str,
+        session: &str,
+        audio: Option<bool>,
+        video: Option<bool>,
+        screen: Option<bool>,
+        hand: Option<bool>,
+    ) -> Result<()> {
         let member = {
             let mut members = self.talk.calls.get_mut(room_id).ok_or(Error::NotFound)?;
             let m = members.iter_mut().find(|m| m.session == session).ok_or(Error::NotFound)?;
@@ -1003,7 +1244,8 @@ impl Core {
             }
             m.clone()
         };
-        self.publish_room(room_id, &json!({"type": "call.state", "room_id": room_id, "member": member})).await
+        self.publish_room(room_id, &json!({"type": "call.state", "room_id": room_id, "member": member}))
+            .await
     }
 
     /// Relays a WebRTC signaling payload (offer/answer/ICE) between two sessions of the same call.
@@ -1011,14 +1253,18 @@ impl Core {
         let members = self.talk.calls.get(room_id).ok_or(Error::NotFound)?;
         let from = members.iter().find(|m| m.session == from_session).ok_or(Error::Forbidden)?;
         let to = members.iter().find(|m| m.session == to_session).ok_or(Error::NotFound)?;
-        let ev: Arc<str> = Arc::from(json!({"type": "call.signal", "room_id": room_id, "from": from_session, "from_actor": from.actor, "payload": payload}).to_string());
+        let ev: Arc<str> =
+            Arc::from(json!({"type": "call.signal", "room_id": room_id, "from": from_session, "from_actor": from.actor, "payload": payload}).to_string());
         self.hub.send_raw(&to.actor.hub_key(), &ev, Some(to.conn));
         Ok(())
     }
 
     /// The call session `session` belongs to `hub_key`/`conn` (prevents spoofed signaling).
     pub fn owns_session(&self, room_id: &str, session: &str, hub_key: &str, conn: u64) -> bool {
-        self.talk.calls.get(room_id).is_some_and(|m| m.iter().any(|m| m.session == session && m.conn == conn && m.actor.hub_key() == hub_key))
+        self.talk
+            .calls
+            .get(room_id)
+            .is_some_and(|m| m.iter().any(|m| m.session == session && m.conn == conn && m.actor.hub_key() == hub_key))
     }
 }
 

@@ -53,10 +53,18 @@ pub struct Reply {
 
 impl Reply {
     fn ok(body: Value) -> Self {
-        Reply { body: Some(body), status: 200, negotiated_legacy: None }
+        Reply {
+            body: Some(body),
+            status: 200,
+            negotiated_legacy: None,
+        }
     }
     fn err(id: Option<&Value>, status: u16, e: RpcError) -> Self {
-        Reply { body: Some(error_response(id, &e)), status, negotiated_legacy: None }
+        Reply {
+            body: Some(error_response(id, &e)),
+            status,
+            negotiated_legacy: None,
+        }
     }
 }
 
@@ -94,7 +102,11 @@ impl<H: Handler> Server<H> {
         let params = obj.get("params").cloned().unwrap_or_else(|| json!({}));
         let Some(id) = obj.get("id").filter(|i| !i.is_null()) else {
             // Notifications (initialized, cancelled, ...) are accepted and need no reply.
-            return Reply { body: None, status: 202, negotiated_legacy: None };
+            return Reply {
+                body: None,
+                status: 202,
+                negotiated_legacy: None,
+            };
         };
 
         if method == "initialize" {
@@ -117,7 +129,11 @@ impl<H: Handler> Server<H> {
         let era = match meta.and_then(|m| m.get(META_PROTOCOL_VERSION)).and_then(Value::as_str) {
             Some(v) if v == MODERN_VERSION => {
                 if meta.and_then(|m| m.get(META_CLIENT_CAPABILITIES)).is_none() {
-                    return Reply::err(Some(id), 400, RpcError::invalid_params(format!("missing _meta[\"{META_CLIENT_CAPABILITIES}\"]")));
+                    return Reply::err(
+                        Some(id),
+                        400,
+                        RpcError::invalid_params(format!("missing _meta[\"{META_CLIENT_CAPABILITIES}\"]")),
+                    );
                 }
                 Era::Modern
             }
@@ -125,7 +141,8 @@ impl<H: Handler> Server<H> {
                 return Reply::err(
                     Some(id),
                     400,
-                    RpcError::new(UNSUPPORTED_PROTOCOL_VERSION, "Unsupported protocol version").with_data(json!({"supported": supported_versions(), "requested": v})),
+                    RpcError::new(UNSUPPORTED_PROTOCOL_VERSION, "Unsupported protocol version")
+                        .with_data(json!({"supported": supported_versions(), "requested": v})),
                 );
             }
             None if legacy.is_some() => Era::Legacy,
@@ -192,7 +209,10 @@ impl<H: Handler> Server<H> {
                 Ok(cache(json!({"tools": tools}), 300_000, "public"))
             }
             "tools/call" => {
-                let name = params.get("name").and_then(Value::as_str).ok_or_else(|| RpcError::invalid_params("missing tool name"))?;
+                let name = params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| RpcError::invalid_params("missing tool name"))?;
                 let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
                 if !args.is_object() {
                     return Err(RpcError::invalid_params("arguments must be an object"));
@@ -206,13 +226,19 @@ impl<H: Handler> Server<H> {
             }
             "resources/templates/list" => Ok(cache(json!({"resourceTemplates": self.handler.resource_templates()}), 300_000, "public")),
             "resources/read" => {
-                let uri = params.get("uri").and_then(Value::as_str).ok_or_else(|| RpcError::invalid_params("missing uri"))?;
+                let uri = params
+                    .get("uri")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| RpcError::invalid_params("missing uri"))?;
                 let contents = self.handler.read_resource(ctx, uri).await?;
                 Ok(cache(json!({"contents": contents}), 0, "private"))
             }
             "prompts/list" => Ok(cache(json!({"prompts": self.handler.list_prompts()}), 300_000, "public")),
             "prompts/get" => {
-                let name = params.get("name").and_then(Value::as_str).ok_or_else(|| RpcError::invalid_params("missing prompt name"))?;
+                let name = params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| RpcError::invalid_params("missing prompt name"))?;
                 let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
                 self.handler.get_prompt(ctx, name, args).await
             }
@@ -254,7 +280,10 @@ impl<H: Handler> Server<H> {
 pub fn decode_header_value(v: &str) -> Option<String> {
     use base64::Engine;
     match v.strip_prefix("=?base64?").and_then(|s| s.strip_suffix("?=")) {
-        Some(b64) => base64::engine::general_purpose::STANDARD.decode(b64).ok().and_then(|b| String::from_utf8(b).ok()),
+        Some(b64) => base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .ok()
+            .and_then(|b| String::from_utf8(b).ok()),
         None => Some(v.to_string()),
     }
 }
@@ -266,16 +295,24 @@ pub fn validate_http_headers(body: &Value, header: impl Fn(&str) -> Option<Strin
     let method = body.get("method").and_then(Value::as_str).unwrap_or("");
     let params = body.get("params").cloned().unwrap_or_else(|| json!({}));
     let meta_version = params.get("_meta").and_then(|m| m.get(META_PROTOCOL_VERSION)).and_then(Value::as_str);
-    let Some(meta_version) = meta_version else { return Ok(()) };
+    let Some(meta_version) = meta_version else {
+        return Ok(());
+    };
     match header("mcp-protocol-version") {
         Some(h) if h == meta_version => {}
-        Some(h) => return mismatch(format!("Header mismatch: MCP-Protocol-Version header value '{h}' does not match body value '{meta_version}'")),
+        Some(h) => {
+            return mismatch(format!(
+                "Header mismatch: MCP-Protocol-Version header value '{h}' does not match body value '{meta_version}'"
+            ));
+        }
         None => return mismatch("Header mismatch: missing MCP-Protocol-Version header".into()),
     }
     if body.get("id").is_some() {
         match header("mcp-method") {
             Some(h) if h == method => {}
-            Some(h) => return mismatch(format!("Header mismatch: Mcp-Method header value '{h}' does not match body value '{method}'")),
+            Some(h) => {
+                return mismatch(format!("Header mismatch: Mcp-Method header value '{h}' does not match body value '{method}'"));
+            }
             None => return mismatch("Header mismatch: missing Mcp-Method header".into()),
         }
         let name_src = match method {
@@ -286,8 +323,12 @@ pub fn validate_http_headers(body: &Value, header: impl Fn(&str) -> Option<Strin
         if let Some(expected) = name_src {
             match header("mcp-name").map(|h| decode_header_value(&h)) {
                 Some(Some(h)) if h == expected => {}
-                Some(Some(h)) => return mismatch(format!("Header mismatch: Mcp-Name header value '{h}' does not match body value '{expected}'")),
-                Some(None) => return mismatch("Header mismatch: Mcp-Name header is not valid base64".into()),
+                Some(Some(h)) => {
+                    return mismatch(format!("Header mismatch: Mcp-Name header value '{h}' does not match body value '{expected}'"));
+                }
+                Some(None) => {
+                    return mismatch("Header mismatch: Mcp-Name header is not valid base64".into());
+                }
                 None => return mismatch("Header mismatch: missing Mcp-Name header".into()),
             }
         }

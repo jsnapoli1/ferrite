@@ -55,7 +55,10 @@ impl Core {
         std::fs::create_dir_all(&config.data_dir)?;
         let db = db::open(&config.data_dir.join("ferrite.db")).await?;
         let blobs = blobs::BlobStore::new(&config.data_dir)?;
-        let secret = match sqlx::query_scalar::<_, String>("SELECT value FROM kv WHERE key = 'secret'").fetch_optional(&db).await? {
+        let secret = match sqlx::query_scalar::<_, String>("SELECT value FROM kv WHERE key = 'secret'")
+            .fetch_optional(&db)
+            .await?
+        {
             Some(s) => s,
             None => {
                 let s = util::random_token(32);
@@ -77,11 +80,18 @@ impl Core {
     }
 
     pub async fn kv_get(&self, key: &str) -> Result<Option<String>> {
-        Ok(sqlx::query_scalar("SELECT value FROM kv WHERE key = ?").bind(key).fetch_optional(&self.db).await?)
+        Ok(sqlx::query_scalar("SELECT value FROM kv WHERE key = ?")
+            .bind(key)
+            .fetch_optional(&self.db)
+            .await?)
     }
 
     pub async fn kv_set(&self, key: &str, value: &str) -> Result<()> {
-        sqlx::query("INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(key).bind(value).execute(&self.db).await?;
+        sqlx::query("INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+            .bind(key)
+            .bind(value)
+            .execute(&self.db)
+            .await?;
         Ok(())
     }
 }

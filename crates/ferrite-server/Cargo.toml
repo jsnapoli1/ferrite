@@ -1,6 +1,46 @@
 [package]
 name = "ferrite-server"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "ferrite"
+path = "src/main.rs"
 
 [dependencies]
+anyhow = "1.0.104"
+axum = { version = "0.8.9", features = ["ws", "macros"] }
+base64 = "0.23.1"
+blake3 = "1.8.7"
+bytes = "1.12.1"
+chrono = { version = "0.4.45", features = ["serde"] }
+clap = { version = "4.6.7", features = ["derive", "env"] }
+dashmap = "6.2.1"
+ferrite-ai = { version = "0.1.0", path = "../ferrite-ai" }
+ferrite-core = { version = "0.1.0", path = "../ferrite-core" }
+ferrite-mcp = { version = "0.1.0", path = "../ferrite-mcp" }
+futures = "0.3.34"
+hex = "0.4.3"
+http-body-util = "0.1.5"
+mime_guess = "2.0.5"
+percent-encoding = "2.3.2"
+rust-embed = "8.13.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sqlx = { version = "0.9.0", default-features = false, features = ["sqlite", "runtime-tokio", "macros", "chrono"] }
+tokio = { version = "1.54.1", features = ["full"] }
+tokio-util = "0.7.20"
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.7.1", features = ["fs", "trace", "compression-gzip", "set-header"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+uuid = { version = "1.28.0", features = ["v7"] }
+yrs = { version = "0.28.0", features = ["sync"] }
+
+[dev-dependencies]
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "cookies"] }
+tempfile = "3.27.0"
+tokio-tungstenite = "0.30.0"

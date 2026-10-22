@@ -52,7 +52,11 @@ pub fn any_to_json(a: &Any) -> Value {
 
 /// Inserts a flat JSON object as a nested `Y.Map` under `key`.
 pub fn put_object(txn: &mut TransactionMut, parent: &MapRef, key: &str, obj: &JsonMap<String, Value>) -> MapRef {
-    let prelim: MapPrelim = obj.iter().filter(|(k, _)| k.as_str() != "id").map(|(k, v)| (k.clone(), json_to_any(v))).collect();
+    let prelim: MapPrelim = obj
+        .iter()
+        .filter(|(k, _)| k.as_str() != "id")
+        .map(|(k, v)| (k.clone(), json_to_any(v)))
+        .collect();
     parent.insert(txn, key, prelim)
 }
 
@@ -108,7 +112,11 @@ pub fn load(kind: DocKind, data: &[u8]) -> Result<Doc> {
             }
         }
         DocKind::Mindmap | DocKind::Canvas => {
-            let v: Value = if data.iter().all(u8::is_ascii_whitespace) { kind.empty_json() } else { serde_json::from_slice(data)? };
+            let v: Value = if data.iter().all(u8::is_ascii_whitespace) {
+                kind.empty_json()
+            } else {
+                serde_json::from_slice(data)?
+            };
             let meta_ref = doc.get_or_insert_map("meta");
             let (coll_a, coll_b) = match kind {
                 DocKind::Mindmap => ("nodes", None),
@@ -155,8 +163,12 @@ pub fn save(kind: DocKind, doc: &Doc) -> Result<Vec<u8>> {
             let txn = doc.transact();
             let mut grid: Vec<Vec<String>> = Vec::new();
             for (key, v) in cells.iter(&txn) {
-                let Some((r, c)) = key.split_once(',') else { continue };
-                let (Ok(r), Ok(c)) = (r.parse::<usize>(), c.parse::<usize>()) else { continue };
+                let Some((r, c)) = key.split_once(',') else {
+                    continue;
+                };
+                let (Ok(r), Ok(c)) = (r.parse::<usize>(), c.parse::<usize>()) else {
+                    continue;
+                };
                 if r > 100_000 || c > 1_000 {
                     continue;
                 }
@@ -180,9 +192,9 @@ pub fn save(kind: DocKind, doc: &Doc) -> Result<Vec<u8>> {
             let mut w = csv::WriterBuilder::new().has_headers(false).flexible(true).from_writer(Vec::new());
             for mut row in grid {
                 row.resize(width, String::new());
-                w.write_record(&row).map_err(|e| Error::internal(e))?;
+                w.write_record(&row).map_err(Error::internal)?;
             }
-            w.into_inner().map_err(|e| Error::internal(e))
+            w.into_inner().map_err(Error::internal)
         }
         DocKind::Mindmap => {
             let meta = doc.get_or_insert_map("meta");

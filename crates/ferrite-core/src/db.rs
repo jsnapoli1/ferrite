@@ -1,5 +1,5 @@
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use std::path::Path;
 use std::time::Duration;
 
@@ -17,11 +17,7 @@ pub async fn open(path: &Path) -> anyhow::Result<SqlitePool> {
         .busy_timeout(Duration::from_secs(10))
         .pragma("temp_store", "memory")
         .pragma("cache_size", "-16000");
-    let pool = SqlitePoolOptions::new()
-        .max_connections(8)
-        .min_connections(1)
-        .connect_with(opts)
-        .await?;
+    let pool = SqlitePoolOptions::new().max_connections(8).min_connections(1).connect_with(opts).await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
     Ok(pool)
 }

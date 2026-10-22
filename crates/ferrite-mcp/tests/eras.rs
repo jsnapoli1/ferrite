@@ -7,7 +7,11 @@ struct Echo;
 impl Handler for Echo {
     type Ctx = String;
     fn server_info(&self) -> Implementation {
-        Implementation { name: "echo".into(), version: "1".into(), title: None }
+        Implementation {
+            name: "echo".into(),
+            version: "1".into(),
+            title: None,
+        }
     }
     fn instructions(&self) -> Option<String> {
         Some("Echoes things.".into())
@@ -40,7 +44,9 @@ async fn modern_requests_are_stateless() {
     assert_eq!(b["result"]["_meta"][META_SERVER_INFO]["name"], "echo");
     assert!(b["result"]["ttlMs"].is_u64());
 
-    let r = s.handle(&ctx, &modern("tools/call", json!({"name": "echo", "arguments": {"text": "hi"}})), None).await;
+    let r = s
+        .handle(&ctx, &modern("tools/call", json!({"name": "echo", "arguments": {"text": "hi"}})), None)
+        .await;
     let b = r.body.unwrap();
     assert_eq!(b["result"]["structuredContent"], json!({"user": "alice", "text": "hi"}));
     assert_eq!(b["result"]["isError"], false);
@@ -118,20 +124,28 @@ async fn legacy_server(stream: tokio::io::DuplexStream) {
     let mut initialized = false;
     while let Ok(Some(line)) = lines.next_line().await {
         let msg: Value = serde_json::from_str(&line).unwrap();
-        let Some(id) = msg.get("id").cloned() else { continue };
+        let Some(id) = msg.get("id").cloned() else {
+            continue;
+        };
         let method = msg["method"].as_str().unwrap_or("");
         let reply = match method {
             "initialize" => {
                 initialized = true;
                 json!({"jsonrpc": "2.0", "id": id, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "wordcraft", "version": "0.1"}}})
             }
-            _ if !initialized => json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32002, "message": "server not initialized"}}),
-            "tools/list" => json!({"jsonrpc": "2.0", "id": id, "result": {"tools": [{"name": "open_document", "description": "Open", "inputSchema": {"type": "object"}}]}}),
+            _ if !initialized => {
+                json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32002, "message": "server not initialized"}})
+            }
+            "tools/list" => {
+                json!({"jsonrpc": "2.0", "id": id, "result": {"tools": [{"name": "open_document", "description": "Open", "inputSchema": {"type": "object"}}]}})
+            }
             "tools/call" => {
                 assert!(msg["params"].get("_meta").is_none(), "legacy requests carry no modern _meta");
                 json!({"jsonrpc": "2.0", "id": id, "result": {"content": [{"type": "text", "text": "opened"}]}})
             }
-            _ => json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "unknown"}}),
+            _ => {
+                json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "unknown"}})
+            }
         };
         let mut out = serde_json::to_vec(&reply).unwrap();
         out.push(b'\n');
@@ -148,7 +162,10 @@ async fn dual_client_falls_back_for_legacy_servers() {
     assert_eq!(client.era(), &Era::Legacy("2025-06-18".into()));
     assert_eq!(client.server_info.as_ref().unwrap().name, "wordcraft");
     assert_eq!(client.list_tools().await.unwrap()[0].name, "open_document");
-    assert_eq!(client.call_tool("open_document", json!({"path": "/x.docx"})).await.unwrap().text_content(), "opened");
+    assert_eq!(
+        client.call_tool("open_document", json!({"path": "/x.docx"})).await.unwrap().text_content(),
+        "opened"
+    );
 }
 
 #[tokio::test]
@@ -167,14 +184,24 @@ async fn legacy_client_is_served() {
     let init: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
     assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
     assert_eq!(init["result"]["serverInfo"]["name"], "echo");
-    cw.write_all(&send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))).await.unwrap();
-    cw.write_all(&send(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "echo", "arguments": {"text": "old"}}}))).await.unwrap();
+    cw.write_all(&send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"})))
+        .await
+        .unwrap();
+    cw.write_all(&send(
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "echo", "arguments": {"text": "old"}}}),
+    ))
+    .await
+    .unwrap();
     let r: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
     assert_eq!(r["result"]["structuredContent"]["text"], "old");
     assert!(r["result"].get("resultType").is_none(), "legacy results keep the legacy shape");
 
     // An unknown legacy version negotiates down to our newest legacy version.
-    cw.write_all(&send(json!({"jsonrpc": "2.0", "id": 3, "method": "initialize", "params": {"protocolVersion": "2099-01-01", "capabilities": {}}}))).await.unwrap();
+    cw.write_all(&send(
+        json!({"jsonrpc": "2.0", "id": 3, "method": "initialize", "params": {"protocolVersion": "2099-01-01", "capabilities": {}}}),
+    ))
+    .await
+    .unwrap();
     let r: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
     assert_eq!(r["result"]["protocolVersion"], LEGACY_VERSIONS[0]);
 }

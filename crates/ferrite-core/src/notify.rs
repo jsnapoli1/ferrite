@@ -32,17 +32,15 @@ pub struct Activity {
 
 impl Core {
     pub async fn notify(&self, user_id: &str, kind: &str, title: &str, body: &str, link: &str) -> Result<()> {
-        let id: i64 = sqlx::query_scalar(
-            "INSERT INTO notifications (user_id, kind, title, body, link, created_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
-        )
-        .bind(user_id)
-        .bind(kind)
-        .bind(title)
-        .bind(body)
-        .bind(link)
-        .bind(now())
-        .fetch_one(&self.db)
-        .await?;
+        let id: i64 = sqlx::query_scalar("INSERT INTO notifications (user_id, kind, title, body, link, created_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id")
+            .bind(user_id)
+            .bind(kind)
+            .bind(title)
+            .bind(body)
+            .bind(link)
+            .bind(now())
+            .fetch_one(&self.db)
+            .await?;
         self.hub.publish(
             [user_id],
             &json!({"type": "notification", "notification": {"id": id, "kind": kind, "title": title, "body": body, "link": link}}),
@@ -65,8 +63,19 @@ impl Core {
     /// Marks one notification (or all when `id` is None) as read.
     pub async fn mark_notifications_read(&self, user_id: &str, id: Option<i64>) -> Result<()> {
         match id {
-            Some(id) => sqlx::query("UPDATE notifications SET read = 1 WHERE user_id = ? AND id = ?").bind(user_id).bind(id).execute(&self.db).await?,
-            None => sqlx::query("UPDATE notifications SET read = 1 WHERE user_id = ?").bind(user_id).execute(&self.db).await?,
+            Some(id) => {
+                sqlx::query("UPDATE notifications SET read = 1 WHERE user_id = ? AND id = ?")
+                    .bind(user_id)
+                    .bind(id)
+                    .execute(&self.db)
+                    .await?
+            }
+            None => {
+                sqlx::query("UPDATE notifications SET read = 1 WHERE user_id = ?")
+                    .bind(user_id)
+                    .execute(&self.db)
+                    .await?
+            }
         };
         Ok(())
     }

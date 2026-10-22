@@ -69,7 +69,11 @@ pub struct Client {
 }
 
 fn client_info() -> Implementation {
-    Implementation { name: "ferrite".into(), version: env!("CARGO_PKG_VERSION").into(), title: Some("Ferrite".into()) }
+    Implementation {
+        name: "ferrite".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        title: Some("Ferrite".into()),
+    }
 }
 
 /// Encodes a value for an MCP header, using the base64 sentinel when it isn't plain ASCII.
@@ -79,7 +83,11 @@ pub fn encode_header_value(v: &str) -> String {
         && !v.starts_with(' ')
         && !v.ends_with(' ')
         && !(v.starts_with("=?base64?") && v.ends_with("?="));
-    if plain { v.to_string() } else { format!("=?base64?{}?=", base64::engine::general_purpose::STANDARD.encode(v.as_bytes())) }
+    if plain {
+        v.to_string()
+    } else {
+        format!("=?base64?{}?=", base64::engine::general_purpose::STANDARD.encode(v.as_bytes()))
+    }
 }
 
 fn is_token(s: &str) -> bool {
@@ -90,7 +98,9 @@ fn is_token(s: &str) -> bool {
 /// Returns None when an annotation is invalid (the tool must then be rejected).
 fn header_params(schema: &Value) -> Option<Vec<(Vec<String>, String)>> {
     fn walk(schema: &Value, path: &mut Vec<String>, out: &mut Vec<(Vec<String>, String)>) -> bool {
-        let Some(props) = schema.get("properties").and_then(Value::as_object) else { return true };
+        let Some(props) = schema.get("properties").and_then(Value::as_object) else {
+            return true;
+        };
         for (k, v) in props {
             path.push(k.clone());
             if let Some(h) = v.get("x-mcp-header") {
@@ -120,7 +130,11 @@ impl Client {
     /// Starts `command` and connects to its stdio MCP server.
     pub async fn stdio(command: &str, args: &[String], cwd: Option<&std::path::Path>, env: &[(String, String)]) -> Result<Self, ClientError> {
         let mut cmd = tokio::process::Command::new(command);
-        cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        cmd.args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
         if let Some(d) = cwd {
             cmd.current_dir(d);
         }
@@ -154,7 +168,9 @@ impl Client {
             tokio::spawn(async move {
                 let mut lines = BufReader::new(reader).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let Ok(msg) = serde_json::from_str::<Value>(&line) else { continue };
+                    let Ok(msg) = serde_json::from_str::<Value>(&line) else {
+                        continue;
+                    };
                     if msg.get("method").is_some() {
                         // Server notifications/requests: nothing to do for a tool client.
                         continue;
@@ -169,7 +185,11 @@ impl Client {
                 pending.clear();
             });
         }
-        let transport = Transport::Stream { writer: Mutex::new(Box::new(writer)), pending, child: Mutex::new(child) };
+        let transport = Transport::Stream {
+            writer: Mutex::new(Box::new(writer)),
+            pending,
+            child: Mutex::new(child),
+        };
         let mut client = Client {
             transport,
             era: Era::Modern(MODERN_VERSION.into()),
@@ -188,7 +208,12 @@ impl Client {
     /// (e.g. `Authorization`).
     pub async fn http(url: &str, headers: Vec<(String, String)>) -> Result<Self, ClientError> {
         let http = reqwest::Client::builder().timeout(Duration::from_secs(120)).build()?;
-        let transport = Transport::Http { http, url: url.to_string(), headers, session: Mutex::new(None) };
+        let transport = Transport::Http {
+            http,
+            url: url.to_string(),
+            headers,
+            session: Mutex::new(None),
+        };
         let mut client = Client {
             transport,
             era: Era::Modern(MODERN_VERSION.into()),
@@ -214,12 +239,20 @@ impl Client {
         self.timeout = saved;
         match probe {
             Ok(result) => {
-                self.server_info = result.get("_meta").and_then(|m| m.get(META_SERVER_INFO)).and_then(|v| serde_json::from_value(v.clone()).ok());
+                self.server_info = result
+                    .get("_meta")
+                    .and_then(|m| m.get(META_SERVER_INFO))
+                    .and_then(|v| serde_json::from_value(v.clone()).ok());
                 self.instructions = result.get("instructions").and_then(Value::as_str).map(String::from);
                 return Ok(());
             }
             Err(ClientError::Rpc(e)) if is_modern_error(e.code) => {
-                let supported: Vec<String> = e.data.as_ref().and_then(|d| d.get("supported")).and_then(|s| serde_json::from_value(s.clone()).ok()).unwrap_or_default();
+                let supported: Vec<String> = e
+                    .data
+                    .as_ref()
+                    .and_then(|d| d.get("supported"))
+                    .and_then(|s| serde_json::from_value(s.clone()).ok())
+                    .unwrap_or_default();
                 if supported.iter().any(|v| v == MODERN_VERSION) {
                     return Ok(());
                 }
@@ -316,7 +349,9 @@ impl Client {
                 }
                 match tokio::time::timeout(self.timeout, rx).await {
                     Ok(Ok(v)) => v,
-                    Ok(Err(_)) => return Err(ClientError::Transport("server closed the connection".into())),
+                    Ok(Err(_)) => {
+                        return Err(ClientError::Transport("server closed the connection".into()));
+                    }
                     Err(_) => {
                         pending.remove(&json!(id).to_string());
                         return Err(ClientError::Timeout);
@@ -324,7 +359,10 @@ impl Client {
                 }
             }
             Transport::Http { http, url, headers, session } => {
-                let mut req = http.post(url).header("Accept", "application/json, text/event-stream").header("Content-Type", "application/json");
+                let mut req = http
+                    .post(url)
+                    .header("Accept", "application/json, text/event-stream")
+                    .header("Content-Type", "application/json");
                 for (k, v) in headers.iter().chain(extra_headers.iter()) {
                     req = req.header(k, v);
                 }
@@ -348,17 +386,29 @@ impl Client {
                 if let Some(s) = session.lock().await.as_ref() {
                     req = req.header("Mcp-Session-Id", s);
                 }
-                let resp = tokio::time::timeout(self.timeout, req.json(&msg).send()).await.map_err(|_| ClientError::Timeout)??;
+                let resp = tokio::time::timeout(self.timeout, req.json(&msg).send())
+                    .await
+                    .map_err(|_| ClientError::Timeout)??;
                 if let Some(s) = resp.headers().get("mcp-session-id").and_then(|v| v.to_str().ok()) {
                     *session.lock().await = Some(s.to_string());
                 }
                 let status = resp.status();
-                let is_sse = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).is_some_and(|c| c.starts_with("text/event-stream"));
+                let is_sse = resp
+                    .headers()
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .is_some_and(|c| c.starts_with("text/event-stream"));
                 let text = resp.text().await?;
-                let parsed = if is_sse { parse_sse_response(&text, id) } else { serde_json::from_str::<Value>(&text).ok() };
+                let parsed = if is_sse {
+                    parse_sse_response(&text, id)
+                } else {
+                    serde_json::from_str::<Value>(&text).ok()
+                };
                 match parsed {
                     Some(v) => v,
-                    None => return Err(ClientError::Transport(format!("HTTP {status}: unexpected response body"))),
+                    None => {
+                        return Err(ClientError::Transport(format!("HTTP {status}: unexpected response body")));
+                    }
                 }
             }
         };
@@ -369,7 +419,9 @@ impl Client {
         let result = reply.get("result").cloned().unwrap_or(Value::Null);
         match result.get("resultType").and_then(Value::as_str) {
             None | Some("complete") => Ok(result),
-            Some(other) => Err(ClientError::Transport(format!("server requires interaction this client does not support (resultType {other})"))),
+            Some(other) => Err(ClientError::Transport(format!(
+                "server requires interaction this client does not support (resultType {other})"
+            ))),
         }
     }
 
@@ -387,7 +439,9 @@ impl Client {
             for t in r.get("tools").and_then(Value::as_array).cloned().unwrap_or_default() {
                 match serde_json::from_value::<Tool>(t) {
                     Ok(tool) if header_params(&tool.input_schema).is_some() => out.push(tool),
-                    Ok(tool) => tracing::warn!(tool = %tool.name, "rejecting tool with invalid x-mcp-header annotation"),
+                    Ok(tool) => {
+                        tracing::warn!(tool = %tool.name, "rejecting tool with invalid x-mcp-header annotation")
+                    }
                     Err(e) => tracing::warn!("skipping malformed tool definition: {e}"),
                 }
             }
@@ -422,7 +476,9 @@ impl Client {
                 }
             }
         }
-        let r = self.request_with_headers("tools/call", json!({"name": name, "arguments": arguments}), extra).await?;
+        let r = self
+            .request_with_headers("tools/call", json!({"name": name, "arguments": arguments}), extra)
+            .await?;
         serde_json::from_value(r).map_err(|e| ClientError::Transport(format!("bad tool result: {e}")))
     }
 
@@ -490,7 +546,10 @@ mod tests {
         assert_eq!(encode_header_value("Hello, 世界"), "=?base64?SGVsbG8sIOS4lueVjA==?=");
         assert_eq!(encode_header_value(" padded "), "=?base64?IHBhZGRlZCA=?=");
         assert_eq!(encode_header_value("=?base64?literal?="), "=?base64?PT9iYXNlNjQ/bGl0ZXJhbD89?=");
-        assert_eq!(crate::server::decode_header_value("=?base64?SGVsbG8sIOS4lueVjA==?=").as_deref(), Some("Hello, 世界"));
+        assert_eq!(
+            crate::server::decode_header_value("=?base64?SGVsbG8sIOS4lueVjA==?=").as_deref(),
+            Some("Hello, 世界")
+        );
     }
 
     #[test]

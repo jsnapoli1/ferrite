@@ -28,7 +28,12 @@ pub struct AgentOptions {
 
 impl Default for AgentOptions {
     fn default() -> Self {
-        AgentOptions { model: crate::provider::DEFAULT_ANTHROPIC_MODEL.into(), max_steps: 12, max_tokens: 16_000, allow_writes: false }
+        AgentOptions {
+            model: crate::provider::DEFAULT_ANTHROPIC_MODEL.into(),
+            max_steps: 12,
+            max_tokens: 16_000,
+            allow_writes: false,
+        }
     }
 }
 
@@ -50,7 +55,10 @@ pub struct AgentRun {
 
 /// Provider tool names must match `^[a-zA-Z0-9_-]{1,64}$`.
 pub fn sanitize_tool_name(name: &str) -> String {
-    let s: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect();
+    let s: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .collect();
     s.chars().take(64).collect()
 }
 
@@ -95,10 +103,18 @@ pub async fn run<T: ToolBox>(
         match provider.step(&opts.model, transcript, &tools, opts.max_tokens).await? {
             Step::Final(text) => {
                 emit(&mut trace, AgentEvent::Final { text: text.clone() });
-                return Ok(AgentRun { answer: text, trace, steps: step });
+                return Ok(AgentRun {
+                    answer: text,
+                    trace,
+                    steps: step,
+                });
             }
             Step::Truncated(text) => {
-                let answer = if text.is_empty() { "(The answer was cut off by the output limit.)".to_string() } else { text };
+                let answer = if text.is_empty() {
+                    "(The answer was cut off by the output limit.)".to_string()
+                } else {
+                    text
+                };
                 emit(&mut trace, AgentEvent::Final { text: answer.clone() });
                 return Ok(AgentRun { answer, trace, steps: step });
             }
@@ -111,7 +127,13 @@ pub async fn run<T: ToolBox>(
                     continue;
                 }
                 for c in &calls {
-                    emit(&mut trace, AgentEvent::ToolCall { name: names.get(&c.name).cloned().unwrap_or_else(|| c.name.clone()), arguments: c.arguments.clone() });
+                    emit(
+                        &mut trace,
+                        AgentEvent::ToolCall {
+                            name: names.get(&c.name).cloned().unwrap_or_else(|| c.name.clone()),
+                            arguments: c.arguments.clone(),
+                        },
+                    );
                 }
                 let futures = calls.iter().map(|c| {
                     let real = names.get(&c.name).cloned();
@@ -128,7 +150,11 @@ pub async fn run<T: ToolBox>(
                     let text = truncate(&r.text_content(), MAX_TOOL_OUTPUT);
                     emit(
                         &mut trace,
-                        AgentEvent::ToolResult { name: names.get(&c.name).cloned().unwrap_or_default(), is_error: r.is_error, preview: truncate(&text, 400) },
+                        AgentEvent::ToolResult {
+                            name: names.get(&c.name).cloned().unwrap_or_default(),
+                            is_error: r.is_error,
+                            preview: truncate(&text, 400),
+                        },
                     );
                     results.push((c, text, r.is_error));
                 }
@@ -138,5 +164,9 @@ pub async fn run<T: ToolBox>(
     }
     let answer = "I stopped after reaching the step limit before finishing.".to_string();
     emit(&mut trace, AgentEvent::Final { text: answer.clone() });
-    Ok(AgentRun { answer, trace, steps: opts.max_steps })
+    Ok(AgentRun {
+        answer,
+        trace,
+        steps: opts.max_steps,
+    })
 }

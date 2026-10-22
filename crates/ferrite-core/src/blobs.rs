@@ -6,8 +6,8 @@ use crate::{Error, Result};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::{OwnedRwLockReadGuard, RwLock};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::sync::{OwnedRwLockReadGuard, RwLock};
 
 pub struct BlobStore {
     root: PathBuf,
@@ -33,7 +33,11 @@ impl BlobStore {
         let tmp = data_dir.join("tmp");
         std::fs::create_dir_all(&root)?;
         std::fs::create_dir_all(&tmp)?;
-        Ok(Self { root, tmp, gc_lock: Arc::new(RwLock::new(())) })
+        Ok(Self {
+            root,
+            tmp,
+            gc_lock: Arc::new(RwLock::new(())),
+        })
     }
 
     pub fn path(&self, hash: &str) -> PathBuf {
@@ -116,12 +120,18 @@ impl BlobStore {
     }
 
     pub async fn add_ref_hash(tx: &mut Transaction<'_, Sqlite>, hash: &str) -> Result<()> {
-        sqlx::query("UPDATE blobs SET refcount = refcount + 1 WHERE hash = ?").bind(hash).execute(&mut **tx).await?;
+        sqlx::query("UPDATE blobs SET refcount = refcount + 1 WHERE hash = ?")
+            .bind(hash)
+            .execute(&mut **tx)
+            .await?;
         Ok(())
     }
 
     pub async fn release(tx: &mut Transaction<'_, Sqlite>, hash: &str) -> Result<()> {
-        sqlx::query("UPDATE blobs SET refcount = refcount - 1 WHERE hash = ?").bind(hash).execute(&mut **tx).await?;
+        sqlx::query("UPDATE blobs SET refcount = refcount - 1 WHERE hash = ?")
+            .bind(hash)
+            .execute(&mut **tx)
+            .await?;
         Ok(())
     }
 

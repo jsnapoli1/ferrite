@@ -73,7 +73,11 @@ pub const SESSION_TTL_DAYS: i64 = 30;
 
 fn validate_username(u: &str) -> Result<()> {
     let ok = (2..=64).contains(&u.len()) && u.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
-    if ok { Ok(()) } else { Err(Error::bad("username must be 2-64 characters of letters, digits, '.', '_' or '-'")) }
+    if ok {
+        Ok(())
+    } else {
+        Err(Error::bad("username must be 2-64 characters of letters, digits, '.', '_' or '-'"))
+    }
 }
 
 impl Core {
@@ -140,30 +144,61 @@ impl Core {
     pub async fn update_user(&self, id: &str, up: UserUpdate) -> Result<User> {
         let mut tx = self.db.begin().await?;
         if let Some(d) = up.display_name.filter(|d| !d.trim().is_empty()) {
-            sqlx::query("UPDATE users SET display_name = ? WHERE id = ?").bind(d.trim()).bind(id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE users SET display_name = ? WHERE id = ?")
+                .bind(d.trim())
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
         }
         if let Some(e) = up.email {
-            sqlx::query("UPDATE users SET email = ? WHERE id = ?").bind(Some(e).filter(|e| !e.is_empty())).bind(id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE users SET email = ? WHERE id = ?")
+                .bind(Some(e).filter(|e| !e.is_empty()))
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
         }
         if let Some(p) = up.password {
             if p.len() < 8 {
                 return Err(Error::bad("password must be at least 8 characters"));
             }
-            sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?").bind(hash_password(&p)?).bind(id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+                .bind(hash_password(&p)?)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
             // A password change signs out every browser session.
-            sqlx::query("DELETE FROM tokens WHERE user_id = ? AND kind = 'session'").bind(id).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM tokens WHERE user_id = ? AND kind = 'session'")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
         }
         if let Some(a) = up.is_admin {
-            sqlx::query("UPDATE users SET is_admin = ? WHERE id = ?").bind(a).bind(id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE users SET is_admin = ? WHERE id = ?")
+                .bind(a)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
         }
         if let Some(q) = up.quota_bytes {
-            sqlx::query("UPDATE users SET quota_bytes = ? WHERE id = ?").bind(q).bind(id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE users SET quota_bytes = ? WHERE id = ?")
+                .bind(q)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
         }
         if let Some(c) = up.ai_consent {
-            sqlx::query("UPDATE users SET ai_consent = ? WHERE id = ?").bind(c).bind(id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE users SET ai_consent = ? WHERE id = ?")
+                .bind(c)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
         }
         if let Some(d) = up.disabled {
-            sqlx::query("UPDATE users SET disabled = ? WHERE id = ?").bind(d).bind(id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE users SET disabled = ? WHERE id = ?")
+                .bind(d)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
             if d {
                 sqlx::query("DELETE FROM tokens WHERE user_id = ?").bind(id).execute(&mut *tx).await?;
             }
@@ -184,10 +219,16 @@ impl Core {
         .await?;
         let mut tx = self.db.begin().await?;
         for h in &hashes {
-            sqlx::query("UPDATE blobs SET refcount = refcount - 1 WHERE hash = ?").bind(h).execute(&mut *tx).await?;
+            sqlx::query("UPDATE blobs SET refcount = refcount - 1 WHERE hash = ?")
+                .bind(h)
+                .execute(&mut *tx)
+                .await?;
         }
         // Delete children first so the self referencing cascade never trips the unique root index.
-        sqlx::query("DELETE FROM nodes WHERE owner_id = ? AND parent_id IS NOT NULL").bind(id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM nodes WHERE owner_id = ? AND parent_id IS NOT NULL")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
         let res = sqlx::query("DELETE FROM users WHERE id = ?").bind(id).execute(&mut *tx).await?;
         if res.rows_affected() == 0 {
             return Err(Error::NotFound);
@@ -199,11 +240,10 @@ impl Core {
 
     /// Verifies credentials. Constant work whether or not the user exists.
     pub async fn authenticate(&self, username: &str, password: &str) -> Result<User> {
-        let row: Option<(String, String, bool)> =
-            sqlx::query_as("SELECT id, password_hash, disabled FROM users WHERE username = ?")
-                .bind(username)
-                .fetch_optional(&self.db)
-                .await?;
+        let row: Option<(String, String, bool)> = sqlx::query_as("SELECT id, password_hash, disabled FROM users WHERE username = ?")
+            .bind(username)
+            .fetch_optional(&self.db)
+            .await?;
         let pw = password.to_string();
         let stored = row.as_ref().map(|r| r.1.clone());
         let ok = tokio::task::spawn_blocking(move || match stored {
@@ -217,7 +257,7 @@ impl Core {
             }
         })
         .await
-        .map_err(|e| Error::internal(e))?;
+        .map_err(Error::internal)?;
         match row {
             Some((id, _, false)) if ok => self.user(&id).await,
             _ => Err(Error::Unauthorized),
@@ -254,20 +294,22 @@ impl Core {
     /// Resolves a bearer/session secret to its user. Updates `last_used_at` at most once a minute
     /// so authenticated reads don't each turn into a database write.
     pub async fn resolve_token(&self, secret: &str) -> Result<(User, TokenInfo)> {
-        let info: TokenInfo = sqlx::query_as(
-            "SELECT id, user_id, kind, name, scopes, created_at, last_used_at, expires_at FROM tokens WHERE secret_hash = ?",
-        )
-        .bind(sha256_hex(secret.as_bytes()))
-        .fetch_optional(&self.db)
-        .await?
-        .ok_or(Error::Unauthorized)?;
+        let info: TokenInfo = sqlx::query_as("SELECT id, user_id, kind, name, scopes, created_at, last_used_at, expires_at FROM tokens WHERE secret_hash = ?")
+            .bind(sha256_hex(secret.as_bytes()))
+            .fetch_optional(&self.db)
+            .await?
+            .ok_or(Error::Unauthorized)?;
         let t = now();
         if info.expires_at.is_some_and(|e| e < t) {
             sqlx::query("DELETE FROM tokens WHERE id = ?").bind(&info.id).execute(&self.db).await?;
             return Err(Error::Unauthorized);
         }
         if info.last_used_at.is_none_or(|l| t - l > Duration::seconds(60)) {
-            sqlx::query("UPDATE tokens SET last_used_at = ? WHERE id = ?").bind(t).bind(&info.id).execute(&self.db).await?;
+            sqlx::query("UPDATE tokens SET last_used_at = ? WHERE id = ?")
+                .bind(t)
+                .bind(&info.id)
+                .execute(&self.db)
+                .await?;
         }
         let user = self.user(&info.user_id).await.map_err(|_| Error::Unauthorized)?;
         if user.disabled {
@@ -287,12 +329,19 @@ impl Core {
     }
 
     pub async fn revoke_token(&self, user_id: &str, token_id: &str) -> Result<()> {
-        let r = sqlx::query("DELETE FROM tokens WHERE id = ? AND user_id = ?").bind(token_id).bind(user_id).execute(&self.db).await?;
+        let r = sqlx::query("DELETE FROM tokens WHERE id = ? AND user_id = ?")
+            .bind(token_id)
+            .bind(user_id)
+            .execute(&self.db)
+            .await?;
         if r.rows_affected() == 0 { Err(Error::NotFound) } else { Ok(()) }
     }
 
     pub async fn revoke_secret(&self, secret: &str) -> Result<()> {
-        sqlx::query("DELETE FROM tokens WHERE secret_hash = ?").bind(sha256_hex(secret.as_bytes())).execute(&self.db).await?;
+        sqlx::query("DELETE FROM tokens WHERE secret_hash = ?")
+            .bind(sha256_hex(secret.as_bytes()))
+            .execute(&self.db)
+            .await?;
         Ok(())
     }
 
@@ -304,12 +353,22 @@ impl Core {
             return Err(Error::bad("group name must be 1-64 characters"));
         }
         let id = new_id();
-        sqlx::query("INSERT INTO groups (id, name, created_at) VALUES (?, ?, ?)").bind(&id).bind(name).bind(now()).execute(&self.db).await?;
-        Ok(sqlx::query_as("SELECT id, name, created_at FROM groups WHERE id = ?").bind(&id).fetch_one(&self.db).await?)
+        sqlx::query("INSERT INTO groups (id, name, created_at) VALUES (?, ?, ?)")
+            .bind(&id)
+            .bind(name)
+            .bind(now())
+            .execute(&self.db)
+            .await?;
+        Ok(sqlx::query_as("SELECT id, name, created_at FROM groups WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&self.db)
+            .await?)
     }
 
     pub async fn list_groups(&self) -> Result<Vec<Group>> {
-        Ok(sqlx::query_as("SELECT id, name, created_at FROM groups ORDER BY name").fetch_all(&self.db).await?)
+        Ok(sqlx::query_as("SELECT id, name, created_at FROM groups ORDER BY name")
+            .fetch_all(&self.db)
+            .await?)
     }
 
     pub async fn delete_group(&self, id: &str) -> Result<()> {
@@ -318,12 +377,20 @@ impl Core {
     }
 
     pub async fn add_to_group(&self, group_id: &str, user_id: &str) -> Result<()> {
-        sqlx::query("INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)").bind(group_id).bind(user_id).execute(&self.db).await?;
+        sqlx::query("INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)")
+            .bind(group_id)
+            .bind(user_id)
+            .execute(&self.db)
+            .await?;
         Ok(())
     }
 
     pub async fn remove_from_group(&self, group_id: &str, user_id: &str) -> Result<()> {
-        sqlx::query("DELETE FROM group_members WHERE group_id = ? AND user_id = ?").bind(group_id).bind(user_id).execute(&self.db).await?;
+        sqlx::query("DELETE FROM group_members WHERE group_id = ? AND user_id = ?")
+            .bind(group_id)
+            .bind(user_id)
+            .execute(&self.db)
+            .await?;
         Ok(())
     }
 
@@ -338,11 +405,11 @@ impl Core {
     }
 
     pub async fn user_groups(&self, user_id: &str) -> Result<Vec<Group>> {
-        Ok(sqlx::query_as(
-            "SELECT g.id, g.name, g.created_at FROM groups g JOIN group_members m ON m.group_id = g.id WHERE m.user_id = ? ORDER BY g.name",
+        Ok(
+            sqlx::query_as("SELECT g.id, g.name, g.created_at FROM groups g JOIN group_members m ON m.group_id = g.id WHERE m.user_id = ? ORDER BY g.name")
+                .bind(user_id)
+                .fetch_all(&self.db)
+                .await?,
         )
-        .bind(user_id)
-        .fetch_all(&self.db)
-        .await?)
     }
 }

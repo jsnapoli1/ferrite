@@ -14,10 +14,11 @@ use tokio::sync::mpsc;
 const CONN_BUFFER: usize = 512;
 
 pub type EventRx = mpsc::Receiver<Arc<str>>;
+type Connections = Vec<(u64, mpsc::Sender<Arc<str>>)>;
 
 #[derive(Default)]
 pub struct Hub {
-    conns: DashMap<String, Vec<(u64, mpsc::Sender<Arc<str>>)>>,
+    conns: DashMap<String, Connections>,
     next_id: AtomicU64,
 }
 

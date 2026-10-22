@@ -144,7 +144,10 @@ impl Provider {
 
     /// Single prompt → text helper (summaries, titles, extraction).
     pub async fn complete(&self, model: &str, system: &str, prompt: &str, max_tokens: u32) -> Result<String, AiError> {
-        let mut t = Transcript { system: system.to_string(), messages: Vec::new() };
+        let mut t = Transcript {
+            system: system.to_string(),
+            messages: Vec::new(),
+        };
         self.push_user(&mut t, prompt);
         match self.step(model, &mut t, &[], max_tokens).await? {
             Step::Final(s) | Step::Truncated(s) => Ok(s),
@@ -157,7 +160,10 @@ impl Provider {
         if self.cfg.kind != ProviderKind::Openai {
             return Err(AiError::Format("embeddings need an OpenAI-compatible provider".into()));
         }
-        let mut req = self.http.post(format!("{}/embeddings", self.base())).json(&json!({"model": model, "input": inputs}));
+        let mut req = self
+            .http
+            .post(format!("{}/embeddings", self.base()))
+            .json(&json!({"model": model, "input": inputs}));
         if let Some(k) = &self.cfg.api_key {
             req = req.bearer_auth(k);
         }
@@ -166,7 +172,13 @@ impl Provider {
         let mut out = vec![Vec::new(); inputs.len()];
         for (i, d) in data.iter().enumerate() {
             let idx = d["index"].as_u64().map(|x| x as usize).unwrap_or(i);
-            let vec: Vec<f32> = d["embedding"].as_array().into_iter().flatten().filter_map(Value::as_f64).map(|f| f as f32).collect();
+            let vec: Vec<f32> = d["embedding"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_f64)
+                .map(|f| f as f32)
+                .collect();
             if idx < out.len() {
                 out[idx] = vec;
             }
@@ -187,7 +199,12 @@ impl Provider {
             _ => req,
         };
         let v = check(req.send().await?).await?;
-        Ok(v["data"].as_array().into_iter().flatten().filter_map(|m| m["id"].as_str().map(String::from)).collect())
+        Ok(v["data"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|m| m["id"].as_str().map(String::from))
+            .collect())
     }
 
     async fn step_openai(&self, model: &str, t: &mut Transcript, tools: &[Tool], max_tokens: u32) -> Result<Step, AiError> {
@@ -199,7 +216,10 @@ impl Provider {
         let mut body = json!({"model": model, "messages": messages, "max_tokens": max_tokens});
         if !tools.is_empty() {
             body["tools"] = Value::Array(
-                tools.iter().map(|tool| json!({"type": "function", "function": {"name": tool.name, "description": tool.description, "parameters": tool.input_schema}})).collect(),
+                tools
+                    .iter()
+                    .map(|tool| json!({"type": "function", "function": {"name": tool.name, "description": tool.description, "parameters": tool.input_schema}}))
+                    .collect(),
             );
         }
         let mut req = self.http.post(format!("{}/chat/completions", self.base())).json(&body);
@@ -262,13 +282,22 @@ impl Provider {
             body["system"] = json!(t.system);
         }
         if !tools.is_empty() {
-            body["tools"] = Value::Array(tools.iter().map(|tool| json!({"name": tool.name, "description": tool.description, "input_schema": tool.input_schema})).collect());
+            body["tools"] = Value::Array(
+                tools
+                    .iter()
+                    .map(|tool| json!({"name": tool.name, "description": tool.description, "input_schema": tool.input_schema}))
+                    .collect(),
+            );
         }
         if first_party {
             // Server-side fallback: a safety decline is retried on a suitable model in-call.
             body["fallbacks"] = json!("default");
         }
-        let mut req = self.http.post(format!("{}/v1/messages", self.base())).header("anthropic-version", ANTHROPIC_VERSION).json(&body);
+        let mut req = self
+            .http
+            .post(format!("{}/v1/messages", self.base()))
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .json(&body);
         if first_party {
             req = req.header("anthropic-beta", ANTHROPIC_FALLBACK_BETA);
         }
@@ -281,7 +310,12 @@ impl Provider {
         // Append the assistant content exactly as returned (thinking blocks included).
         t.messages.push(json!({"role": "assistant", "content": content}));
         let blocks = content.as_array().cloned().unwrap_or_default();
-        let text: String = blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("");
+        let text: String = blocks
+            .iter()
+            .filter(|b| b["type"] == "text")
+            .filter_map(|b| b["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("");
         match stop.as_str() {
             "refusal" => Err(AiError::Refused),
             // A truncated turn may hold a partial tool_use; never run it.
@@ -290,7 +324,11 @@ impl Provider {
                 let calls = blocks
                     .iter()
                     .filter(|b| b["type"] == "tool_use")
-                    .map(|b| ToolCall { id: b["id"].as_str().unwrap_or("").to_string(), name: b["name"].as_str().unwrap_or("").to_string(), arguments: b["input"].clone() })
+                    .map(|b| ToolCall {
+                        id: b["id"].as_str().unwrap_or("").to_string(),
+                        name: b["name"].as_str().unwrap_or("").to_string(),
+                        arguments: b["input"].clone(),
+                    })
                     .collect();
                 Ok(Step::Tools { text, calls })
             }
@@ -305,7 +343,10 @@ async fn check(resp: reqwest::Response) -> Result<Value, AiError> {
     let status = resp.status();
     let text = resp.text().await?;
     if !status.is_success() {
-        return Err(AiError::Api { status: status.as_u16(), body: text.chars().take(2000).collect() });
+        return Err(AiError::Api {
+            status: status.as_u16(),
+            body: text.chars().take(2000).collect(),
+        });
     }
     serde_json::from_str(&text).map_err(|e| AiError::Format(format!("{e}: {}", text.chars().take(300).collect::<String>())))
 }

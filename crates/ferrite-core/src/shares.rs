@@ -25,7 +25,8 @@ pub struct Share {
     pub created_at: DateTime<Utc>,
 }
 
-const SHARE_COLS: &str = "id, node_id, owner_id, kind, target_user, target_group, target_room, token, password_hash, permissions, label, expires_at, created_at";
+const SHARE_COLS: &str =
+    "id, node_id, owner_id, kind, target_user, target_group, target_room, token, password_hash, permissions, label, expires_at, created_at";
 
 impl Share {
     pub fn has_password(&self) -> bool {
@@ -71,7 +72,10 @@ pub struct ShareUpdate {
 
 impl Core {
     async fn share(&self, id: &str) -> Result<Share> {
-        Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {SHARE_COLS} FROM shares WHERE id = ?"))).bind(id).fetch_one(&self.db).await?)
+        Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {SHARE_COLS} FROM shares WHERE id = ?")))
+            .bind(id)
+            .fetch_one(&self.db)
+            .await?)
     }
 
     pub async fn share_view(&self, share: Share) -> Result<ShareView> {
@@ -79,14 +83,27 @@ impl Core {
         let target_name = if let Some(u) = &share.target_user {
             Some(self.user(u).await?.display_name)
         } else if let Some(g) = &share.target_group {
-            sqlx::query_scalar("SELECT name FROM groups WHERE id = ?").bind(g).fetch_optional(&self.db).await?
+            sqlx::query_scalar("SELECT name FROM groups WHERE id = ?")
+                .bind(g)
+                .fetch_optional(&self.db)
+                .await?
         } else if let Some(r) = &share.target_room {
-            sqlx::query_scalar("SELECT name FROM rooms WHERE id = ?").bind(r).fetch_optional(&self.db).await?
+            sqlx::query_scalar("SELECT name FROM rooms WHERE id = ?")
+                .bind(r)
+                .fetch_optional(&self.db)
+                .await?
         } else {
             None
         };
         let url = share.token.as_ref().map(|t| format!("{}/s/{t}", self.config.public_url));
-        Ok(ShareView { has_password: share.has_password(), node_name: node.name, node_kind: node.kind, target_name, url, share })
+        Ok(ShareView {
+            has_password: share.has_password(),
+            node_name: node.name,
+            node_kind: node.kind,
+            target_name,
+            url,
+            share,
+        })
     }
 
     pub async fn create_share(&self, user_id: &str, node_id: &str, ns: NewShare) -> Result<ShareView> {
@@ -168,9 +185,24 @@ impl Core {
             _ => vec![],
         };
         for r in &recipients {
-            self.notify(r, "share", &format!("{} shared “{}” with you", sharer.display_name, node.name), "", &format!("/files?node={}", node.id)).await?;
+            self.notify(
+                r,
+                "share",
+                &format!("{} shared “{}” with you", sharer.display_name, node.name),
+                "",
+                &format!("/files?node={}", node.id),
+            )
+            .await?;
         }
-        self.record_activity(&[user_id.to_string()], Some(user_id), "shared", "file", &node.id, &format!("Shared {} ({})", node.name, share.kind)).await?;
+        self.record_activity(
+            &[user_id.to_string()],
+            Some(user_id),
+            "shared",
+            "file",
+            &node.id,
+            &format!("Shared {} ({})", node.name, share.kind),
+        )
+        .await?;
         self.share_view(share).await
     }
 
@@ -192,10 +224,12 @@ impl Core {
     }
 
     pub async fn outgoing_shares(&self, user_id: &str) -> Result<Vec<ShareView>> {
-        let rows: Vec<Share> = sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {SHARE_COLS} FROM shares WHERE owner_id = ? ORDER BY created_at DESC")))
-            .bind(user_id)
-            .fetch_all(&self.db)
-            .await?;
+        let rows: Vec<Share> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {SHARE_COLS} FROM shares WHERE owner_id = ? ORDER BY created_at DESC"
+        )))
+        .bind(user_id)
+        .fetch_all(&self.db)
+        .await?;
         let mut out = Vec::new();
         for s in rows {
             out.push(self.share_view(s).await?);
@@ -244,20 +278,36 @@ impl Core {
             if p & perm::READ == 0 {
                 return Err(Error::bad("a share must at least allow reading"));
             }
-            sqlx::query("UPDATE shares SET permissions = ? WHERE id = ?").bind(p).bind(share_id).execute(&self.db).await?;
+            sqlx::query("UPDATE shares SET permissions = ? WHERE id = ?")
+                .bind(p)
+                .bind(share_id)
+                .execute(&self.db)
+                .await?;
         }
         if let Some(pw) = up.password {
             if share.kind != "link" {
                 return Err(Error::bad("only link shares have passwords"));
             }
             let h = if pw.is_empty() { None } else { Some(hash_password(&pw)?) };
-            sqlx::query("UPDATE shares SET password_hash = ? WHERE id = ?").bind(h).bind(share_id).execute(&self.db).await?;
+            sqlx::query("UPDATE shares SET password_hash = ? WHERE id = ?")
+                .bind(h)
+                .bind(share_id)
+                .execute(&self.db)
+                .await?;
         }
         if let Some(exp) = up.expires_at {
-            sqlx::query("UPDATE shares SET expires_at = ? WHERE id = ?").bind(exp).bind(share_id).execute(&self.db).await?;
+            sqlx::query("UPDATE shares SET expires_at = ? WHERE id = ?")
+                .bind(exp)
+                .bind(share_id)
+                .execute(&self.db)
+                .await?;
         }
         if let Some(l) = up.label {
-            sqlx::query("UPDATE shares SET label = ? WHERE id = ?").bind(l).bind(share_id).execute(&self.db).await?;
+            sqlx::query("UPDATE shares SET label = ? WHERE id = ?")
+                .bind(l)
+                .bind(share_id)
+                .execute(&self.db)
+                .await?;
         }
         let s = self.share(share_id).await?;
         self.share_view(s).await
@@ -279,11 +329,13 @@ impl Core {
 
     /// Looks up an active link share by its token.
     pub async fn link_share(&self, token: &str) -> Result<Share> {
-        let s: Share = sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {SHARE_COLS} FROM shares WHERE token = ? AND kind = 'link'")))
-            .bind(token)
-            .fetch_optional(&self.db)
-            .await?
-            .ok_or(Error::NotFound)?;
+        let s: Share = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {SHARE_COLS} FROM shares WHERE token = ? AND kind = 'link'"
+        )))
+        .bind(token)
+        .fetch_optional(&self.db)
+        .await?
+        .ok_or(Error::NotFound)?;
         let node = self.node(&s.node_id).await?;
         if s.expired() || node.trashed_at.is_some() {
             return Err(Error::NotFound);

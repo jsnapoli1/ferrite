@@ -28,14 +28,19 @@ fn fts_query(q: &str) -> Option<String> {
 
 impl Core {
     pub async fn search(&self, user_id: &str, q: &str, kinds: Option<&[&str]>, limit: usize) -> Result<Vec<SearchHit>> {
-        let Some(query) = fts_query(q) else { return Ok(vec![]) };
+        let Some(query) = fts_query(q) else {
+            return Ok(vec![]);
+        };
         let rows: Vec<(String, String, String, String, String)> = sqlx::query_as(
             "SELECT object_kind, object_id, scope, title, snippet(fts, 4, '[', ']', '…', 12) FROM fts WHERE fts MATCH ? ORDER BY rank LIMIT 200",
         )
         .bind(&query)
         .fetch_all(&self.db)
         .await?;
-        let rooms: Vec<String> = sqlx::query_scalar("SELECT room_id FROM participants WHERE user_id = ?").bind(user_id).fetch_all(&self.db).await?;
+        let rooms: Vec<String> = sqlx::query_scalar("SELECT room_id FROM participants WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_all(&self.db)
+            .await?;
         let boards = self.accessible_board_ids(user_id).await?;
         let mut hits = Vec::new();
         for (kind, id, scope, title, snippet) in rows {
@@ -55,12 +60,23 @@ impl Core {
                 continue;
             }
             let context = match kind.as_str() {
-                "message" => sqlx::query_scalar("SELECT token FROM rooms WHERE id = ?").bind(&scope).fetch_optional(&self.db).await?,
+                "message" => {
+                    sqlx::query_scalar("SELECT token FROM rooms WHERE id = ?")
+                        .bind(&scope)
+                        .fetch_optional(&self.db)
+                        .await?
+                }
                 "card" => Some(scope.clone()),
                 "file" => self.node(&id).await.ok().and_then(|n| n.parent_id),
                 _ => None,
             };
-            hits.push(SearchHit { kind, id, title, snippet, context });
+            hits.push(SearchHit {
+                kind,
+                id,
+                title,
+                snippet,
+                context,
+            });
             if hits.len() >= limit {
                 break;
             }

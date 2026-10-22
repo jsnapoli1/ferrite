@@ -104,7 +104,10 @@ pub struct WriteOpts {
 
 impl WriteOpts {
     pub fn user() -> Self {
-        Self { keep_version: true, ..Default::default() }
+        Self {
+            keep_version: true,
+            ..Default::default()
+        }
     }
 }
 
@@ -293,11 +296,30 @@ impl Core {
     }
 
     pub async fn entry(&self, user_id: &str, node: Node, permissions: i64) -> Result<Entry> {
-        let shared_by = if node.owner_id != user_id { Some(self.user(&node.owner_id).await?.display_name) } else { None };
+        let shared_by = if node.owner_id != user_id {
+            Some(self.user(&node.owner_id).await?.display_name)
+        } else {
+            None
+        };
         let lock = if node.is_dir() { None } else { self.lock_of(&node.id).await? };
-        let craft_app = if node.is_dir() { None } else { crate::craft::app_for_name(&node.name).map(|a| a.id) };
-        let live_editor = if node.is_dir() { None } else { crate::collab::DocKind::for_name(&node.name).map(|k| k.as_str()) };
-        Ok(Entry { node, permissions, shared_by, lock, craft_app, live_editor })
+        let craft_app = if node.is_dir() {
+            None
+        } else {
+            crate::craft::app_for_name(&node.name).map(|a| a.id)
+        };
+        let live_editor = if node.is_dir() {
+            None
+        } else {
+            crate::collab::DocKind::for_name(&node.name).map(|k| k.as_str())
+        };
+        Ok(Entry {
+            node,
+            permissions,
+            shared_by,
+            lock,
+            craft_app,
+            live_editor,
+        })
     }
 
     pub async fn list_dir(&self, user_id: &str, dir_id: &str) -> Result<Vec<Entry>> {
@@ -378,7 +400,10 @@ impl Core {
             .bind(user_id)
             .fetch_one(&self.db)
             .await?;
-        let limit: Option<i64> = sqlx::query_scalar("SELECT quota_bytes FROM users WHERE id = ?").bind(user_id).fetch_one(&self.db).await?;
+        let limit: Option<i64> = sqlx::query_scalar("SELECT quota_bytes FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_one(&self.db)
+            .await?;
         Ok(Quota { used, limit })
     }
 
@@ -456,7 +481,9 @@ impl Core {
         let existing = self.child(&parent.id, name).await?;
         match &existing {
             Some(n) if n.is_dir() => return Err(Error::conflict(format!("{name} is a folder"))),
-            Some(_) if opts.create_only => return Err(Error::conflict(format!("{name} already exists"))),
+            Some(_) if opts.create_only => {
+                return Err(Error::conflict(format!("{name} already exists")));
+            }
             Some(n) => {
                 if let Some(want) = &opts.if_match {
                     if want.trim_matches('"') != n.etag {
@@ -581,13 +608,11 @@ impl Core {
     }
 
     async fn prune_versions(&self, tx: &mut Transaction<'_, Sqlite>, node_id: &str) -> Result<()> {
-        let excess: Vec<(String, String)> = sqlx::query_as(
-            "SELECT id, blob_hash FROM versions WHERE node_id = ? ORDER BY created_at DESC LIMIT -1 OFFSET ?",
-        )
-        .bind(node_id)
-        .bind(self.config.max_versions)
-        .fetch_all(&mut **tx)
-        .await?;
+        let excess: Vec<(String, String)> = sqlx::query_as("SELECT id, blob_hash FROM versions WHERE node_id = ? ORDER BY created_at DESC LIMIT -1 OFFSET ?")
+            .bind(node_id)
+            .bind(self.config.max_versions)
+            .fetch_all(&mut **tx)
+            .await?;
         for (vid, hash) in excess {
             sqlx::query("DELETE FROM versions WHERE id = ?").bind(&vid).execute(&mut **tx).await?;
             BlobStore::release(tx, &hash).await?;
@@ -781,7 +806,10 @@ impl Core {
         .bind(t)
         .execute(&mut *tx)
         .await?;
-        sqlx::query("UPDATE nodes SET trash_origin_parent = parent_id WHERE id = ?").bind(&node.id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE nodes SET trash_origin_parent = parent_id WHERE id = ?")
+            .bind(&node.id)
+            .execute(&mut *tx)
+            .await?;
         if let Some(parent) = &node.parent_id {
             Self::touch_ancestors(&mut tx, parent).await?;
         }
@@ -804,7 +832,10 @@ impl Core {
         if node.owner_id != user_id || node.trashed_at.is_none() {
             return Err(Error::NotFound);
         }
-        let parent_id: String = sqlx::query_scalar("SELECT trash_origin_parent FROM nodes WHERE id = ?").bind(id).fetch_one(&self.db).await?;
+        let parent_id: String = sqlx::query_scalar("SELECT trash_origin_parent FROM nodes WHERE id = ?")
+            .bind(id)
+            .fetch_one(&self.db)
+            .await?;
         // Restore into the original folder if it still exists, otherwise into the root.
         let parent = match self.node(&parent_id).await {
             Ok(p) if p.trashed_at.is_none() => p,
@@ -903,10 +934,12 @@ impl Core {
 
     pub async fn list_versions(&self, user_id: &str, id: &str) -> Result<Vec<Version>> {
         self.node_for(user_id, id, perm::READ).await?;
-        Ok(sqlx::query_as("SELECT id, node_id, size, author_id, label, created_at FROM versions WHERE node_id = ? ORDER BY created_at DESC")
-            .bind(id)
-            .fetch_all(&self.db)
-            .await?)
+        Ok(
+            sqlx::query_as("SELECT id, node_id, size, author_id, label, created_at FROM versions WHERE node_id = ? ORDER BY created_at DESC")
+                .bind(id)
+                .fetch_all(&self.db)
+                .await?,
+        )
     }
 
     pub async fn read_version(&self, user_id: &str, id: &str, version_id: &str) -> Result<Vec<u8>> {
@@ -941,17 +974,30 @@ impl Core {
         }
         let t = now();
         let ttl = ttl_secs.clamp(30, 7 * 24 * 3600);
-        sqlx::query("INSERT INTO locks (node_id, user_id, owner_app, token, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)
+        if let Some(l) = self.lock_of(&node.id).await? {
+            // Refreshing your own lock keeps its token, so holders' tokens stay valid.
+            sqlx::query("UPDATE locks SET owner_app = ?, expires_at = ? WHERE node_id = ? AND token = ?")
+                .bind(app)
+                .bind(t + Duration::seconds(ttl))
+                .bind(&node.id)
+                .bind(&l.token)
+                .execute(&self.db)
+                .await?;
+            return self.lock_of(&node.id).await?.ok_or(Error::NotFound);
+        }
+        sqlx::query(
+            "INSERT INTO locks (node_id, user_id, owner_app, token, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)
                      ON CONFLICT(node_id) DO UPDATE SET user_id = excluded.user_id, owner_app = excluded.owner_app,
-                     token = excluded.token, created_at = excluded.created_at, expires_at = excluded.expires_at")
-            .bind(&node.id)
-            .bind(user_id)
-            .bind(app)
-            .bind(format!("opaquelocktoken:{}", new_id()))
-            .bind(t)
-            .bind(t + Duration::seconds(ttl))
-            .execute(&self.db)
-            .await?;
+                     token = excluded.token, created_at = excluded.created_at, expires_at = excluded.expires_at",
+        )
+        .bind(&node.id)
+        .bind(user_id)
+        .bind(app)
+        .bind(format!("opaquelocktoken:{}", new_id()))
+        .bind(t)
+        .bind(t + Duration::seconds(ttl))
+        .execute(&self.db)
+        .await?;
         self.notify_changed(&node, "locked").await;
         self.lock_of(&node.id).await?.ok_or(Error::NotFound)
     }
@@ -972,7 +1018,12 @@ impl Core {
     // ---- misc --------------------------------------------------------------
 
     pub async fn set_favorite(&self, user_id: &str, id: &str, favorite: bool) -> Result<()> {
-        let r = sqlx::query("UPDATE nodes SET favorite = ? WHERE id = ? AND owner_id = ?").bind(favorite).bind(id).bind(user_id).execute(&self.db).await?;
+        let r = sqlx::query("UPDATE nodes SET favorite = ? WHERE id = ? AND owner_id = ?")
+            .bind(favorite)
+            .bind(id)
+            .bind(user_id)
+            .execute(&self.db)
+            .await?;
         if r.rows_affected() == 0 { Err(Error::NotFound) } else { Ok(()) }
     }
 
@@ -998,13 +1049,14 @@ impl Core {
     /// Keeps the full text index in sync for a file: its name always, its text when small.
     async fn index_file(&self, node: &Node, blob: Option<&StoredBlob>) -> Result<()> {
         let body = match (blob, &node.blob_hash) {
-            (_, Some(hash)) if is_text_mime(&node.mime) && node.size <= MAX_INDEXED_TEXT => {
-                String::from_utf8_lossy(&self.blobs.read(hash).await?).into_owned()
-            }
+            (_, Some(hash)) if is_text_mime(&node.mime) && node.size <= MAX_INDEXED_TEXT => String::from_utf8_lossy(&self.blobs.read(hash).await?).into_owned(),
             _ => String::new(),
         };
         let mut tx = self.db.begin().await?;
-        sqlx::query("DELETE FROM fts WHERE object_kind = 'file' AND object_id = ?").bind(&node.id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM fts WHERE object_kind = 'file' AND object_id = ?")
+            .bind(&node.id)
+            .execute(&mut *tx)
+            .await?;
         if node.parent_id.is_some() {
             sqlx::query("INSERT INTO fts (object_kind, object_id, scope, title, body) VALUES ('file', ?, ?, ?, ?)")
                 .bind(&node.id)
@@ -1035,7 +1087,10 @@ impl Core {
 
 pub fn is_text_mime(mime: &str) -> bool {
     mime.starts_with("text/")
-        || matches!(mime, "application/json" | "application/xml" | "application/javascript" | "application/toml" | "application/x-yaml")
+        || matches!(
+            mime,
+            "application/json" | "application/xml" | "application/javascript" | "application/toml" | "application/x-yaml"
+        )
         || mime == crate::collab::MIME_MINDMAP
         || mime == crate::collab::MIME_CANVAS
 }

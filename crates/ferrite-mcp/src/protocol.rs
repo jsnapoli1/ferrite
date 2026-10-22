@@ -62,10 +62,16 @@ impl Tool {
         let mut required = Vec::new();
         for (pname, ptype, pdesc, req) in params {
             let schema = match *ptype {
-                "string[]" => json!({"type": "array", "items": {"type": "string"}, "description": pdesc}),
-                "integer[]" => json!({"type": "array", "items": {"type": "integer"}, "description": pdesc}),
+                "string[]" => {
+                    json!({"type": "array", "items": {"type": "string"}, "description": pdesc})
+                }
+                "integer[]" => {
+                    json!({"type": "array", "items": {"type": "integer"}, "description": pdesc})
+                }
                 "object" => json!({"type": "object", "description": pdesc}),
-                "array" => json!({"type": "array", "items": {"type": "object"}, "description": pdesc}),
+                "array" => {
+                    json!({"type": "array", "items": {"type": "object"}, "description": pdesc})
+                }
                 t => json!({"type": t, "description": pdesc}),
             };
             props.insert(pname.to_string(), schema);
@@ -78,7 +84,14 @@ impl Tool {
         } else {
             json!({"type": "object", "properties": props, "required": required})
         };
-        Tool { name: name.into(), title: Some(title.into()), description: description.into(), input_schema, output_schema: None, annotations: None }
+        Tool {
+            name: name.into(),
+            title: Some(title.into()),
+            description: description.into(),
+            input_schema,
+            output_schema: None,
+            annotations: None,
+        }
     }
 
     pub fn read_only(mut self) -> Self {
@@ -170,17 +183,29 @@ pub struct ToolResult {
 
 impl ToolResult {
     pub fn text(s: impl Into<String>) -> Self {
-        ToolResult { content: vec![json!({"type": "text", "text": s.into()})], structured_content: None, is_error: false }
+        ToolResult {
+            content: vec![json!({"type": "text", "text": s.into()})],
+            structured_content: None,
+            is_error: false,
+        }
     }
 
     /// Structured result; also serialized as text for clients without structured support.
     pub fn json(v: Value) -> Self {
         let text = serde_json::to_string_pretty(&v).unwrap_or_default();
-        ToolResult { content: vec![json!({"type": "text", "text": text})], structured_content: Some(v), is_error: false }
+        ToolResult {
+            content: vec![json!({"type": "text", "text": text})],
+            structured_content: Some(v),
+            is_error: false,
+        }
     }
 
     pub fn error(s: impl Into<String>) -> Self {
-        ToolResult { content: vec![json!({"type": "text", "text": s.into()})], structured_content: None, is_error: true }
+        ToolResult {
+            content: vec![json!({"type": "text", "text": s.into()})],
+            structured_content: None,
+            is_error: true,
+        }
     }
 
     /// Concatenated text content (for feeding results to a model).
@@ -200,7 +225,11 @@ pub struct RpcError {
 
 impl RpcError {
     pub fn new(code: i64, message: impl Into<String>) -> Self {
-        RpcError { code, message: message.into(), data: None }
+        RpcError {
+            code,
+            message: message.into(),
+            data: None,
+        }
     }
     pub fn with_data(mut self, data: Value) -> Self {
         self.data = Some(data);
