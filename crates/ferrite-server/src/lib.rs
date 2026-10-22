@@ -10,6 +10,7 @@ pub mod groupdav;
 pub mod mcp_http;
 pub mod oidc;
 pub mod public;
+pub mod push;
 pub mod recording;
 pub mod semantic;
 pub mod tools;
@@ -38,6 +39,8 @@ pub struct AppState {
     pub sfu: Option<Arc<ferrite_sfu::Sfu>>,
     /// Calls being recorded (through the SFU).
     pub recordings: Arc<recording::Recordings>,
+    /// Web Push sender (drains the core's push queue from the moment the state exists).
+    pub push: Arc<push::PushService>,
 }
 
 impl AppState {
@@ -54,6 +57,7 @@ impl AppState {
         let ai = ai::AiService::new(core.clone(), tools.clone());
         let mcp = Arc::new(ferrite_mcp::Server::new(tools::McpHandler { tools: tools.clone() }));
         let sfu = start_sfu(&core.config.sfu);
+        let push = push::PushService::start(core.clone());
         AppState {
             core,
             tools,
@@ -63,6 +67,7 @@ impl AppState {
             oidc: Arc::new(oidc::Oidc::default()),
             sfu,
             recordings: Arc::new(recording::Recordings::default()),
+            push,
         }
     }
 

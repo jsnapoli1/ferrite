@@ -859,17 +859,24 @@ impl Core {
                 "mentions" => mentioned || room.kind == "one_to_one",
                 _ => false,
             };
-            // Online users see the message live; only notify those who aren't connected.
-            if wants && !self.hub.is_online(user_id) {
-                let title = if room.kind == "one_to_one" {
-                    format!("{} sent you a message", actor.name)
-                } else if mentioned {
-                    format!("{} mentioned you in “{room_name}”", actor.name)
-                } else {
-                    format!("New message in “{room_name}”")
-                };
-                let preview: String = msg.body.chars().take(140).collect();
-                self.notify(user_id, "talk", &title, &preview, &format!("/talk/{}", room.token)).await?;
+            if !wants {
+                continue;
+            }
+            let title = if room.kind == "one_to_one" {
+                format!("{} sent you a message", actor.name)
+            } else if mentioned {
+                format!("{} mentioned you in “{room_name}”", actor.name)
+            } else {
+                format!("New message in “{room_name}”")
+            };
+            let preview: String = msg.body.chars().take(140).collect();
+            let link = format!("/talk/{}", room.token);
+            // Online users see the message live, so they get no stored notification, but
+            // their other devices (a phone) still get the push.
+            if self.hub.is_online(user_id) {
+                self.push_chat(user_id, &title, &preview, &link);
+            } else {
+                self.notify(user_id, "talk", &title, &preview, &link).await?;
             }
         }
         Ok(())
@@ -1203,6 +1210,7 @@ impl Core {
         };
         if started {
             self.post_system(&room.id, &format!("{} started a call", actor.name)).await?;
+            self.push_incoming_call(&room, actor);
         }
         self.publish_room(&room.id, &json!({"type": "call.joined", "room_id": room.id, "member": member}))
             .await?;

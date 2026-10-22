@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.104"
+# Web Push crypto (ECDH, HKDF, AES-GCM, ECDSA); already in the tree through rustls.
 aws-lc-rs = "1.18.2"
 axum = { version = "0.8.9", features = ["ws", "macros"] }
 base64 = "0.23.1"

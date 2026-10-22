@@ -36,6 +36,8 @@ pub struct Config {
     pub require_two_factor: bool,
     /// OpenID Connect single sign-on providers (`[[oidc]]` tables).
     pub oidc: Vec<crate::sso::OidcProvider>,
+    /// Web Push (browser and installed-app notifications).
+    pub push: crate::push::PushConfig,
 }
 
 /// Settings of the built-in Selective Forwarding Unit (calls beyond a handful of people).
@@ -103,6 +105,7 @@ impl Default for Config {
             smtp: None,
             require_two_factor: false,
             oidc: Vec::new(),
+            push: crate::push::PushConfig::default(),
         }
     }
 }
@@ -137,6 +140,9 @@ impl Config {
         }
         if let Ok(v) = std::env::var("FERRITE_REQUIRE_2FA") {
             cfg.require_two_factor = v == "1" || v.eq_ignore_ascii_case("true");
+        }
+        if let Ok(v) = std::env::var("FERRITE_PUSH_ALLOW_INSECURE") {
+            cfg.push.allow_insecure_endpoints = v == "1" || v.eq_ignore_ascii_case("true");
         }
         cfg.public_url = cfg.public_url.trim_end_matches('/').to_string();
         for (i, p) in cfg.oidc.iter().enumerate() {

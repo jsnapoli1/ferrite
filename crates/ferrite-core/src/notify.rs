@@ -45,6 +45,7 @@ impl Core {
             [user_id],
             &json!({"type": "notification", "notification": {"id": id, "kind": kind, "title": title, "body": body, "link": link}}),
         );
+        self.push_notification(id, user_id, kind, title, body, link);
         Ok(())
     }
 

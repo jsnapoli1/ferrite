@@ -12,6 +12,8 @@ struct Assets;
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
                    media-src 'self' blob: mediastream:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
+const SW_CSP: &str = "default-src 'none'; script-src 'self'; connect-src 'self'; img-src 'self'";
+
 fn asset(path: &str) -> Option<Response> {
     let file = Assets::get(path)?;
     let mime = mime_guess::from_path(path).first_or_octet_stream();
@@ -32,7 +34,11 @@ fn asset(path: &str) -> Option<Response> {
 pub async fn serve(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     if !path.is_empty() && !path.ends_with('/') {
-        if let Some(r) = asset(path) {
+        if let Some(mut r) = asset(path) {
+            if path == "sw.js" {
+                // The service worker runs under its script's own CSP.
+                r.headers_mut().insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(SW_CSP));
+            }
             return r;
         }
         // Missing static files are real 404s, not app routes.
