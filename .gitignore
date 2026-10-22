@@ -5,3 +5,6 @@ ferrite-data/
 *.db-shm
 node_modules/
 /e2e/test-results/
+
+# Agent worktrees and local tool state
+/.claude/
