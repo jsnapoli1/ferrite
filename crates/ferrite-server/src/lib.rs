@@ -7,6 +7,7 @@ pub mod craft_bridge;
 pub mod error;
 pub mod external;
 pub mod groupdav;
+pub mod mail_tools;
 pub mod mcp_http;
 pub mod public;
 pub mod semantic;
@@ -62,6 +63,7 @@ impl AppState {
     pub fn start_background(&self) {
         self.ai.spawn_talk_bot();
         self.tools.semantic.spawn_indexer();
+        self.core.spawn_mail_background();
         let core = self.core.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(3600));

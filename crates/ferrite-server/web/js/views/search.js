@@ -1,10 +1,10 @@
-// Unified search across files, messages, cards, events and contacts (full text, plus
+// Unified search across files, messages, cards, events, contacts and mail (full text, plus
 // meaning-based matches when the server has an embedding model).
 
 import { api, q } from '../api.js';
 import { h, icon, emptyState, clear } from '../ui.js';
 
-const KINDS = [['', 'Everything'], ['file', 'Files'], ['message', 'Messages'], ['card', 'Cards'], ['event', 'Events'], ['contact', 'Contacts']];
+const KINDS = [['', 'Everything'], ['file', 'Files'], ['message', 'Messages'], ['card', 'Cards'], ['event', 'Events'], ['contact', 'Contacts'], ['mail', 'Mail']];
 
 /** [href, icon, label] for a hit. */
 function target(r) {
@@ -13,6 +13,7 @@ function target(r) {
     case 'message': return [`/talk/${r.context}?message=${r.id}`, 'talk', `Message from ${r.title}`];
     case 'card': return [`/boards/${r.context}?card=${r.id}`, 'boards', 'Card'];
     case 'event': return [`/calendar${q({ view: 'week', date: r.context || '' })}`, 'calendar', 'Event'];
+    case 'mail': return [`/mail${q({ m: r.id })}`, 'mail', 'Mail'];
     default: return [`/contacts${q({ c: r.id })}`, 'contacts', 'Contact'];
   }
 }

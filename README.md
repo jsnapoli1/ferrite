@@ -35,8 +35,9 @@ cargo build --release
 | **Boards** | Kanban boards with columns, cards (drag or keyboard), labels, due dates, assignees, comments, links to files/folders/conversations/URLs, read-only members and archive. |
 | **Live documents** | Real-time co-editing (CRDT, Yjs-compatible) of **Markdown/text**, **spreadsheets** (formulas: arithmetic, refs, SUM/AVERAGE/MIN/MAX/COUNT), **mind maps** (`.fmind`) and **canvases** (`.fcanvas`: notes, frames, files, embedded mind maps and boards, arrows). They show peers' presence and cursors, and save automatically, with versions. |
 | **Calendar and contacts** | CalDAV and CardDAV at Nextcloud-compatible URLs. Month/week/list views. **Recurring events are expanded** (RRULE, EXDATE, RDATE, overridden instances), DST-correct with IANA time zones. Changes from any client or tab appear live. Contacts can be edited. |
-| **Search** | One search across files, messages, cards, events and contacts. Full text always; **semantic** (by meaning) when an embedding model is configured. |
-| **MCP** | Ferrite is an **MCP server**: 59 tools, resources and prompts over Streamable HTTP and stdio, for both protocol eras. It is also an **MCP client**: it uses the Crafting Apps' MCP servers and any MCP servers you add. |
+| **Mail** | Webmail for your existing **IMAP/SMTP accounts** (settings found automatically for well-known providers). Three panes (one at a time on phones), **conversations**, HTML mail sanitized and shown in a sandboxed frame with **remote images blocked** until you ask, attachments (download or **save to Files**), read/flag/move/archive/delete with multi-select and keyboard shortcuts, search (cached mail and the mail server), replies and forwards with quoting, attachments from upload or Files, drafts and sent mail filed on the server. **New mail arrives live** (IMAP IDLE) with a notification. Passwords are encrypted at rest. |
+| **Search** | One search across files, messages, cards, events, contacts and mail. Full text always; **semantic** (by meaning) when an embedding model is configured. |
+| **MCP** | Ferrite is an **MCP server**: 68 tools, resources and prompts over Streamable HTTP and stdio, for both protocol eras. It is also an **MCP client**: it uses the Crafting Apps' MCP servers and any MCP servers you add. |
 | **AI** | Bring your own model: any **OpenAI-compatible** server (Ollama, llama.cpp, LM Studio, vLLM, …) or **Anthropic's Claude API**. The assistant uses the same MCP tools with the user's own permissions, and is **read-only unless the user allows changes**. Typing `@assistant` in any conversation brings in the Talk bot. Per-user consent. |
 | **Admin** | Users, groups, quotas, disabling, password reset, app tokens with scopes, server stats (memory, dedup savings, SFU traffic). |
 
@@ -153,7 +154,7 @@ HTTP client configuration:
 { "mcpServers": { "ferrite": { "url": "https://your-server/mcp", "headers": { "Authorization": "Bearer <app token>" } } } }
 ```
 
-**Tools (59)**, each annotated read-only or destructive, and each limited by the token's scopes:
+**Tools (68)**, each annotated read-only or destructive, and each limited by the token's scopes:
 
 | Group | Tools |
 |---|---|
@@ -161,6 +162,7 @@ HTTP client configuration:
 | Talk | `talk_rooms` `talk_read` `talk_post` `talk_create_room` `talk_direct` `talk_share_file` `talk_react` `talk_poll` `talk_search` |
 | Boards | `boards_list` `boards_get` `boards_create` `boards_add_card` `boards_update_card` `boards_move_card` `boards_assign` `boards_comment` `boards_link` `boards_my_cards` |
 | Live documents | `docs_create` `docs_read` `docs_append` `docs_replace` `sheet_set` `mindmap_add` `mindmap_update` `canvas_add` `canvas_connect` |
+| Mail | `mail_accounts` `mail_list` `mail_read` `mail_search` `mail_draft` `mail_send` `mail_mark` `mail_move` `mail_delete` |
 | Calendar and contacts | `calendar_events` `calendar_create_event` `calendar_update_event` `calendar_delete_event` `contacts_search` `contacts_create` `contacts_update` |
 | Everything else | `search` (hybrid full-text + semantic) `notifications` `activity` `users_search` |
 | Crafting Apps | `craft_apps` `craft_open` `craft_call` `craft_close` |
@@ -176,7 +178,7 @@ HTTP client configuration:
 
 Edits made through live-document tools reach people editing the same document **in real time**.
 
-**Token scopes:** `files`, `talk`, `boards`, `docs`, `groupware`, `craft`, `ai`, `mcp`, `admin` (or `*`).
+**Token scopes:** `files`, `talk`, `boards`, `docs`, `groupware`, `mail`, `craft`, `ai`, `mcp`, `admin` (or `*`).
 
 ### Ferrite as an MCP client
 
@@ -305,7 +307,7 @@ This is an honest map against Nextcloud's core feature set: ✅ done, 🟡 parti
 | Mind maps and whiteboards | ✅ | Canvases with embedded files, mind maps and boards |
 | Calendar (CalDAV) | ✅ | Recurrence expansion. VTODO tasks are read-only in the web UI (editable by CalDAV clients). Calendar sharing between users and invitations/scheduling (iTIP) not implemented |
 | Contacts (CardDAV) | ✅ | |
-| Mail | ❌ | |
+| Mail | ✅ | Webmail for IMAP/SMTP accounts (no POP3, no OAuth sign-in: use app passwords; no mail filters or vacation replies) |
 | Activity stream, notifications | ✅ | |
 | Users and groups admin | ✅ | |
 | LDAP/AD, SAML/OIDC single sign-on | ❌ | |
@@ -332,7 +334,7 @@ e2e/               Playwright browser tests
 docs/bench/        benchmark results
 ```
 
-**Rust tests:** `cargo test --workspace` runs 59 tests. They include end-to-end tests that
+**Rust tests:** `cargo test --workspace` runs 77 tests. They include end-to-end tests that
 start real servers and cover:
 - login/CSRF and tokens
 - files, sharing, WebDAV, CalDAV/CardDAV
@@ -341,6 +343,7 @@ start real servers and cover:
 - MCP in both protocol eras
 - the assistant and Talk bot against a mock model
 - semantic search against a mock embedder
+- webmail against a **real IMAP/SMTP server** (Dovecot and Postfix; `e2e/mail-server.sh` starts them, and the test runs when `FERRITE_TEST_IMAP` is set, see `crates/ferrite-server/tests/mail.rs`)
 - a Craft app driven over MCP
 
 CI-style checks are `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --check`.
@@ -363,6 +366,7 @@ cd e2e && FERRITE_URL=http://127.0.0.1:8821 node files.mjs
 | `boards.mjs` | Boards, card modal, drag and keyboard moves, read-only members, and the four live editors with two users co-editing |
 | `calendar.mjs` | Month/week/list, create/edit/move events, recurring series across DST (Europe/Berlin), EXDATE, series edits, live refresh across tabs, contacts create/edit/search/delete, phone layouts |
 | `search.mjs` | Search results for files, events and contacts open the right views |
+| `mail.mjs` | Mail against a real Dovecot/Postfix server (`mail-server.sh start` first): account setup, folders, threads, sanitized HTML and remote images, attachments to Files, keyboard shortcuts, reply/compose with autocomplete and attachments, live arrival over IDLE, archive/delete, drafts, search, dark and phone layouts |
 
 ## License
 

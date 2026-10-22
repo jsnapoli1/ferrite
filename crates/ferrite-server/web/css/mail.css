@@ -1,0 +1,157 @@
+/* Mail: folders, message list and conversation in three panes; two on tablets (folders as a
+   drawer); one at a time on phones. Tokens only, both themes. The message HTML itself lives
+   in a sandboxed iframe on a white page, as mail is written for one. */
+
+.ml .btn.icon { height: 34px; }
+.ml .btn.icon.sm { height: 28px; }
+.ml { display: grid; grid-template-columns: 232px minmax(300px, 380px) minmax(0, 1fr); height: 100%; min-height: 0; position: relative; }
+
+/* ---------- folders ---------- */
+.ml-nav { display: flex; flex-direction: column; min-height: 0; background: var(--surface); border-right: 1px solid var(--border); }
+.ml-nav-head { display: flex; align-items: center; gap: 8px; padding: 14px 12px 10px 16px; }
+.ml-nav-head h1 { margin: 0; font-size: 20px; }
+.ml-compose-btn { margin-left: auto; }
+.ml-folders { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
+.ml-account { display: flex; align-items: center; gap: 4px; padding: 12px 4px 4px 10px; font-size: 11.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-3); }
+.ml-account-name { flex: 1; min-width: 0; }
+.ml-account-error { color: var(--danger); display: inline-flex; }
+.ml-account-warning { margin: 0 6px 6px 10px; padding: 6px 8px; border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger); overflow-wrap: anywhere; }
+.ml-folder { display: flex; align-items: center; gap: 9px; width: 100%; padding: 6px 10px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text-2); font: inherit; font-weight: 500; text-align: left; cursor: pointer; }
+.ml-folder:hover { background: var(--surface-2); color: var(--text); }
+.ml-folder.active { background: var(--accent-soft); color: var(--accent); }
+.ml-folder.disabled { opacity: .55; cursor: default; }
+.ml-folder.drop { outline: 2px dashed var(--accent); outline-offset: -2px; }
+.ml-folder .badge { flex: none; }
+.ml-folder:not(.active) .ml-unread { background: var(--surface-3); color: var(--text); }
+.ml-nav-foot { padding: 8px 10px; border-top: 1px solid var(--border); }
+
+/* ---------- list ---------- */
+.ml-list { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--surface); border-right: 1px solid var(--border); }
+.ml-list-head { border-bottom: 1px solid var(--border); padding: 8px 10px 10px; }
+.ml-toolbar { display: flex; align-items: center; gap: 4px; min-height: 36px; }
+.ml-toolbar h2 { margin: 0 0 0 4px; font-size: 16px; }
+.ml-selection strong { margin-left: 4px; }
+.ml-show-folders { display: none; }
+.ml-search { position: relative; margin-top: 6px; }
+.ml-search .icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-3); pointer-events: none; }
+.ml-search input { padding-left: 32px; }
+.ml-list-body { flex: 1; overflow-y: auto; min-height: 0; outline: none; }
+.ml-empty { padding: 32px 16px; text-align: center; }
+.ml-more { display: flex; justify-content: center; padding: 10px; }
+.ml-row { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: start; gap: 10px; padding: 10px 12px 10px 8px; border-bottom: 1px solid var(--border); cursor: pointer; position: relative; border-left: 3px solid transparent; }
+.ml-row:hover { background: var(--surface-2); }
+.ml-row.open { background: var(--accent-soft); border-left-color: var(--accent); }
+.ml-row.selected { background: var(--info-soft); }
+.ml-row .avatar { margin-top: 2px; }
+.ml-check { display: flex; align-items: center; margin: 0; padding: 7px 0 0 2px; cursor: pointer; }
+.ml-check input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
+.ml-row-main { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ml-row-top, .ml-row-mid { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ml-from { flex: 1; min-width: 0; color: var(--text); }
+.ml-count { flex: none; font-size: 11px; color: var(--text-3); border: 1px solid var(--border); border-radius: 8px; padding: 0 5px; line-height: 16px; }
+.ml-date { flex: none; font-size: 12px; color: var(--text-3); white-space: nowrap; }
+.ml-subject { flex: 1; min-width: 0; font-size: 13.5px; color: var(--text-2); }
+.ml-preview { font-size: 12.5px; color: var(--text-3); }
+.ml-draft { color: var(--danger); font-weight: 600; }
+.ml-icon { display: inline-flex; color: var(--text-3); }
+.ml-row.unread .ml-from, .ml-row.unread .ml-subject { font-weight: 700; color: var(--text); }
+.ml-row.unread::before { content: ""; position: absolute; left: 3px; top: 50%; width: 6px; height: 6px; margin-top: -3px; border-radius: 50%; background: var(--accent); }
+.ml-flag { display: inline-flex; border: 0; background: none; padding: 1px; color: var(--text-3); cursor: pointer; border-radius: 4px; opacity: 0; }
+.ml-row:hover .ml-flag, .ml-flag:focus-visible, .ml-flag.on { opacity: 1; }
+.ml-flag.on { color: var(--warn); }
+.ml-flag.on .icon { fill: currentColor; }
+@media (hover: none) { .ml-flag { opacity: 1; } }
+
+/* ---------- reader ---------- */
+.ml-reader { min-width: 0; min-height: 0; overflow-y: auto; background: var(--bg); }
+.ml-reader > .empty { margin-top: 10vh; }
+.ml-thread { max-width: 980px; margin: 0 auto; padding: 16px 22px 40px; }
+.ml-thread-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.ml-thread-head h2 { margin: 0; font-size: 20px; overflow-wrap: anywhere; }
+.ml-back { display: none; }
+.ml-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.ml-cards { display: flex; flex-direction: column; gap: 8px; }
+.ml-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.ml-card-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; min-width: 0; }
+.ml-card-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ml-card-who { flex: 1; min-width: 0; }
+.ml-card-from { overflow-wrap: anywhere; }
+.ml-card-date { flex: none; white-space: nowrap; }
+.ml-card-body { display: none; padding: 0 14px 14px; }
+.ml-card.expanded .ml-card-body { display: block; }
+.ml-card:not(.expanded) .ml-card-head { padding-top: 8px; padding-bottom: 8px; }
+.ml-frame { display: block; width: 100%; height: 160px; border: 0; border-radius: var(--radius-sm); background: #fff; color-scheme: light; }
+.ml-text { font-size: 14px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; padding-top: 4px; }
+.ml-quoted { color: var(--text-3); }
+.ml-remote { display: flex; align-items: center; gap: 8px; padding: 7px 10px; margin-bottom: 8px; border-radius: var(--radius-sm); background: var(--warn-soft); color: var(--text-2); }
+.ml-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.ml-attachment { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 4px 3px 10px; border: 1px solid var(--border); border-radius: 18px; background: var(--surface-2); }
+.ml-attachment a { max-width: 240px; color: var(--text); }
+
+/* ---------- composer ---------- */
+.ml-compose { display: flex; flex-direction: column; gap: 6px; }
+.ml-compose.drop { outline: 2px dashed var(--accent); outline-offset: 4px; border-radius: var(--radius-sm); }
+.ml-field { position: relative; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--border); padding: 3px 0; min-height: 38px; }
+.ml-field-label { flex: none; width: 42px; margin: 0; color: var(--text-3); font-weight: 500; font-size: 13px; }
+.ml-field select { flex: 1; border: 0; padding-left: 0; background: transparent; }
+.ml-field select:focus { box-shadow: none; }
+.ml-chips { flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.ml-chips input, .ml-subject-input { flex: 1; min-width: 140px; border: 0 !important; box-shadow: none !important; padding: 5px 0; background: transparent; }
+.ml-chip { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; height: 26px; padding: 0 2px 0 9px; border-radius: 13px; background: var(--surface-3); color: var(--text); font-size: 13px; }
+.ml-chip.invalid { background: var(--danger-soft); color: var(--danger); }
+.ml-chip button { display: inline-flex; border: 0; background: none; color: inherit; cursor: pointer; padding: 3px; border-radius: 50%; }
+.ml-chip button:hover { background: var(--surface-2); }
+.ml-cc-toggle { flex: none; }
+.ml-body-input { min-height: 280px; height: 40vh; resize: vertical; border: 0; padding: 10px 0; font-family: inherit; }
+.ml-body-input:focus { box-shadow: none; }
+.ml-compose-files { display: flex; flex-wrap: wrap; gap: 6px; }
+.ml-compose-files:empty { display: none; }
+.ml-file-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 4px 2px 10px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface-2); font-size: 13px; }
+.ml-file-chip button { display: inline-flex; border: 0; background: none; color: var(--text-3); cursor: pointer; padding: 3px; border-radius: 50%; }
+.ml-file-chip .spinner { width: 14px; height: 14px; }
+.ml-compose-tools { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; border-top: 1px solid var(--border); padding-top: 6px; }
+.ml-compose-status { white-space: nowrap; }
+.ml-compose .talk-suggest { top: calc(100% + 2px); }
+
+/* ---------- account setup ---------- */
+.ml-setup .field { margin-bottom: 8px; }
+.ml-autoconfig:empty { display: none; }
+.ml-autoconfig { margin: -2px 0 8px; }
+.ml-advanced { margin: 4px 0 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 12px; }
+.ml-advanced summary { cursor: pointer; font-weight: 500; color: var(--text-2); padding: 4px 0; }
+.ml-server { border: 0; padding: 0; margin: 6px 0 4px; min-width: 0; }
+.ml-server legend { font-weight: 600; font-size: 13px; padding: 0; margin-bottom: 2px; }
+.ml-server-row { display: flex; gap: 10px; }
+.ml-server-row .field { margin-bottom: 4px; min-width: 0; }
+.ml-port { width: 96px; flex: none; }
+.ml-scrim { display: none; }
+/* No account yet: just the folders column and the welcome. */
+.ml.no-accounts { grid-template-columns: 232px minmax(0, 1fr); }
+.ml.no-accounts .ml-list { display: none; }
+
+/* ---------- tablets: folders become a drawer ---------- */
+@media (max-width: 1100px) {
+  .ml { grid-template-columns: minmax(280px, 340px) minmax(0, 1fr); }
+  .ml-nav { position: absolute; inset: 0 auto 0 0; width: 260px; z-index: 20; transform: translateX(-100%); transition: transform .18s; box-shadow: none; }
+  .ml.pane-folders .ml-nav { transform: none; box-shadow: var(--shadow-lg); }
+  .ml.pane-folders .ml-scrim { display: block; position: absolute; inset: 0; z-index: 15; background: rgba(10, 12, 16, .35); }
+  .ml-show-folders { display: inline-flex; }
+  .ml.no-accounts { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---------- phones: one pane at a time ---------- */
+@media (max-width: 760px) {
+  .ml { grid-template-columns: minmax(0, 1fr); }
+  .ml-list { border-right: 0; }
+  .ml.pane-reader .ml-list { display: none; }
+  .ml:not(.pane-reader):not(.no-accounts) .ml-reader { display: none; }
+  .ml-back { display: inline-flex; margin-left: -6px; }
+  .ml-thread { padding: 10px 12px 32px; }
+  .ml-thread-head h2 { font-size: 17px; }
+  .ml-actions .btn.sm span { display: none; }
+  .ml-actions .btn.sm { padding: 0 9px; }
+  .ml-card-head { padding: 10px 12px; }
+  .ml-card-body { padding: 0 10px 12px; }
+  .ml-server-row { flex-wrap: wrap; }
+  .ml-body-input { height: 34vh; min-height: 200px; }
+}

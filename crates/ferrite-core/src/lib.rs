@@ -15,6 +15,7 @@ pub mod error;
 pub mod events;
 pub mod files;
 pub mod groupware;
+pub mod mail;
 pub mod mailer;
 pub mod notify;
 pub mod recur;
@@ -43,6 +44,8 @@ pub struct Inner {
     pub secret: String,
     /// SMTP connection pool for the server's own mail, created on first use.
     pub smtp_transport: tokio::sync::OnceCell<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
+    /// Webmail connection pools and IDLE watchers.
+    pub mail: mail::MailState,
 }
 
 #[derive(Clone)]
@@ -82,6 +85,7 @@ impl Core {
             message_events,
             secret,
             smtp_transport: tokio::sync::OnceCell::new(),
+            mail: mail::MailState::default(),
         })))
     }
 
