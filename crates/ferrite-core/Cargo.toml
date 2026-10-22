@@ -9,6 +9,7 @@ rust-version.workspace = true
 [dependencies]
 anyhow = "1.0.104"
 argon2 = "0.6.0"
+aws-lc-rs = "1.18.2"
 base64 = "0.23.1"
 blake3 = "1.8.7"
 bytes = "1.12.1"

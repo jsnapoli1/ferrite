@@ -105,6 +105,7 @@ pub async fn handle(State(s): State<AppState>, req: Request) -> Response {
         Err(ApiError(Error::Unavailable(m))) => {
             return (StatusCode::TOO_MANY_REQUESTS, m).into_response();
         }
+        Err(ApiError(Error::BadRequest(m))) => return crate::auth::basic_challenge(&m),
         Err(_) => return dav_unauthorized(),
     };
     let path = req.uri().path().to_string();

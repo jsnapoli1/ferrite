@@ -1130,6 +1130,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "argon2",
+ "aws-lc-rs",
  "base64 0.23.1",
  "blake3",
  "bytes",
@@ -1178,6 +1179,7 @@ name = "ferrite-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "axum",
  "base64 0.23.1",
  "blake3",
@@ -1195,6 +1197,7 @@ dependencies = [
  "libc",
  "mime_guess",
  "percent-encoding",
+ "qrcode",
  "quick-xml",
  "reqwest",
  "rust-embed",
@@ -2421,6 +2424,12 @@ dependencies = [
  "idna",
  "psl-types",
 ]
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quick-xml"

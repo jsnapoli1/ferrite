@@ -19,6 +19,10 @@ use std::time::{Duration, Instant};
 
 pub const SESSION_COOKIE: &str = "ferrite_session";
 pub const CSRF_HEADER: &str = "x-ferrite-request";
+/// Why a correct password is refused over Basic auth: the account needs a second factor,
+/// which Basic auth can't carry. App tokens keep working.
+pub const BASIC_NEEDS_APP_TOKEN: &str =
+    "two-factor authentication is enabled for this account: use an app token as the password (create one in Settings → Tokens & MCP)";
 
 #[derive(Clone)]
 pub struct Auth {
@@ -114,6 +118,9 @@ pub async fn authenticate(state: &AppState, headers: &HeaderMap, method: &Method
                 }
             } else if let Ok(user) = state.core.authenticate(username, secret).await {
                 state.throttle.succeed(&key);
+                if state.core.config.require_two_factor || state.core.two_factor_enabled(&user.id).await? {
+                    return Err(ApiError(Error::BadRequest(BASIC_NEEDS_APP_TOKEN.into())));
+                }
                 let token = TokenInfo {
                     id: String::new(),
                     user_id: user.id.clone(),
@@ -163,6 +170,17 @@ impl FromRequestParts<AppState> for MaybeAuth {
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
         Ok(MaybeAuth(authenticate(state, &parts.headers, &parts.method, false).await.ok()))
     }
+}
+
+/// 401 with a Basic challenge for WebDAV-style clients; `message` explains the refusal.
+pub fn basic_challenge(message: &str) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let mut r = (axum::http::StatusCode::UNAUTHORIZED, message.to_string()).into_response();
+    r.headers_mut().insert(
+        axum::http::header::WWW_AUTHENTICATE,
+        axum::http::HeaderValue::from_static("Basic realm=\"Ferrite\", charset=\"UTF-8\""),
+    );
+    r
 }
 
 pub fn session_cookie(secret: &str, secure: bool, max_age_secs: i64) -> String {

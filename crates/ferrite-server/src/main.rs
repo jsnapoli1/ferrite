@@ -45,6 +45,9 @@ enum Command {
         #[arg(long, default_value = "*")]
         scopes: String,
     },
+    /// Turn off a user's two-factor authentication (when they lost their device and codes).
+    #[command(name = "2fa-reset")]
+    TwoFactorReset { username: String },
     /// Serve MCP over stdio as a user (for local MCP clients that launch a command).
     Mcp {
         #[arg(long)]
@@ -102,6 +105,15 @@ async fn main() -> anyhow::Result<()> {
             let u = core.user_by_name(&username).await?;
             let (_, secret) = core.create_token(&u.id, "app", &name, &scopes, None).await?;
             println!("{secret}");
+            Ok(())
+        }
+        Command::TwoFactorReset { username } => {
+            let u = core.user_by_name(&username).await?;
+            if core.disable_two_factor(&u, true).await? {
+                println!("two-factor authentication turned off for {}", u.username);
+            } else {
+                println!("{} did not have two-factor authentication", u.username);
+            }
             Ok(())
         }
         Command::Mcp { user } => {

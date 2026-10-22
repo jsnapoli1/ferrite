@@ -31,6 +31,11 @@ pub struct Config {
     pub sfu: SfuSettings,
     /// Outgoing mail for the server's own messages (invitations, security notices).
     pub smtp: Option<crate::mailer::SmtpSettings>,
+    /// Every account must use two-factor authentication: users without it set it up at
+    /// their next password sign-in, before they get a session.
+    pub require_two_factor: bool,
+    /// OpenID Connect single sign-on providers (`[[oidc]]` tables).
+    pub oidc: Vec<crate::sso::OidcProvider>,
 }
 
 /// Settings of the built-in Selective Forwarding Unit (calls beyond a handful of people).
@@ -96,6 +101,8 @@ impl Default for Config {
             secure_cookies: false,
             sfu: SfuSettings::default(),
             smtp: None,
+            require_two_factor: false,
+            oidc: Vec::new(),
         }
     }
 }
@@ -128,7 +135,16 @@ impl Config {
         if let Ok(v) = std::env::var("FERRITE_CRAFT_BIN_DIR") {
             cfg.craft.bin_dir = Some(v.into());
         }
+        if let Ok(v) = std::env::var("FERRITE_REQUIRE_2FA") {
+            cfg.require_two_factor = v == "1" || v.eq_ignore_ascii_case("true");
+        }
         cfg.public_url = cfg.public_url.trim_end_matches('/').to_string();
+        for (i, p) in cfg.oidc.iter().enumerate() {
+            p.validate()?;
+            if cfg.oidc[..i].iter().any(|q| q.id == p.id) {
+                anyhow::bail!("duplicate [[oidc]] provider id {:?}", p.id);
+            }
+        }
         Ok(cfg)
     }
 }

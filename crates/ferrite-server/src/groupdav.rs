@@ -328,6 +328,7 @@ pub async fn handle(State(s): State<AppState>, req: Request) -> Response {
         Ok(a) if a.token.allows("groupware") => a,
         Ok(_) => return (StatusCode::FORBIDDEN, "token lacks the groupware scope").into_response(),
         Err(ApiError(Error::Unavailable(m))) => return (StatusCode::TOO_MANY_REQUESTS, m).into_response(),
+        Err(ApiError(Error::BadRequest(m))) => return crate::auth::basic_challenge(&m),
         Err(_) => return unauthorized(),
     };
     let method = req.method().as_str().to_string();

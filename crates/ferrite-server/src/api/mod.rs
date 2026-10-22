@@ -3,6 +3,7 @@
 pub mod boards;
 pub mod files;
 pub mod groupware;
+pub mod security;
 pub mod talk;
 
 use crate::AppState;
@@ -60,6 +61,7 @@ pub fn router() -> Router<AppState> {
         .merge(talk::router())
         .merge(boards::router())
         .merge(groupware::router())
+        .merge(security::router())
         .route("/api/{*rest}", get(not_found).post(not_found).put(not_found).patch(not_found).delete(not_found))
 }
 
@@ -80,6 +82,7 @@ async fn status(State(s): State<AppState>, MaybeAuth(auth): MaybeAuth) -> ApiRes
         "version": env!("CARGO_PKG_VERSION"),
         "setup_needed": s.core.user_count().await? == 0,
         "open_registration": s.core.config.open_registration,
+        "sso": crate::oidc::public_providers(&s),
     })))
 }
 
@@ -91,7 +94,7 @@ struct Credentials {
     email: Option<String>,
 }
 
-async fn start_session(s: &AppState, user_id: &str, headers: &HeaderMap) -> ApiResult<(String, String)> {
+pub(crate) async fn start_session(s: &AppState, user_id: &str, headers: &HeaderMap) -> ApiResult<(String, String)> {
     let agent = headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok()).unwrap_or("browser");
     let name = agent.chars().take(120).collect::<String>();
     let (_, secret) = s
@@ -123,7 +126,7 @@ async fn setup(State(s): State<AppState>, headers: HeaderMap, Json(c): Json<Cred
             quota_bytes: None,
         })
         .await?;
-    signed_in(&s, &u.id, &headers).await
+    security::password_signed_in(&s, &u, &headers).await
 }
 
 async fn register(State(s): State<AppState>, headers: HeaderMap, Json(c): Json<Credentials>) -> ApiResult<Response> {
@@ -141,7 +144,7 @@ async fn register(State(s): State<AppState>, headers: HeaderMap, Json(c): Json<C
             quota_bytes: None,
         })
         .await?;
-    signed_in(&s, &u.id, &headers).await
+    security::password_signed_in(&s, &u, &headers).await
 }
 
 async fn login(State(s): State<AppState>, headers: HeaderMap, Json(c): Json<Credentials>) -> ApiResult<Response> {
@@ -152,7 +155,7 @@ async fn login(State(s): State<AppState>, headers: HeaderMap, Json(c): Json<Cred
     match s.core.authenticate(&c.username, &c.password).await {
         Ok(u) => {
             s.throttle.succeed(&key);
-            signed_in(&s, &u.id, &headers).await
+            security::password_signed_in(&s, &u, &headers).await
         }
         Err(e) => {
             s.throttle.fail(&key);
@@ -268,9 +271,10 @@ async fn directory(State(s): State<AppState>, _auth: Auth, Query(q): Query<Q>) -
 async fn admin_users(State(s): State<AppState>, auth: Auth, Query(q): Query<Q>) -> ApiResult<Json<Value>> {
     auth.require_admin()?;
     let mut out = Vec::new();
+    let two_factor = s.core.two_factor_users().await?;
     for u in s.core.list_users(q.q.as_deref(), 1000).await? {
         let quota = s.core.quota(&u.id).await?;
-        out.push(json!({"user": u, "quota": quota}));
+        out.push(json!({"user": u, "quota": quota, "two_factor": two_factor.contains(&u.id)}));
     }
     Ok(Json(json!({"users": out})))
 }
@@ -412,6 +416,7 @@ async fn client_config(State(s): State<AppState>, _auth: Auth) -> ApiResult<Json
         "version": env!("CARGO_PKG_VERSION"),
         "mcp_url": format!("{}/mcp", s.core.config.public_url),
         "sfu": {"enabled": s.sfu.is_some()},
+        "sso": crate::oidc::public_providers(&s),
     })))
 }
 
