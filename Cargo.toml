@@ -13,3 +13,10 @@ rust-version = "1.85"
 lto = "thin"
 codegen-units = 4
 strip = true
+
+# Line tables keep backtraces useful at a fraction of full debug info's disk and link time.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
