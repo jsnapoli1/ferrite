@@ -1,14 +1,8 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! AI for Ferrite: model providers (local OpenAI-compatible servers or Claude) and the
+//! assistant's tool-use loop over MCP tools.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod agent;
+pub mod provider;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use agent::{AgentEvent, AgentOptions, AgentRun, ToolBox, run};
+pub use provider::{AiError, Provider, ProviderConfig, ProviderKind, Step, ToolCall, Transcript};

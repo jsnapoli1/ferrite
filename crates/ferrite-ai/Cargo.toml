@@ -4,3 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+ferrite-mcp = { version = "0.1.0", path = "../ferrite-mcp" }
+futures = "0.3.34"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["full"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+axum = "0.8.9"
