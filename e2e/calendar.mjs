@@ -1,12 +1,17 @@
 // Browser test of the Calendar and Contacts views, run against a server with a fresh data dir:
 //   FERRITE_URL=http://127.0.0.1:8825 node calendar.mjs
-// Covers event create/edit/delete through the UI, month/week/list views, live refresh when
-// another session of the same user changes data (groupware.changed), recurring and
-// multi-day events, a second calendar with a visibility toggle, the CalDAV help popover,
-// contacts create/search/delete, light + dark themes and a 390px-wide phone viewport.
-// Screenshots go to $SHOTS. Prints {ok, errors}; any console error fails the run.
+// Covers event create/edit/move/delete through the UI, month/week/list views, live refresh
+// when another session of the same user changes data (groupware.changed), multi-day events,
+// recurring series from CalDAV (expanded by the server, across a DST change, with an EXDATE
+// gap, edited as a whole series), a second calendar with a visibility toggle and live calendar
+// list refresh in another tab, the CalDAV help popover, contacts create/edit/search/delete,
+// light + dark themes and a 390px-wide phone viewport. Browsers and this script run in
+// Europe/Berlin. Screenshots go to $SHOTS. Prints {ok, errors}; any console error fails the run.
 import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
+
+const TZ = 'Europe/Berlin';
+process.env.TZ = TZ;
 
 const base = process.env.FERRITE_URL || 'http://127.0.0.1:8825';
 const shots = process.env.SHOTS || '/tmp/claude-0/-home-user-ferrite/152dfe4c-0391-5ed5-8646-9b8a5fc86c2c/scratchpad/agent-cal/shots';
@@ -41,7 +46,7 @@ const errors = [];
 
 /** A signed-in page in its own browser context (its own session cookie). */
 async function newPage(name, viewport = { width: 1360, height: 860 }) {
-  const ctx = await browser.newContext({ viewport });
+  const ctx = await browser.newContext({ viewport, timezoneId: TZ });
   const page = await ctx.newPage();
   page.on('console', (m) => { if (m.type() === 'error') errors.push(`${name}: ${m.text()}`); });
   page.on('pageerror', (e) => errors.push(`${name}: ${e.message}`));
@@ -80,6 +85,29 @@ async function noHorizontalOverflow(page, what) {
   assert(o.doc <= 1 && o.main <= 1, `${what}: horizontal overflow ${JSON.stringify(o)}`);
 }
 
+/** Stores an iCalendar object over CalDAV (Basic auth, as sync clients do). */
+async function davPut(page, name, lines) {
+  const r = await page.request.fetch(`${base}/remote.php/dav/calendars/${USER.username}/personal/${name}`, {
+    method: 'PUT', data: [...lines, ''].join('\r\n'),
+    headers: { 'Content-Type': 'text/calendar', Authorization: `Basic ${Buffer.from(`${USER.username}:${USER.password}`).toString('base64')}` },
+  });
+  assert(r.status() === 201, `CalDAV PUT ${name}: ${r.status()} ${await r.text()}`);
+}
+
+/** Month view: [{day, time, i}] for each chip containing `text` (i = index among those chips). */
+function chipDays(page, text) {
+  return page.evaluate((t) => {
+    const cells = [...document.querySelectorAll('.cal-month .cal-cell')].map((c) => ({ day: c.dataset.day, r: c.getBoundingClientRect() }));
+    return [...document.querySelectorAll('.cal-month .cal-chip')].filter((c) => c.textContent.includes(t)).map((c, i) => {
+      const r = c.getBoundingClientRect();
+      const x = r.left + Math.min(r.width / 2, 20);
+      const y = r.top + r.height / 2;
+      const cell = cells.find((k) => x >= k.r.left && x <= k.r.right && y >= k.r.top && y <= k.r.bottom);
+      return { day: cell && cell.day, time: c.querySelector('.cal-chip-time')?.textContent || '', i };
+    });
+  }, text);
+}
+
 const modal = (page) => page.locator('.modal');
 const primary = (page) => page.locator('.modal .modal-foot .btn.primary');
 const dangerConfirm = (page) => page.locator('.modal .modal-foot .btn.danger.solid');
@@ -97,6 +125,9 @@ try {
   await login(a);
   const b = await newPage('alice-B');
   await login(b);
+  // B is a second tab of the same user: it also has the calendar open.
+  await b.goto(`${base}/calendar`);
+  await b.locator('.cal-cal', { hasText: 'Personal' }).waitFor();
 
   // Target days in the current month, so the default month view shows them.
   const now = new Date();
@@ -147,18 +178,13 @@ try {
   const d17 = new Date(now.getFullYear(), now.getMonth(), 17);
   const utc = (d, n = 0) => new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate() + n)).toISOString();
   await b.api('POST', '/api/calendar/events', { summary: 'Offsite', all_day: true, start: utc(d17), end: utc(d17, 3) });
-  const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//e2e//EN', 'BEGIN:VEVENT', 'UID:standup-e2e', 'DTSTAMP:20260101T000000Z',
-    `DTSTART:${key(new Date(now.getFullYear(), now.getMonth(), 6)).replaceAll('-', '')}T080000Z`, 'DURATION:PT15M', 'SUMMARY:Standup', 'RRULE:FREQ=DAILY', 'END:VEVENT', 'END:VCALENDAR', ''].join('\r\n');
-  const put = await b.request.fetch(`${base}/remote.php/dav/calendars/${USER.username}/personal/standup-e2e.ics`, {
-    method: 'PUT', data: ics,
-    headers: { 'Content-Type': 'text/calendar', Authorization: `Basic ${Buffer.from(`${USER.username}:${USER.password}`).toString('base64')}` },
-  });
-  assert(put.status() === 201, `CalDAV PUT status ${put.status()}`);
+  await davPut(b, 'standup-e2e.ics', ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//e2e//EN', 'BEGIN:VEVENT', 'UID:standup-e2e', 'DTSTAMP:20260101T000000Z',
+    `DTSTART:${key(new Date(now.getFullYear(), now.getMonth(), 6)).replaceAll('-', '')}T080000Z`, 'DURATION:PT15M', 'SUMMARY:Standup', 'RRULE:FREQ=DAILY;COUNT=2', 'END:VEVENT', 'END:VCALENDAR']);
   const bar = a.locator('.cal-chip.bar', { hasText: 'Offsite' }).first();
   await bar.waitFor();
   const standup = a.locator('.cal-chip', { hasText: 'Standup' });
-  await standup.waitFor();
-  assert((await standup.getAttribute('aria-label')).includes('repeats'), 'recurring event is marked');
+  await waitFor(async () => (await standup.count()) === 2, 'two daily standups');
+  assert((await standup.first().getAttribute('aria-label')).includes('repeats'), 'recurring event is marked');
   // The bar covers the 17th–19th (it may wrap onto the next week row).
   const barBoxes = await a.locator('.cal-chip.bar', { hasText: 'Offsite' }).evaluateAll((els) => els.map((e) => e.getBoundingClientRect().width).reduce((x, y) => x + y, 0));
   const cellW = (await cell.boundingBox()).width;
@@ -219,6 +245,7 @@ try {
   await primary(a).click();
   const teamRow = a.locator('.cal-cal', { hasText: 'Team' });
   await teamRow.waitFor();
+  await b.locator('.cal-cal', { hasText: 'Team' }).waitFor({ timeout: 8000 });
   const { calendars } = await b.api('GET', '/api/calendar/calendars');
   const team = calendars.find((c) => c.name === 'Team');
   assert(team && team.color === '#0f766e', `team calendar created with the picked color (${team && team.color})`);
@@ -238,7 +265,19 @@ try {
   await modal(a).locator('input').fill('Team Rocket');
   await primary(a).click();
   await a.locator('.cal-cal', { hasText: 'Team Rocket' }).waitFor();
-  log('second calendar created, toggled and renamed');
+  await b.locator('.cal-cal', { hasText: 'Team Rocket' }).waitFor({ timeout: 8000 });
+  log('second calendar created, toggled and renamed; the other tab followed live');
+
+  // Move an event to the second calendar through the edit form.
+  await a.locator('.cal-block', { hasText: 'Design review v2' }).click();
+  await modal(a).getByRole('button', { name: 'Edit' }).click();
+  await a.getByLabel('Calendar', { exact: true }).selectOption({ label: 'Team Rocket' });
+  await primary(a).click();
+  await modal(a).waitFor({ state: 'detached' });
+  await waitFor(async () => (await a.locator('.cal-block', { hasText: 'Design review v2' }).evaluate((el) => getComputedStyle(el).borderLeftColor)) === 'rgb(15, 118, 110)', 'moved event takes the team color');
+  const moved = (await b.api('GET', '/api/calendar/events')).events.find((e) => e.summary === 'Design review v2');
+  assert(moved.calendar === team.uri && moved.uid === created.uid, `event moved to the team calendar (${moved.calendar})`);
+  log('moved to the second calendar');
 
   // ---- list view ----------------------------------------------------------------------
   await a.locator('.cal-views [data-view="list"]').click();
@@ -249,6 +288,44 @@ try {
   await shot(a, 'calendar-list');
   await a.locator('.cal-views [data-view="month"]').click();
   await a.locator('.cal-month').waitFor();
+
+  // ---- recurring series in Europe/Berlin across the DST change (Oct 25, 2026) -----------
+  await davPut(b, 'weekly-e2e.ics', ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//e2e//EN', 'BEGIN:VEVENT', 'UID:weekly-e2e', 'DTSTAMP:20260101T000000Z',
+    'DTSTART;TZID=Europe/Berlin:20261001T100000', 'DTEND;TZID=Europe/Berlin:20261001T110000', 'SUMMARY:Weekly sync',
+    'RRULE:FREQ=WEEKLY;COUNT=6', 'EXDATE;TZID=Europe/Berlin:20261015T100000', 'END:VEVENT', 'END:VCALENDAR']);
+  await a.goto(`${base}/calendar?date=2026-10-01`);
+  await a.locator('.cal-month').waitFor();
+  // Nov 5 is in the grid only when weeks start on Sunday.
+  const shownDays = await a.locator('.cal-cell').evaluateAll((els) => els.map((e) => e.dataset.day));
+  const weeklyDays = ['2026-10-01', '2026-10-08', '2026-10-22', '2026-10-29', '2026-11-05'].filter((d) => shownDays.includes(d));
+  const tenAM = await a.evaluate(() => new Date(2026, 0, 1, 10).toLocaleTimeString([], { hour: 'numeric' }));
+  const checkSeries = async (title) => {
+    const got = await waitFor(async () => { const c = await chipDays(a, title); return c.length === weeklyDays.length && c; }, `${weeklyDays.length} "${title}" occurrences`);
+    assert(JSON.stringify(got.map((c) => c.day)) === JSON.stringify(weeklyDays), `occurrences on ${got.map((c) => c.day)} (the 15th is excluded)`);
+    assert(got.every((c) => c.time === tenAM), `local time stays ${tenAM} across DST: ${got.map((c) => c.time)}`);
+    return got;
+  };
+  const series1 = await checkSeries('Weekly sync');
+  const apiWeekly = (await b.api('GET', '/api/calendar/events?from=2026-09-28T00:00:00Z&to=2026-11-09T00:00:00Z')).events.filter((e) => e.uid === 'weekly-e2e');
+  assert(apiWeekly.length === 5 && apiWeekly.every((e) => e.tzid === 'Europe/Berlin' && e.recurrence_id), 'API returns five occurrences with tzid');
+  assert(apiWeekly.find((e) => e.starts_at.startsWith('2026-10-29')).starts_at.startsWith('2026-10-29T09:00:00'), 'after DST, 10:00 Berlin is 09:00Z');
+  const seriesStart = apiWeekly[0].series_start;
+  await shot(a, 'calendar-recurring');
+  // Edit the occurrence on the 22nd: the whole series changes, its first date stays.
+  await a.locator('.cal-chip', { hasText: 'Weekly sync' }).nth(series1.find((c) => c.day === '2026-10-22').i).click();
+  await modal(a).getByText('Since October 1, 2026').waitFor();
+  await modal(a).getByRole('button', { name: 'Edit' }).click();
+  await modal(a).getByText('Changes apply to every occurrence').waitFor();
+  assert(await a.getByLabel('Start date').inputValue() === '2026-10-01' && await a.getByLabel('Start time').inputValue() === '10:00', 'form shows the series start');
+  await a.waitForTimeout(250);
+  await a.screenshot({ path: `${shots}/calendar-series-edit.png` });
+  await a.getByLabel('Title').fill('Weekly sync renamed');
+  await primary(a).click();
+  await modal(a).waitFor({ state: 'detached' });
+  await checkSeries('Weekly sync renamed');
+  const after = (await b.api('GET', '/api/calendar/events?from=2026-09-28T00:00:00Z&to=2026-11-09T00:00:00Z')).events.filter((e) => e.uid === 'weekly-e2e');
+  assert(after.length === 5 && after.every((e) => e.summary === 'Weekly sync renamed' && e.series_start === seriesStart && e.tzid === 'Europe/Berlin'), 'series renamed, start and zone kept');
+  log('recurring series: DST, EXDATE and series edit ok');
 
   // ---- contacts --------------------------------------------------------------------------
   await a.locator('.nav a[data-nav="contacts"]').click();
@@ -269,12 +346,25 @@ try {
   assert(await card.locator('a[href="mailto:countess@example.org"]').count() === 1, 'second email shown');
   assert(await card.locator('a[href="tel:+442079460000"]').count() === 1, 'phone link');
   assert(new URL(a.url()).searchParams.get('c'), 'selection in the URL');
+  // Edit: new organization, one email removed, a phone added.
+  await card.getByRole('button', { name: 'Edit' }).click();
+  await modal(a).getByText('Edit contact').waitFor();
+  assert(await a.getByLabel('Name').inputValue() === 'Ada Lovelace', 'edit form prefilled');
+  await a.getByLabel('Organization').fill('Babbage & Co');
+  await modal(a).getByRole('button', { name: 'Remove email' }).first().click();
+  await modal(a).getByRole('button', { name: 'Add phone' }).click();
+  await modal(a).getByLabel('Phone', { exact: true }).nth(1).fill('+44 20 7946 0001');
+  await primary(a).click();
+  await card.locator('.ct-org', { hasText: 'Babbage & Co' }).waitFor();
+  assert(await card.locator('a[href^="mailto:"]').count() === 1 && await card.locator('a[href^="tel:"]').count() === 2, 'edited emails and phones shown');
+  const ada = (await b.api('GET', '/api/contacts')).contacts.find((c) => c.name === 'Ada Lovelace');
+  assert(ada.org === 'Babbage & Co' && ada.emails.join() === 'countess@example.org' && ada.phones.length === 2 && ada.note === 'First programmer.', `contact saved: ${JSON.stringify(ada)}`);
   // Another session adds a contact: it shows up live.
   await b.api('POST', '/api/contacts', { name: 'Grace Hopper', emails: ['grace@navy.mil'], org: 'US Navy' });
   await a.locator('.ct-row', { hasText: 'Grace Hopper' }).waitFor();
   await shot(a, 'contacts');
   const searchBox = a.getByLabel('Search contacts');
-  await searchBox.fill('analytical');
+  await searchBox.fill('babbage');
   await waitFor(async () => (await a.locator('.ct-row').count()) === 1, 'search narrows to one contact');
   assert(await a.locator('.ct-row', { hasText: 'Ada Lovelace' }).count() === 1, 'search finds by organization');
   await searchBox.fill('nobody-here');

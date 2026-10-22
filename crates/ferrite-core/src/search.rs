@@ -12,7 +12,7 @@ pub struct SearchHit {
     pub id: String,
     pub title: String,
     pub snippet: String,
-    /// Where to open it: a room token, board id or folder id.
+    /// Where to open it: a room token, board id, folder id or (events) the start date.
     pub context: Option<String>,
 }
 
@@ -136,6 +136,13 @@ impl Core {
             }
             "card" => Some(scope.clone()),
             "file" => self.node(&id).await.ok().and_then(|n| n.parent_id),
+            // The day the event starts, so the calendar can open on it.
+            "event" => sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>("SELECT starts_at FROM dav_objects WHERE id = ?")
+                .bind(&id)
+                .fetch_optional(&self.db)
+                .await?
+                .flatten()
+                .map(|t| t.format("%Y-%m-%d").to_string()),
             _ => None,
         };
         Ok(Some(SearchHit {

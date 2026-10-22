@@ -72,6 +72,8 @@
 .cal-chip-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .cal-chip.dot .cal-chip-title { font-weight: 500; }
 .cal-chip .icon { width: 12px; height: 12px; flex: none; }
+/* Month cells are narrow: timed chips leave the repeat mark to the label and details. */
+.cal-chip.dot .cal-chip-rep { display: none; }
 .cal-more { justify-self: start; margin-left: 4px; height: 22px; padding: 0 6px; border: 0; border-radius: 5px; background: none; font: inherit; font-size: 12px; font-weight: 600; color: var(--text-2); cursor: pointer; white-space: nowrap; }
 .cal-more:hover { background: var(--surface-3); color: var(--text); }
 
@@ -125,7 +127,6 @@
 .cal-day-num { min-width: 30px; font-size: 22px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
 .cal-day.today .cal-day-num { color: var(--accent); }
 .cal-day-items { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-.cal-series > p { margin: -4px 0 8px; }
 .cal-item { display: grid; grid-template-columns: 140px 10px minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; padding: 10px 14px; border: 0; border-bottom: 1px solid var(--border); background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .cal-item:last-child { border-bottom: 0; }
 .cal-item:hover { background: var(--surface-2); }
@@ -148,6 +149,8 @@
 .cal-info-dot { width: 13px; height: 13px; margin: 4px 1px 0; border-radius: 4px; background: var(--ev-color); flex: none; }
 .cal-info-desc { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px 12px; background: var(--surface-2); border-radius: var(--radius-sm); }
 .cal-form .field { margin-bottom: 4px; }
+.cal-form-note { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--info-soft); color: var(--info); }
+.cal-form-note .icon { flex: none; }
 .cal-form .check { margin: 10px 0 0; }
 .cal-form-when { display: grid; grid-template-columns: 1fr; }
 .cal-form-dt { display: flex; gap: 6px; }

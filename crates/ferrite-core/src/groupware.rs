@@ -876,6 +876,20 @@ impl Core {
                 }
                 let (moved, _) = self.put_dav_object(&to, &o.uri, &data, None, true).await?;
                 self.delete_dav_object(&c, &o.uri, Some(&o.etag)).await?;
+                // Keep the event's id across the move, so links and tool calls holding it work.
+                let mut tx = self.db.begin().await?;
+                sqlx::query("UPDATE dav_objects SET id = ? WHERE id = ?")
+                    .bind(&o.id)
+                    .bind(&moved.id)
+                    .execute(&mut *tx)
+                    .await?;
+                sqlx::query("UPDATE fts SET object_id = ? WHERE object_kind = 'event' AND object_id = ?")
+                    .bind(&o.id)
+                    .bind(&moved.id)
+                    .execute(&mut *tx)
+                    .await?;
+                tx.commit().await?;
+                let (to, moved) = self.object_by_id(user_id, &o.id).await?;
                 Ok(view_of(&moved, &to))
             }
             None => {

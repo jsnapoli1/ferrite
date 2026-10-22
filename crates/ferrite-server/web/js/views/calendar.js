@@ -5,9 +5,10 @@
 //
 // Route: /calendar?view=month|week|list&date=YYYY-MM-DD.
 //
-// The API does not expand recurrence rules: a recurring event comes back once, as its
-// first occurrence, and is shown there with a "repeats" mark. All-day events carry UTC
-// midnight dates, so their day is read from the UTC fields; timed events use local time.
+// The server expands recurring events: each occurrence in range is its own entry sharing
+// the series' `id`, told apart by `recurrence_id`; editing or deleting acts on the whole
+// series. All-day events carry UTC midnight dates, so their day is read from the UTC
+// fields; timed events use local time.
 
 import { api, q } from '../api.js';
 import { live } from '../ws.js';
@@ -50,6 +51,7 @@ const WEEK_START = weekStartDay();
 const startOfWeek = (d) => addDays(startOfDay(d), -((d.getDay() - WEEK_START + 7) % 7));
 
 const fmt = (d, opts) => d.toLocaleString([], opts);
+const LOCAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const fmtTime = (d) => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 const TIME_FMT = new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' });
 /** "9:00 – 9:45 AM" (one time when start and end are equal). */
@@ -82,26 +84,32 @@ const colorVars = (el, color) => {
   return el;
 };
 
-/** Adds layout fields to an API event: s/e (Date, end exclusive), first/last day (inclusive). */
-function prepare(ev) {
+/** Local start/end (end exclusive) and first/last day (inclusive) of an API time pair. */
+function times(startIso, endIso, allDay) {
   let s;
   let e;
-  if (ev.all_day) {
+  if (allDay) {
     const utcDay = (iso) => { const u = new Date(iso); return new Date(u.getUTCFullYear(), u.getUTCMonth(), u.getUTCDate()); };
-    s = utcDay(ev.starts_at || ev.ends_at);
-    e = ev.ends_at ? utcDay(ev.ends_at) : addDays(s, 1);
+    s = utcDay(startIso || endIso);
+    e = endIso ? utcDay(endIso) : addDays(s, 1);
     if (e <= s) e = addDays(s, 1);
   } else {
-    s = new Date(ev.starts_at || ev.ends_at);
-    e = ev.ends_at ? new Date(ev.ends_at) : new Date(s);
+    s = new Date(startIso || endIso);
+    e = endIso ? new Date(endIso) : new Date(s);
     if (e < s) e = new Date(s);
   }
   const first = startOfDay(s);
   const last = e > s ? startOfDay(new Date(e - 1)) : first;
+  return { s, e, first, last };
+}
+
+/** Adds layout fields to an API event: s/e (Date, end exclusive), first/last day (inclusive), and a key unique per occurrence. */
+function prepare(ev) {
+  const { s, e, first, last } = times(ev.starts_at, ev.ends_at, ev.all_day);
   // Multi-day and all-day events are drawn as bars; in the week view, so is anything 24h+.
   const span = ev.all_day || !sameDay(first, last);
   const long = ev.all_day || e - s >= DAY;
-  return { ...ev, s, e, first, last, span, long };
+  return { ...ev, key: `${ev.id}|${ev.recurrence_id || ''}`, s, e, first, last, span, long };
 }
 
 function whenText(ev) {
@@ -426,7 +434,7 @@ export default async function render(root, ctx) {
   function chip(ev, seg, { showTime = true } = {}) {
     const bar = ev.span;
     const el = h(`button.cal-chip${bar ? '.bar' : '.dot'}`, {
-      type: 'button', dataset: { eventId: ev.id }, title: `${ev.summary}\n${whenText(ev)}`,
+      type: 'button', dataset: { eventId: ev.id, occurrence: ev.key }, title: `${ev.summary}\n${whenText(ev)}`,
       'aria-label': `${ev.summary || 'Untitled'}, ${whenText(ev)}${ev.recurring ? ', repeats' : ''}`,
       onclick: (e) => { e.stopPropagation(); showEvent(ev); },
     },
@@ -435,7 +443,7 @@ export default async function render(root, ctx) {
     bar && !ev.all_day && (!seg || !seg.contL) && h('span.cal-chip-time', fmtShort(ev.s)),
     ev.component === 'VTODO' && icon('check', 'sm'),
     h('span.cal-chip-title', ev.summary || 'Untitled'),
-    ev.recurring && icon('repeat', 'sm'));
+    ev.recurring && icon('repeat', 'sm cal-chip-rep'));
     if (seg?.contL) el.classList.add('cont-l');
     if (seg?.contR) el.classList.add('cont-r');
     return colorVars(el, ev.color);
@@ -529,7 +537,7 @@ export default async function render(root, ctx) {
         const ev = sg.ev;
         const dur = Math.max(sg.b - sg.a, 20);
         const el = h('button.cal-block', {
-          type: 'button', dataset: { eventId: ev.id }, title: `${ev.summary}\n${whenText(ev)}`,
+          type: 'button', dataset: { eventId: ev.id, occurrence: ev.key }, title: `${ev.summary}\n${whenText(ev)}`,
           'aria-label': `${ev.summary || 'Untitled'}, ${whenText(ev)}${ev.recurring ? ', repeats' : ''}`,
           class: dur < 45 ? 'short' : '',
           style: {
@@ -603,7 +611,7 @@ export default async function render(root, ctx) {
     else if (sameDay(ev.last, d)) time = `Until ${fmtTime(ev.e)}`;
     else time = 'All day';
     return colorVars(h('button.cal-item', {
-      type: 'button', dataset: { eventId: ev.id }, onclick: () => showEvent(ev),
+      type: 'button', dataset: { eventId: ev.id, occurrence: ev.key }, onclick: () => showEvent(ev),
       'aria-label': `${ev.summary || 'Untitled'}, ${whenText(ev)}${ev.recurring ? ', repeats' : ''}`,
     },
     h('span.cal-item-time', time),
@@ -637,15 +645,6 @@ export default async function render(root, ctx) {
         h('p', 'Create an event, or sync a calendar from another app.'),
         h('button.btn.primary', { type: 'button', onclick: () => openForm(null, defaultStart()) }, icon('plus'), 'New event')));
     }
-    // Recurring series are not expanded by the server; ones that began before this month
-    // would otherwise be invisible here.
-    const series = evs.filter((e) => e.recurring && e.last < from);
-    if (series.length) {
-      out.appendChild(h('section.cal-day.cal-series',
-        h('h3.cal-day-head', icon('repeat'), h('span', 'Repeating series that started earlier')),
-        h('p.small.muted', 'Shown at their first occurrence; repetitions are not expanded here.'),
-        h('div.cal-day-items', series.map((ev) => listRow(ev, ev.first)))));
-    }
     return out;
   }
 
@@ -673,9 +672,10 @@ export default async function render(root, ctx) {
     dot.style.setProperty('--ev-color', normColor(ev.color));
     modal({
       title: ev.summary || 'Untitled',
-      body: h('div.cal-info', { dataset: { eventId: ev.id } },
+      body: h('div.cal-info', { dataset: { eventId: ev.id, occurrence: ev.key } },
         info('clock', whenText(ev)),
-        ev.recurring && info('repeat', 'Repeats', h('div.small.muted', 'Only the first occurrence is shown in this calendar. Edits keep the repeat rule set by your calendar app.')),
+        ev.recurring && info('repeat', 'Repeats', ev.series_start && h('div.small.muted', `Since ${fmt(times(ev.series_start, ev.series_end, ev.all_day).s, { month: 'long', day: 'numeric', year: 'numeric' })}`)),
+        ev.tzid && !ev.all_day && ev.tzid !== LOCAL_TZ && info('globe', `Time zone: ${ev.tzid.replaceAll('_', ' ')}`, h('div.small.muted', `${fmtRange(ev.s, ev.e)} in your time zone`)),
         ev.location && info('pin', ev.location),
         h('div.cal-info-row', dot, h('div.grow', ev.calendar_name)),
         isTask && info('check', 'Task', h('div.small.muted', 'Tasks are shown read-only here; edit them in your tasks app.')),
@@ -692,6 +692,7 @@ export default async function render(root, ctx) {
     if (!await confirmDialog('Delete event', `Delete “${ev.summary || 'Untitled'}”${ev.recurring ? ' and all its repetitions' : ''}?`, { confirm: 'Delete', danger: true })) return;
     try {
       await api.del(`/api/calendar/events/${encodeURIComponent(ev.id)}`);
+      // Deleting removes the whole series: every occurrence shares the id.
       state.events = state.events.filter((e) => e.id !== ev.id);
       draw();
       toast('Event deleted', 'ok', { timeout: 2500 });
@@ -704,9 +705,12 @@ export default async function render(root, ctx) {
   async function openForm(ev, start) {
     if (!state.calendars.length) await reloadAll();
     const editing = !!ev;
-    const s0 = editing ? ev.s : start;
+    // A recurring event is edited as a series: the form shows (and saves) the series'
+    // first start and end, never the clicked occurrence's, which would move the series.
+    const series = editing && ev.recurring && ev.series_start ? times(ev.series_start, ev.series_end, ev.all_day) : ev;
+    const s0 = editing ? series.s : start;
     const allDay0 = editing ? ev.all_day : false;
-    const e0 = editing ? (ev.all_day ? ev.last : ev.e) : new Date(+start + 3600000);
+    const e0 = editing ? (ev.all_day ? series.last : series.e) : new Date(+start + 3600000);
     const uid = Math.random().toString(36).slice(2, 8);
     const field = (label, input, extra) => h('div.field', h('label', { for: input.id }, label), input, extra);
     const titleIn = h('input', { type: 'text', id: `ev-title-${uid}`, value: ev?.summary || '', placeholder: 'Add a title', required: true, autocomplete: 'off' });
@@ -716,7 +720,7 @@ export default async function render(root, ctx) {
     const eDate = h('input', { type: 'date', id: `ev-ed-${uid}`, value: dayKey(e0), 'aria-label': 'End date', required: true });
     const eTime = h('input', { type: 'time', id: `ev-et-${uid}`, value: timeKey(e0), 'aria-label': 'End time', step: 300 });
     const visibleCal = state.calendars.find((c) => !state.hidden.has(c.uri)) || state.calendars[0];
-    const calSel = h('select', { id: `ev-cal-${uid}`, disabled: editing },
+    const calSel = h('select', { id: `ev-cal-${uid}` },
       state.calendars.map((c) => h('option', { value: c.uri, selected: editing ? c.uri === ev.calendar : c === visibleCal }, c.name)));
     const loc = h('input', { type: 'text', id: `ev-loc-${uid}`, value: ev?.location || '', placeholder: 'Add a place or link', autocomplete: 'off' });
     const desc = h('textarea', { id: `ev-desc-${uid}`, rows: 3, placeholder: 'Notes' }, ev?.description || '');
@@ -745,9 +749,9 @@ export default async function render(root, ctx) {
     sTime.addEventListener('change', onStart);
     eDate.addEventListener('change', onEnd);
     eTime.addEventListener('change', onEnd);
-    const times = [sTime, eTime];
+    const timeInputs = [sTime, eTime];
     const syncAllDay = () => {
-      times.forEach((t) => { t.hidden = allDay.checked; });
+      timeInputs.forEach((t) => { t.hidden = allDay.checked; });
       const r = read();
       if (r) dur = Math.max(0, r.e - r.s);
     };
@@ -771,23 +775,21 @@ export default async function render(root, ctx) {
         location: loc.value.trim(),
         description: desc.value.trim(),
       };
-      if (editing) {
-        await api.patch(`/api/calendar/events/${encodeURIComponent(ev.id)}`, payload);
-      } else {
-        payload.calendar = calSel.value;
-        await api.post('/api/calendar/events', payload);
-        if (state.hidden.delete(calSel.value)) { saveHidden(state.hidden); drawCalendars(); }
-      }
+      payload.calendar = calSel.value;
+      if (editing) await api.patch(`/api/calendar/events/${encodeURIComponent(ev.id)}`, payload);
+      else await api.post('/api/calendar/events', payload);
+      if (state.hidden.delete(calSel.value)) { saveHidden(state.hidden); drawCalendars(); }
       return true;
     };
 
     const form = h('form.cal-form', { onsubmit: (e) => { e.preventDefault(); form.closest('.modal').querySelector('.modal-foot .btn.primary').click(); } },
+      editing && ev.recurring && h('p.cal-form-note.small', icon('repeat', 'sm'), 'Changes apply to every occurrence. The times below are the first occurrence’s.'),
       field('Title', titleIn),
       h('label.check', allDay, 'All day'),
       h('div.cal-form-when',
         h('div.field', h('label', { for: sDate.id }, 'Starts'), h('div.cal-form-dt', sDate, sTime)),
         h('div.field', h('label', { for: eDate.id }, 'Ends'), h('div.cal-form-dt', eDate, eTime))),
-      field('Calendar', calSel, editing && state.calendars.length > 1 ? h('div.small.muted', 'Events can’t be moved to another calendar here.') : null),
+      field('Calendar', calSel),
       field('Location', loc),
       field('Description', desc),
       h('button', { type: 'submit', hidden: true, tabindex: '-1', 'aria-hidden': 'true' }),

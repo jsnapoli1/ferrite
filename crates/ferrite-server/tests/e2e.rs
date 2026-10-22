@@ -1329,6 +1329,40 @@ async fn caldav_carddav_sync_and_mcp_tools() {
         .await
         .unwrap();
     assert!(all.contains("SUMMARY:Dentist") && all.contains("DTSTART:20261111T100000Z"), "{all}");
+    // Moving the event to another calendar keeps its id, so later calls by id still work.
+    let team = alice.post("/api/calendar/calendars", json!({"name": "Team"})).await["calendar"]["uri"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (st, moved) = alice
+        .call(
+            Method::PATCH,
+            &format!("/api/calendar/events/{id}"),
+            Some(json!({"summary": "Dentist", "start": "2026-11-11T10:00:00Z", "calendar": team})),
+        )
+        .await;
+    assert!(st.is_success(), "{moved}");
+    assert_eq!(moved["event"]["id"], id.as_str(), "{moved}");
+    assert_eq!(moved["event"]["calendar"], team.as_str());
+    let in_team = dav("REPORT", &format!("/remote.php/dav/calendars/alice/{team}/"))
+        .body(query("20261101T000000Z", "20261201T000000Z"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(in_team.contains("SUMMARY:Dentist"), "{in_team}");
+    let (st, _) = alice.call(Method::DELETE, &format!("/api/calendar/events/{id}"), None).await;
+    assert!(st.is_success());
+    assert!(
+        !alice.get("/api/search?q=dentist").await["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|h| h["kind"] == "event"),
+        "the search index follows the move and the delete"
+    );
 }
 
 /// OpenAI-compatible embeddings whose dimensions are "concepts": synonyms share a dimension,

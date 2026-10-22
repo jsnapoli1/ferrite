@@ -1,9 +1,21 @@
-// Unified search across files, messages and cards.
+// Unified search across files, messages, cards, events and contacts (full text, plus
+// meaning-based matches when the server has an embedding model).
 
 import { api, q } from '../api.js';
 import { h, icon, emptyState, clear } from '../ui.js';
 
-const KINDS = [['', 'Everything'], ['file', 'Files'], ['message', 'Messages'], ['card', 'Cards']];
+const KINDS = [['', 'Everything'], ['file', 'Files'], ['message', 'Messages'], ['card', 'Cards'], ['event', 'Events'], ['contact', 'Contacts']];
+
+/** [href, icon, label] for a hit. */
+function target(r) {
+  switch (r.kind) {
+    case 'file': return [`/files/${r.context}?select=${r.id}`, 'file', 'File'];
+    case 'message': return [`/talk/${r.context}?message=${r.id}`, 'talk', `Message from ${r.title}`];
+    case 'card': return [`/boards/${r.context}?card=${r.id}`, 'boards', 'Card'];
+    case 'event': return [`/calendar${q({ view: 'week', date: r.context || '' })}`, 'calendar', 'Event'];
+    default: return [`/contacts${q({ c: r.id })}`, 'contacts', 'Contact'];
+  }
+}
 
 export default async function render(root, ctx) {
   ctx.setTitle('Search');
@@ -14,14 +26,11 @@ export default async function render(root, ctx) {
     const term = input.value.trim();
     clear(results);
     if (!term) return;
-    const { results: hits } = await api.get(`/api/search${q({ q: term, kinds: kind })}`);
+    const { results: hits, semantic } = await api.get(`/api/search${q({ q: term, kinds: kind })}`);
     if (!hits.length) return results.appendChild(emptyState('search', 'No results', `Nothing matches “${term}”.`));
+    if (semantic) results.appendChild(h('p.small.muted', icon('assistant', 'sm'), ' Includes matches by meaning, not only by words.'));
     results.appendChild(h('div.panel.list', hits.map((r) => {
-      const [href, ic, where] = r.kind === 'file'
-        ? [`/files/${r.context}?select=${r.id}`, 'file', 'File']
-        : r.kind === 'message'
-          ? [`/talk/${r.context}?message=${r.id}`, 'talk', `Message from ${r.title}`]
-          : [`/boards/${r.context}?card=${r.id}`, 'boards', 'Card'];
+      const [href, ic, where] = target(r);
       const snippet = h('div.small.muted');
       // Highlight the [matched] terms from the FTS snippet without using HTML.
       r.snippet.split(/(\[[^\]]*\])/).forEach((part) => {

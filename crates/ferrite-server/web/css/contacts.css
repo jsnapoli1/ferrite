@@ -43,7 +43,6 @@
 .ct-value:hover .btn, .ct-value .btn:focus-visible { opacity: 1; }
 @media (hover: none) { .ct-value .btn { opacity: 1; } }
 .ct-note { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px 12px; background: var(--surface-2); border-radius: var(--radius-sm); }
-.ct-edit-hint { margin-top: 22px; }
 
 /* ---------- create dialog ---------- */
 .ct-form .field { margin-bottom: 6px; }
