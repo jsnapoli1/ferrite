@@ -160,7 +160,7 @@ function buildShell() {
   const navLinks = NAV.map(([href, label, ic, key]) => h('a', { href, dataset: { nav: key }, onclick: link },
     icon(ic), label, key === 'talk' && h('span.badge', { id: 'talk-badge', hidden: true })));
   const search = h('input', {
-    type: 'search', placeholder: 'Search files, messages, cards…', 'aria-label': 'Search',
+    type: 'search', placeholder: 'Search files, chats, cards, events…', 'aria-label': 'Search',
     onkeydown: (e) => {
       if (e.key === 'Enter' && search.value.trim()) navigate(`/search?q=${encodeURIComponent(search.value.trim())}`);
     },
