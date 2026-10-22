@@ -3,7 +3,11 @@
 // event create/view/edit/delete in modals. The same data is served over CalDAV, so the
 // view refreshes on `groupware.changed` whichever client made the change.
 //
-// Route: /calendar?view=month|week|list&date=YYYY-MM-DD.
+// Route: /calendar?view=month|week|list&date=YYYY-MM-DD[&event=<id>] (event opens its dialog,
+// as notification links do).
+//
+// Calendars shared with the user are listed under "Shared with me" with the owner's name;
+// events can have guests, and invitations show an answer bar (calendar-invites.js).
 //
 // The server expands recurring events: each occurrence in range is its own entry sharing
 // the series' `id`, told apart by `recurrence_id`; editing or deleting acts on the whole
@@ -13,6 +17,7 @@
 import { api, q } from '../api.js';
 import { live } from '../ws.js';
 import { h, append, clear, icon, modal, menu, toast, errorToast, confirmDialog, promptDialog, debounce, copyText } from '../ui.js';
+import { attendeeList, attendeesField, rsvpBar, shareCalendarDialog, statusPill } from './calendar-invites.js';
 
 const DAY = 86400000;
 const HOUR_PX = 48;
@@ -110,6 +115,26 @@ function prepare(ev) {
   const span = ev.all_day || !sameDay(first, last);
   const long = ev.all_day || e - s >= DAY;
   return { ...ev, key: `${ev.id}|${ev.recurrence_id || ''}`, s, e, first, last, span, long };
+}
+
+/** Classes marking invitations not yet answered, declined or cancelled events. */
+function inviteClasses(el, ev) {
+  if (ev.cancelled) el.classList.add('cancelled');
+  // Invitations are answered in the user's own calendar; shared copies just show the event.
+  else if (ev.shared_by) return el;
+  else if (ev.my_partstat === 'DECLINED') el.classList.add('declined');
+  else if (ev.my_partstat === 'NEEDS-ACTION') el.classList.add('pending');
+  return el;
+}
+
+/** Words added to an event's accessible label: repeats, invitation state. */
+function stateText(ev) {
+  return [
+    ev.recurring && 'repeats',
+    ev.cancelled && 'cancelled',
+    !ev.cancelled && !ev.shared_by && ev.my_partstat === 'NEEDS-ACTION' && 'invitation awaiting your answer',
+    !ev.cancelled && !ev.shared_by && ev.my_partstat === 'DECLINED' && 'declined',
+  ].filter(Boolean).map((t) => `, ${t}`).join('');
 }
 
 function whenText(ev) {
@@ -239,6 +264,9 @@ export default async function render(root, ctx) {
     calendars: [],
     events: [],
     hidden: loadHidden(),
+    // {can_email, email}: whether invitations can be emailed, and the user's address.
+    info: { can_email: false, email: null },
+    openEvent: ctx.query.event || null,
   };
   const cleanups = [];
   let loadSeq = 0;
@@ -292,7 +320,7 @@ export default async function render(root, ctx) {
   }
 
   function syncUrl() {
-    const params = { view: state.view === 'month' ? '' : state.view, date: sameDay(state.cursor, new Date()) ? '' : dayKey(state.cursor) };
+    const params = { view: state.view === 'month' ? '' : state.view, date: sameDay(state.cursor, new Date()) ? '' : dayKey(state.cursor), event: state.openEvent || '' };
     history.replaceState({}, '', `/calendar${q(params)}`);
   }
 
@@ -326,8 +354,9 @@ export default async function render(root, ctx) {
   }
 
   async function loadCalendars() {
-    const { calendars } = await api.get('/api/calendar/calendars');
+    const { calendars, can_email: canEmail, email } = await api.get('/api/calendar/calendars');
     state.calendars = calendars;
+    state.info = { can_email: canEmail, email };
     drawCalendars();
   }
 
@@ -345,6 +374,14 @@ export default async function render(root, ctx) {
       errorToast(e);
     }
     draw();
+    if (state.openEvent) {
+      // A link to one event (from a notification): open it once.
+      const ev = state.events.find((x) => x.id === state.openEvent);
+      state.openEvent = null;
+      syncUrl();
+      if (ev) showEvent(ev);
+      else toast('That event no longer exists', 'warn', { timeout: 3000 });
+    }
   }
 
   async function reloadAll() {
@@ -381,31 +418,56 @@ export default async function render(root, ctx) {
 
   function drawCalendars() {
     clear(calList);
-    for (const c of state.calendars) {
-      const color = normColor(c.color);
-      const box = h('input', {
-        type: 'checkbox', checked: !state.hidden.has(c.uri), 'aria-label': `Show ${c.name}`,
-        onchange: () => {
-          if (box.checked) state.hidden.delete(c.uri); else state.hidden.add(c.uri);
-          saveHidden(state.hidden);
-          row.classList.toggle('off', !box.checked);
-          draw();
-        },
-      });
-      const more = h('button.btn.ghost.icon.sm.cal-cal-more', {
-        type: 'button', 'aria-label': `Options for ${c.name}`, 'aria-haspopup': 'menu',
-        onclick: () => menu(more, [
-          { label: 'Rename', icon: 'edit', run: () => renameCalendar(c) },
-          { label: 'Change color', icon: 'tag', run: () => recolorCalendar(c) },
-          'sep',
-          { label: 'Delete', icon: 'trash', danger: true, run: () => deleteCalendar(c) },
-        ]),
-      }, icon('more'));
-      const row = h('div.cal-cal', { role: 'listitem', dataset: { uri: c.uri }, class: state.hidden.has(c.uri) ? 'off' : '' },
-        h('label.cal-cal-label', box, h('span.ellipsis', c.name)), more);
-      row.style.setProperty('--cal-color', color);
-      calList.appendChild(row);
+    const own = state.calendars.filter((c) => !c.shared_by);
+    const shared = state.calendars.filter((c) => c.shared_by);
+    own.forEach(calendarRow);
+    if (shared.length) {
+      calList.appendChild(h('div.cal-cals-sub', { role: 'presentation' }, 'Shared with me'));
+      shared.forEach(calendarRow);
     }
+  }
+
+  function calendarRow(c) {
+    const color = normColor(c.color);
+    const box = h('input', {
+      type: 'checkbox', checked: !state.hidden.has(c.uri), 'aria-label': `Show ${c.name}`,
+      onchange: () => {
+        if (box.checked) state.hidden.delete(c.uri); else state.hidden.add(c.uri);
+        saveHidden(state.hidden);
+        row.classList.toggle('off', !box.checked);
+        draw();
+      },
+    });
+    const items = c.shared_by
+      ? [
+        { label: 'Rename for me', icon: 'edit', run: () => renameCalendar(c) },
+        { label: 'Change color', icon: 'tag', run: () => recolorCalendar(c) },
+        'sep',
+        { label: 'Remove from my calendars', icon: 'x', danger: true, run: () => leaveCalendar(c) },
+      ]
+      : [
+        { label: 'Share…', icon: 'share', run: () => shareCalendar(c) },
+        { label: 'Rename', icon: 'edit', run: () => renameCalendar(c) },
+        { label: 'Change color', icon: 'tag', run: () => recolorCalendar(c) },
+        'sep',
+        { label: 'Delete', icon: 'trash', danger: true, run: () => deleteCalendar(c) },
+      ];
+    const more = h('button.btn.ghost.icon.sm.cal-cal-more', {
+      type: 'button', 'aria-label': `Options for ${c.name}`, 'aria-haspopup': 'menu',
+      onclick: () => menu(more, items),
+    }, icon('more'));
+    const sharedOut = !c.shared_by && (c.shares > 0 || c.public_url);
+    const name = h('span.cal-cal-name',
+      h('span.ellipsis', c.name),
+      c.shared_by && h('span.cal-cal-owner.ellipsis', `${c.shared_by.display_name}${c.writable ? '' : ' · view only'}`));
+    const row = h('div.cal-cal', { role: 'listitem', dataset: { uri: c.uri }, class: state.hidden.has(c.uri) ? 'off' : '' },
+      h('label.cal-cal-label', box, name),
+      sharedOut && h('button.btn.ghost.icon.sm.cal-cal-shared', {
+        type: 'button', title: c.public_url ? 'Shared, with a public link' : 'Shared', 'aria-label': `Sharing of ${c.name}`, onclick: () => shareCalendar(c),
+      }, icon(c.public_url ? 'link' : 'users', 'sm')),
+      more);
+    row.style.setProperty('--cal-color', color);
+    calList.appendChild(row);
   }
 
   function draw() {
@@ -435,7 +497,7 @@ export default async function render(root, ctx) {
     const bar = ev.span;
     const el = h(`button.cal-chip${bar ? '.bar' : '.dot'}`, {
       type: 'button', dataset: { eventId: ev.id, occurrence: ev.key }, title: `${ev.summary}\n${whenText(ev)}`,
-      'aria-label': `${ev.summary || 'Untitled'}, ${whenText(ev)}${ev.recurring ? ', repeats' : ''}`,
+      'aria-label': `${ev.summary || 'Untitled'}, ${whenText(ev)}${stateText(ev)}`,
       onclick: (e) => { e.stopPropagation(); showEvent(ev); },
     },
     !bar && h('span.cal-chip-dot'),
@@ -446,7 +508,7 @@ export default async function render(root, ctx) {
     ev.recurring && icon('repeat', 'sm cal-chip-rep'));
     if (seg?.contL) el.classList.add('cont-l');
     if (seg?.contR) el.classList.add('cont-r');
-    return colorVars(el, ev.color);
+    return inviteClasses(colorVars(el, ev.color), ev);
   }
 
   /** A row of days (a month week or the week view's all-day row) with lane-placed events. */
@@ -538,7 +600,7 @@ export default async function render(root, ctx) {
         const dur = Math.max(sg.b - sg.a, 20);
         const el = h('button.cal-block', {
           type: 'button', dataset: { eventId: ev.id, occurrence: ev.key }, title: `${ev.summary}\n${whenText(ev)}`,
-          'aria-label': `${ev.summary || 'Untitled'}, ${whenText(ev)}${ev.recurring ? ', repeats' : ''}`,
+          'aria-label': `${ev.summary || 'Untitled'}, ${whenText(ev)}${stateText(ev)}`,
           class: dur < 45 ? 'short' : '',
           style: {
             top: `${sg.a / 60 * HOUR_PX}px`, height: `${dur / 60 * HOUR_PX - 2}px`,
@@ -549,7 +611,7 @@ export default async function render(root, ctx) {
         h('span.cal-block-title', ev.component === 'VTODO' && icon('check', 'sm'), ev.summary || 'Untitled', ev.recurring && icon('repeat', 'sm')),
         h('span.cal-block-time', fmtRange(ev.s, ev.e)),
         ev.location && dur >= 60 && h('span.cal-block-loc', ev.location));
-        col.appendChild(colorVars(el, ev.color));
+        col.appendChild(inviteClasses(colorVars(el, ev.color), ev));
       }
       if (sameDay(d, today)) {
         const now = h('div.cal-now', { 'aria-hidden': 'true' });
@@ -610,16 +672,17 @@ export default async function render(root, ctx) {
     else if (sameDay(ev.first, d)) time = `From ${fmtTime(ev.s)}`;
     else if (sameDay(ev.last, d)) time = `Until ${fmtTime(ev.e)}`;
     else time = 'All day';
-    return colorVars(h('button.cal-item', {
+    return inviteClasses(colorVars(h('button.cal-item', {
       type: 'button', dataset: { eventId: ev.id, occurrence: ev.key }, onclick: () => showEvent(ev),
-      'aria-label': `${ev.summary || 'Untitled'}, ${whenText(ev)}${ev.recurring ? ', repeats' : ''}`,
+      'aria-label': `${ev.summary || 'Untitled'}, ${whenText(ev)}${stateText(ev)}`,
     },
     h('span.cal-item-time', time),
     h('span.cal-item-dot'),
     h('span.cal-item-main',
       h('span.cal-item-title', ev.component === 'VTODO' && icon('check', 'sm'), ev.summary || 'Untitled', ev.recurring && icon('repeat', 'sm')),
       (ev.location || ev.first < ev.last) && h('span.cal-item-sub.small.muted', [ev.first < ev.last && `Day ${daysBetween(ev.first, d) + 1} of ${daysBetween(ev.first, ev.last) + 1}`, ev.location].filter(Boolean).join(' · '))),
-    h('span.cal-item-cal.small.muted', ev.calendar_name)), ev.color);
+    ev.cancelled ? h('span.pill.danger.cal-item-state', 'Cancelled') : !ev.shared_by && ev.my_partstat && ev.my_partstat !== 'ACCEPTED' && statusPill(ev.my_partstat),
+    h('span.cal-item-cal.small.muted', ev.calendar_name)), ev.color), ev);
   }
 
   function listView() {
@@ -670,26 +733,47 @@ export default async function render(root, ctx) {
     const info = (ic, ...content) => h('div.cal-info-row', icon(ic, 'sm'), h('div.grow', content));
     const dot = h('span.cal-info-dot');
     dot.style.setProperty('--ev-color', normColor(ev.color));
-    modal({
-      title: ev.summary || 'Untitled',
-      body: h('div.cal-info', { dataset: { eventId: ev.id, occurrence: ev.key } },
+    // An invitation in the user's own calendar (a shared calendar shows the organizer's copy).
+    const invitation = !!ev.my_partstat && !ev.shared_by;
+    const invited = invitation && !ev.cancelled;
+    const answer = invited && rsvpBar(ev, (updated) => {
+      // Show the new answer in this dialog and everywhere else.
+      const fresh = prepare({ ...ev, ...updated, starts_at: ev.starts_at, ends_at: ev.ends_at, recurrence_id: ev.recurrence_id });
+      const people = dialog.querySelector('.cal-people');
+      if (people) people.replaceWith(attendeeList(fresh));
+      loadEvents();
+    });
+    const dialog = h('div.cal-info', { dataset: { eventId: ev.id, occurrence: ev.key } },
+        ev.cancelled && h('p.cal-cancelled-note', icon('x', 'sm'), ev.organizer ? `${ev.organizer.name || ev.organizer.email} cancelled this event.` : 'This event was cancelled.'),
+        answer,
         info('clock', whenText(ev)),
         ev.recurring && info('repeat', 'Repeats', ev.series_start && h('div.small.muted', `Since ${fmt(times(ev.series_start, ev.series_end, ev.all_day).s, { month: 'long', day: 'numeric', year: 'numeric' })}`)),
         ev.tzid && !ev.all_day && ev.tzid !== LOCAL_TZ && info('globe', `Time zone: ${ev.tzid.replaceAll('_', ' ')}`, h('div.small.muted', `${fmtRange(ev.s, ev.e)} in your time zone`)),
         ev.location && info('pin', ev.location),
-        h('div.cal-info-row', dot, h('div.grow', ev.calendar_name)),
+        h('div.cal-info-row', dot, h('div.grow', ev.calendar_name,
+          ev.shared_by && h('div.small.muted', `${ev.shared_by}’s calendar${ev.writable ? '' : ' · view only'}`),
+          ev.created_by && h('div.small.muted', `Added by ${ev.created_by}`))),
         isTask && info('check', 'Task', h('div.small.muted', 'Tasks are shown read-only here; edit them in your tasks app.')),
-        ev.description && h('div.cal-info-desc', ev.description)),
+        ev.attendees?.length > 0 && attendeeList(ev),
+        ev.description && h('div.cal-info-desc', ev.description));
+    modal({
+      title: ev.summary || 'Untitled',
+      body: dialog,
       actions: [
-        { label: 'Delete', kind: 'danger', run: (close) => { close(); deleteEvent(ev); } },
-        !isTask && { label: 'Edit', run: (close) => { close(); openForm(ev); } },
+        ev.writable && { label: invitation ? 'Remove' : 'Delete', kind: 'danger', run: (close) => { close(); deleteEvent(ev); } },
+        !isTask && ev.can_edit && { label: 'Edit', run: (close) => { close(); openForm(ev); } },
         { label: 'Close', kind: 'primary', value: true },
       ].filter(Boolean),
     });
   }
 
   async function deleteEvent(ev) {
-    if (!await confirmDialog('Delete event', `Delete “${ev.summary || 'Untitled'}”${ev.recurring ? ' and all its repetitions' : ''}?`, { confirm: 'Delete', danger: true })) return;
+    const name = `“${ev.summary || 'Untitled'}”${ev.recurring ? ' and all its repetitions' : ''}`;
+    const guests = !ev.my_partstat && ev.attendees?.length ? ' Your guests are told it is cancelled.' : '';
+    const [title, text, confirm] = ev.my_partstat && !ev.shared_by
+      ? ['Remove invitation', `Remove ${name} from your calendar?${ev.cancelled || ev.my_partstat === 'DECLINED' ? '' : ' The organizer is told you declined.'}`, 'Remove']
+      : ['Delete event', `Delete ${name}?${guests}`, 'Delete'];
+    if (!await confirmDialog(title, text, { confirm, danger: true })) return;
     try {
       await api.del(`/api/calendar/events/${encodeURIComponent(ev.id)}`);
       // Deleting removes the whole series: every occurrence shares the id.
@@ -719,9 +803,12 @@ export default async function render(root, ctx) {
     const sTime = h('input', { type: 'time', id: `ev-st-${uid}`, value: timeKey(s0), 'aria-label': 'Start time', step: 300 });
     const eDate = h('input', { type: 'date', id: `ev-ed-${uid}`, value: dayKey(e0), 'aria-label': 'End date', required: true });
     const eTime = h('input', { type: 'time', id: `ev-et-${uid}`, value: timeKey(e0), 'aria-label': 'End time', step: 300 });
-    const visibleCal = state.calendars.find((c) => !state.hidden.has(c.uri)) || state.calendars[0];
+    const writable = state.calendars.filter((c) => c.writable && c.components.split(',').includes('VEVENT'));
+    const visibleCal = writable.find((c) => !c.shared_by && !state.hidden.has(c.uri)) || writable[0];
     const calSel = h('select', { id: `ev-cal-${uid}` },
-      state.calendars.map((c) => h('option', { value: c.uri, selected: editing ? c.uri === ev.calendar : c === visibleCal }, c.name)));
+      writable.map((c) => h('option', { value: c.uri, selected: editing ? c.uri === ev.calendar : c === visibleCal },
+        c.shared_by ? `${c.name} (${c.shared_by.display_name})` : c.name)));
+    const guests = attendeesField(editing ? ev.attendees : [], state.info);
     const loc = h('input', { type: 'text', id: `ev-loc-${uid}`, value: ev?.location || '', placeholder: 'Add a place or link', autocomplete: 'off' });
     const desc = h('textarea', { id: `ev-desc-${uid}`, rows: 3, placeholder: 'Notes' }, ev?.description || '');
     const err = h('div.error-text', { role: 'alert' });
@@ -774,6 +861,7 @@ export default async function render(root, ctx) {
         end: allDay.checked ? utcMidnight(addDays(r.e, 1)) : r.e.toISOString(),
         location: loc.value.trim(),
         description: desc.value.trim(),
+        attendees: guests.value(),
       };
       payload.calendar = calSel.value;
       if (editing) await api.patch(`/api/calendar/events/${encodeURIComponent(ev.id)}`, payload);
@@ -790,6 +878,7 @@ export default async function render(root, ctx) {
         h('div.field', h('label', { for: sDate.id }, 'Starts'), h('div.cal-form-dt', sDate, sTime)),
         h('div.field', h('label', { for: eDate.id }, 'Ends'), h('div.cal-form-dt', eDate, eTime))),
       field('Calendar', calSel),
+      guests.el,
       field('Location', loc),
       field('Description', desc),
       h('button', { type: 'submit', hidden: true, tabindex: '-1', 'aria-hidden': 'true' }),
@@ -802,6 +891,7 @@ export default async function render(root, ctx) {
         { label: 'Cancel', value: null },
         { label: editing ? 'Save' : 'Create', kind: 'primary', run: save },
       ],
+      onClose: guests.close,
     });
     if (saved) {
       await loadEvents();
@@ -836,8 +926,26 @@ export default async function render(root, ctx) {
     }
   }
 
+  async function shareCalendar(c) {
+    await shareCalendarDialog(c, () => loadCalendars().catch(errorToast));
+  }
+
+  async function leaveCalendar(c) {
+    const msg = `Remove “${c.name}” from your calendars? ${c.shared_by.display_name} keeps it; they can share it with you again.`;
+    if (!await confirmDialog('Remove shared calendar', msg, { confirm: 'Remove', danger: true })) return;
+    try {
+      await api.del(`/api/calendar/calendars/${encodeURIComponent(c.uri)}`);
+      state.hidden.delete(c.uri);
+      saveHidden(state.hidden);
+      await reloadAll();
+      toast(`“${c.name}” removed`, 'ok', { timeout: 2500 });
+    } catch (e) {
+      errorToast(e);
+    }
+  }
+
   async function renameCalendar(c) {
-    const name = await promptDialog('Rename calendar', { label: 'Name', value: c.name, confirm: 'Rename' });
+    const name = await promptDialog(c.shared_by ? 'Rename for me' : 'Rename calendar', { label: 'Name', value: c.name, confirm: 'Rename' });
     if (!name || name === c.name) return;
     try {
       await api.patch(`/api/calendar/calendars/${encodeURIComponent(c.uri)}`, { name });

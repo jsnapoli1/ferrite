@@ -32,9 +32,25 @@
 .pub-404 { padding: 36px 28px; }
 .pub-404-code { font-size: 64px; font-weight: 800; letter-spacing: -.04em; line-height: 1; margin-bottom: 10px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
 
+/* invitation response page (/invitation/:token) */
+.inv-card { width: min(560px, 100%); margin: 24px auto 0; }
+.inv-kicker { display: flex; align-items: center; gap: 6px; color: var(--accent); font-weight: 600; margin-bottom: 6px; }
+.inv-title { margin: 0 0 14px; overflow-wrap: anywhere; }
+.inv-details { display: flex; flex-direction: column; gap: 8px; }
+.inv-row { display: flex; gap: 10px; align-items: flex-start; }
+.inv-row > .icon { margin-top: 3px; color: var(--text-3); flex: none; }
+.inv-desc { margin-top: 14px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--surface-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.inv-q { margin: 22px 0 10px; font-size: 15px; }
+.inv-answers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.inv-answers .btn { height: 40px; }
+.inv-status { display: flex; align-items: center; gap: 6px; min-height: 20px; margin: 12px 0 0; color: var(--text-2); }
+.inv-status .icon { color: var(--ok); flex: none; }
+
 @media (max-width: 600px) {
   .pub-bar { padding: 0 16px; }
   .pub-card { padding: 16px; }
   .pub-main { padding: 4px 12px 24px; }
   .pub-head { align-items: flex-start; }
+  .inv-card { margin-top: 8px; }
+  .inv-answers { grid-template-columns: 1fr; }
 }

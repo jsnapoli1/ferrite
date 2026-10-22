@@ -746,7 +746,15 @@ impl Core {
             .as_deref()
             .map(itip::normalize_address)
             .ok_or_else(|| Error::bad("add your email address in Settings to answer invitations"))?;
-        let (cal, o) = self.calendar_object_access(user_id, event_id).await?;
+        let (mut cal, mut o) = self.calendar_object_access(user_id, event_id).await?;
+        if !cal.is_owner() {
+            // Seen in someone else's (shared) calendar: answer in the user's own copy, so the
+            // reply goes to the organizer instead of editing their copy.
+            let own = self.find_by_uid(user_id, &o.uid, false).await?;
+            let (c, own_o) = own.ok_or_else(|| Error::bad("answer the invitation in your own calendar"))?;
+            cal = CalendarRef::owned(c);
+            o = own_o;
+        }
         let mut c = Component::parse(&o.data)?;
         if itip::organizer(&c).is_some_and(|org| org.email == email) {
             return Err(Error::bad("you organize this event"));
@@ -768,15 +776,16 @@ impl Core {
     }
 
     /// A per-attendee token for the public response page: the organizer's account, the
-    /// event's UID and the attendee's address, signed with the server secret.
+    /// event's UID and the attendee's address, signed with the server secret (`~` joins
+    /// the parts: it is URL-safe and, unlike a dot, never taken for a file extension).
     pub fn invitation_token(&self, organizer_id: &str, uid: &str, email: &str) -> String {
         let payload = format!("{organizer_id}\n{uid}\n{email}");
         let tag = self.invitation_mac(payload.as_bytes()).finalize().into_bytes();
-        format!("{}.{}", B64.encode(payload), B64.encode(tag))
+        format!("{}~{}", B64.encode(payload), B64.encode(tag))
     }
 
     fn open_invitation_token(&self, token: &str) -> Result<(String, String, String)> {
-        let (p, t) = token.split_once('.').ok_or(Error::NotFound)?;
+        let (p, t) = token.split_once('~').ok_or(Error::NotFound)?;
         let payload = B64.decode(p).map_err(|_| Error::NotFound)?;
         let tag = B64.decode(t).map_err(|_| Error::NotFound)?;
         self.invitation_mac(&payload).verify_slice(&tag).map_err(|_| Error::NotFound)?;
