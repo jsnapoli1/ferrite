@@ -109,6 +109,7 @@ async fn event_loop(s: AppState, actor: Actor, mut socket: WebSocket) {
     }
     s.core.hub.disconnect(&key, conn);
     s.core.leave_calls_of_connection(&key, conn).await;
+    s.core.lobby_leave_connection(&key, conn).await;
     if let Some(sfu) = &s.sfu {
         for sess in sessions {
             sfu.disconnect(&sess);
@@ -145,6 +146,8 @@ async fn handle_client_event(s: &AppState, actor: &Actor, conn: u64, v: Value) -
                 if !s.core.owns_session(&room_id, &session, &actor.hub_key(), conn) {
                     return Err(Error::Forbidden);
                 }
+                // The lobby may have closed since the session joined.
+                s.core.check_call_session(actor, &room_id).await?;
                 let sfu = s.sfu.as_ref().ok_or_else(|| Error::Unavailable("the SFU is not running on this server".into()))?;
                 let answer = sfu.connect(&room_id, &session, v["sdp"].clone()).map_err(Error::bad)?;
                 Ok(Some(json!({"type": "sfu.answer", "room_id": room_id, "session": session, "sdp": answer})))
@@ -163,6 +166,15 @@ async fn handle_client_event(s: &AppState, actor: &Actor, conn: u64, v: Value) -
                     return Err(Error::Forbidden);
                 }
                 s.core.update_call_state(&room_id, &session, v["audio"].as_bool(), v["video"].as_bool(), v["screen"].as_bool(), v["hand"].as_bool()).await?;
+                Ok(None)
+            }
+            // Someone waiting in a lobby, so moderators see who is there.
+            "lobby.wait" => {
+                s.core.lobby_wait(actor, &str_of("room"), conn).await?;
+                Ok(None)
+            }
+            "lobby.leave" => {
+                s.core.lobby_unwait(actor, &str_of("room"), conn).await?;
                 Ok(None)
             }
             other => Err(Error::bad(format!("unknown event {other}"))),

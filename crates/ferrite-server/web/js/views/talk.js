@@ -4,7 +4,7 @@
 
 import { api } from '../api.js';
 import { live } from '../ws.js';
-import { h, clear, icon, avatar, modal, menu, toast, errorToast, emptyState, spinner } from '../ui.js';
+import { h, clear, icon, avatar, modal, menu, toast, errorToast, emptyState, spinner, promptDialog } from '../ui.js';
 import { roomAvatar, messagePreview, shortTime, userSearch } from './talk-util.js';
 import { createRoomPane } from './talk-chat.js';
 
@@ -143,10 +143,7 @@ export default async function render(root, ctx) {
     if (push) history.pushState({}, '', path);
     if (replace) history.replaceState({}, '', path);
     layout.classList.toggle('has-room', !!token);
-    for (const [t, el] of items) {
-      el.classList.toggle('active', t === token);
-      if (t === token) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current');
-    }
+    markActive(token);
     if (!token) {
       ctx.setTitle('Talk');
       clear(roomHost).appendChild(emptyState('talk', 'Pick a conversation', 'Choose a conversation on the left, or start a new one.',
@@ -163,7 +160,9 @@ export default async function render(root, ctx) {
     }
     if (seq !== openSeq) return;
     const known = rooms.find((r) => r.token === token);
-    if (!known) upsertRoom(view);
+    // Breakout rooms are reached through their main conversation and are not listed.
+    if (view.kind === 'breakout') markActive(view.parent_token);
+    else if (!known) upsertRoom(view);
     else Object.assign(known, view);
     ctx.setTitle(view.display_name);
     const pane = createRoomPane({
@@ -191,9 +190,27 @@ export default async function render(root, ctx) {
         paintList();
         openRoom(null, { push: true });
       },
+      onOpenRoom: (t, o = {}) => openRoom(t, { push: true, query: o.call ? { call: '1' } : {} }),
     });
-    current = { token, pane };
+    current = { token, pane, kind: view.kind };
     clear(roomHost).appendChild(pane.el);
+  }
+
+  function markActive(token) {
+    for (const [t, el] of items) {
+      el.classList.toggle('active', t === token);
+      if (t === token) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current');
+    }
+  }
+
+  /** Joins a public conversation, asking for its password when it has one. */
+  async function joinPublic(token, hasPassword) {
+    let password = null;
+    if (hasPassword) {
+      password = await promptDialog('Password required', { label: 'This conversation is protected by a password', type: 'password', confirm: 'Join' });
+      if (!password) return null;
+    }
+    return (await api.post(`/api/talk/rooms/${encodeURIComponent(token)}/join`, password ? { password } : {})).room;
   }
 
   /** The user isn't in this conversation: offer to join a public one. */
@@ -205,12 +222,13 @@ export default async function render(root, ctx) {
       ? emptyState('globe', info.name, info.description || 'This is a public conversation you have not joined yet.',
         h('button.btn.primary', { onclick: async () => {
           try {
-            const { room } = await api.post(`/api/talk/rooms/${encodeURIComponent(token)}/join`);
+            const room = await joinPublic(token, info.has_password);
+            if (!room) return;
             upsertRoom(room);
             current = null;
             openRoom(token);
           } catch (e) { errorToast(e); }
-        } }, 'Join conversation'))
+        } }, info.has_password ? icon('lock', 'sm') : '', 'Join conversation'))
       : emptyState('talk', 'Conversation not found', err.status === 404 ? 'It may have been deleted, or you are no longer a participant.' : err.message,
         h('button.btn', { onclick: () => openRoom(null, { push: true }) }, 'Back to conversations')));
   }
@@ -295,8 +313,12 @@ export default async function render(root, ctx) {
           for (const r of open) {
             box.appendChild(h('div.list-item', roomAvatar({ ...r, display_name: r.name }),
               h('div.grow', h('div.ellipsis', h('strong', r.name)), r.description ? h('div.small.muted.ellipsis', r.description) : ''),
+              r.has_password ? h('span.muted', { title: 'Needs a password' }, icon('lock', 'sm')) : '',
               h('button.btn.sm.primary', { onclick: async () => {
-                try { close((await api.post(`/api/talk/rooms/${encodeURIComponent(r.token)}/join`)).room); } catch (e) { errorToast(e); }
+                try {
+                  const joined = await joinPublic(r.token, r.has_password);
+                  if (joined) close(joined);
+                } catch (e) { errorToast(e); }
               } }, 'Join')));
           }
         }).catch((e) => { clear(box).appendChild(h('p.error-text', e.message)); });
@@ -343,6 +365,13 @@ export default async function render(root, ctx) {
       patchRoom(r);
     }),
     live.on('talk.rooms_changed', () => reloadSoon()),
+    // Someone in a breakout room asks the moderators (us) for help.
+    live.on('talk.breakout_help', (ev) => {
+      toast(`${ev.actor.name} asks for help in ${ev.room.name}`, 'warn', {
+        timeout: 15000,
+        action: { label: 'Go to room', run: () => openRoom(ev.room.token, { push: true }) },
+      });
+    }),
     live.on('call.joined', (ev) => {
       const r = byId(ev.room_id);
       if (r && !r.call_active) { r.call_active = true; patchRoom(r); }
@@ -360,8 +389,9 @@ export default async function render(root, ctx) {
     reloadTimer = setTimeout(async () => {
       try {
         await loadRooms();
-        // The open conversation was deleted or we were removed from it.
-        if (current && !rooms.some((r) => r.token === current.token)) {
+        // The open conversation was deleted or we were removed from it (breakout rooms are
+        // not listed; their pane follows the main conversation instead).
+        if (current && current.kind !== 'breakout' && !rooms.some((r) => r.token === current.token)) {
           toast('You are no longer in that conversation', 'info');
           openRoom(null, { replace: true });
         }

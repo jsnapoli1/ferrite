@@ -17,6 +17,8 @@ import {
   suggestList, userSearch,
 } from './talk-util.js';
 import { Call } from './talk-call.js';
+import { lobbyActive, openingText, moderationDialog, waitingView, attachCallModeration } from './talk-moderation.js';
+import { createBreakouts } from './talk-breakout.js';
 
 const GROUP_GAP_MS = 5 * 60 * 1000;
 const TYPING_SEND_MS = 3000;
@@ -31,7 +33,8 @@ const plainName = (name) => (name || '?').replace(/\s*\(guest\)$/, '');
  *   token, room,                 // RoomView (guests: {token, name, display_name, description, kind})
  *   self: {id, kind, name, username},
  *   guest, headers, config, rootId, query: {call, message},
- *   onBack(), onRead(roomId, messageId), onRoomChange(patch), onLeft()
+ *   onBack(), onRead(roomId, messageId), onRoomChange(patch), onLeft(),
+ *   onOpenRoom(token, {call, room})   // move to another conversation (breakout rooms)
  * }
  * Returns {el, destroy(), setRoom(patch)}.
  */
@@ -60,6 +63,10 @@ export function createRoomPane(opts) {
   const offs = [];
   let destroyed = false;
   let popover = null;
+  // Lobby: whether we wait in it, and (moderators) who else does.
+  let waiting = false;
+  let lobbyWaiting = [];
+  let sideMode = 'participants';
 
   // ---- skeleton ------------------------------------------------------------------------
   const head = h('header.talk-room-head');
@@ -74,7 +81,16 @@ export function createRoomPane(opts) {
   const chat = h('div.talk-chat', h('div.talk-scroll-wrap', scroller, jumpBtn), typingLine, composer.el);
   const side = h('aside.talk-side', { hidden: true, 'aria-label': 'Participants' });
   const body = h('div.talk-room-body', chat, side);
-  const el = h('section.talk-room', { 'aria-label': room.display_name }, head, banner, callHost, body);
+  const lobbyBanner = h('div.talk-lobby-banner', { hidden: true, role: 'status' });
+  const waitEl = h('div.talk-lobby', { hidden: true });
+  const breakouts = createBreakouts({
+    room, self, guest, tapi, base,
+    isMod: () => isMod(),
+    inCall: () => !!call,
+    onOpenRoom: (t, o) => opts.onOpenRoom?.(t, o),
+    openPanel: () => toggleSide('breakouts', true),
+  });
+  const el = h('section.talk-room', { 'aria-label': room.display_name }, head, lobbyBanner, breakouts.banner, banner, callHost, body, waitEl);
 
   paintHeader();
 
@@ -99,9 +115,12 @@ export function createRoomPane(opts) {
     const sub = [];
     if (room.kind !== 'note_to_self' && room.participant_count) sub.push(`${room.participant_count} ${room.participant_count === 1 ? 'participant' : 'participants'}`);
     if (room.description) sub.push(room.description);
+    // Starting a call may be limited to moderators; joining a running one never is.
+    const mayStart = callMembers.size || room.call_permission !== 'moderators' || isMod();
     const callBtn = h('button.btn.talk-call-btn', {
       'aria-label': callMembers.size ? 'Join call' : 'Start call',
-      disabled: room.kind === 'note_to_self',
+      title: mayStart ? null : 'Only moderators can start a call here',
+      disabled: room.kind === 'note_to_self' || waiting || !mayStart,
       onclick: (e) => menu(e.currentTarget, [
         { label: 'Video call', icon: 'video', run: () => startCall(true) },
         { label: 'Audio only', icon: 'phone', run: () => startCall(false) },
@@ -116,7 +135,7 @@ export function createRoomPane(opts) {
         h('h2.talk-room-title.ellipsis', room.display_name, room.favorite ? h('span.talk-fav', { title: 'Favorite' }, icon('star', 'sm')) : ''),
         sub.length ? h('div.talk-room-sub.ellipsis', { title: room.description || '' }, sub.join(' · ')) : ''),
       callBtn,
-      h('button.btn.ghost.icon', { 'aria-label': 'Participants', title: 'Participants', 'aria-pressed': String(!side.hidden), onclick: toggleSide }, icon('users')),
+      h('button.btn.ghost.icon', { 'aria-label': 'Participants', title: 'Participants', 'aria-pressed': String(!side.hidden && sideMode === 'participants'), disabled: waiting, onclick: () => toggleSide('participants') }, icon('users')),
       guest ? '' : h('button.btn.ghost.icon', { 'aria-label': 'Conversation menu', title: 'More', onclick: (e) => roomMenu(e.currentTarget) }, icon('more')));
     composer.setPlaceholder();
   }
@@ -125,7 +144,9 @@ export function createRoomPane(opts) {
     menu(anchor, [
       isMod() && groupish() && { label: 'Rename', icon: 'edit', run: rename },
       isMod() && groupish() && { label: 'Edit description', icon: 'note', run: editDescription },
-      room.kind !== 'note_to_self' && { label: 'Participants', icon: 'users', run: () => { if (side.hidden) toggleSide(); } },
+      isMod() && groupish() && { label: 'Moderation…', icon: 'lock', run: openModeration },
+      groupish() && !waiting && { label: 'Breakout rooms', icon: 'canvas', run: () => toggleSide('breakouts', true) },
+      room.kind !== 'note_to_self' && !waiting && { label: 'Participants', icon: 'users', run: () => toggleSide('participants', true) },
       { label: 'Notifications…', icon: 'bell', run: () => notifyMenu(anchor) },
       { label: room.favorite ? 'Remove from favorites' : 'Add to favorites', icon: 'star', run: toggleFavorite },
       isMod() && groupish() && { label: room.ai_enabled ? 'Turn assistant off' : 'Turn assistant on', icon: 'assistant', run: () => patchRoom({ ai_enabled: !room.ai_enabled }) },
@@ -157,10 +178,80 @@ export function createRoomPane(opts) {
 
   function applyRoomUpdate(r) {
     const patch = { name: r.name, description: r.description, ai_enabled: r.ai_enabled, read_only: r.read_only };
-    if (room.kind !== 'one_to_one') patch.display_name = r.name;
+    if (room.kind !== 'one_to_one' && room.kind !== 'breakout') patch.display_name = r.name;
     Object.assign(room, patch);
+    applyLobby(r);
     paintHeader();
     opts.onRoomChange?.(patch);
+  }
+
+  // ---- lobby ------------------------------------------------------------------------------
+  async function openModeration() {
+    const r = await moderationDialog({ room, tapi, base });
+    if (r) { applyRoomUpdate(r); toast('Moderation settings saved', 'ok', { timeout: 2000 }); }
+  }
+
+  /** Applies lobby, password and call settings from a room or a talk.lobby event. */
+  function applyLobby(r) {
+    for (const k of ['lobby', 'lobby_timer', 'has_password', 'call_permission']) if (k in r) room[k] = r[k];
+    const blocked = lobbyActive(room) && !isMod();
+    if (blocked && !waiting) enterWaiting();
+    else if (!blocked && waiting) leaveWaiting();
+    if (isMod() && lobbyActive(room)) loadWaiting();
+    paintLobbyBanner();
+  }
+
+  function enterWaiting() {
+    waiting = true;
+    call?.leave();
+    closePopover();
+    side.hidden = true;
+    entries.clear();
+    order.length = 0;
+    clear(list);
+    olderStatus.replaceChildren();
+    hasMore = true;
+    body.hidden = true;
+    clear(waitEl).appendChild(waitingView(room));
+    waitEl.hidden = false;
+    live.send({ type: 'lobby.wait', room: token });
+    paintHeader();
+  }
+
+  function leaveWaiting() {
+    waiting = false;
+    live.send({ type: 'lobby.leave', room: token });
+    waitEl.hidden = true;
+    body.hidden = false;
+    toast('The conversation is open', 'ok', { timeout: 2500 });
+    paintHeader();
+    initialLoad();
+  }
+
+  async function loadWaiting() {
+    try {
+      ({ waiting: lobbyWaiting } = await tapi.get(`${base}/lobby`));
+      paintLobbyBanner();
+      if (!side.hidden && sideMode === 'participants') paintSide();
+    } catch (_) { /* no longer a moderator */ }
+  }
+
+  function paintLobbyBanner() {
+    const show = isMod() && groupish() && lobbyActive(room);
+    lobbyBanner.hidden = !show;
+    if (!show) return;
+    const n = lobbyWaiting.length;
+    clear(lobbyBanner).append(
+      icon('lock', 'sm'),
+      h('div.grow.ellipsis', h('strong', 'Lobby is on'),
+        room.lobby_timer ? ` · opens ${openingText(room.lobby_timer)}` : '',
+        ' · ', h('button.talk-lobby-count', { type: 'button', onclick: () => toggleSide('participants', true) }, n ? `${n} waiting` : 'nobody waiting')),
+      h('button.btn.sm', { onclick: openModeration }, 'Settings'),
+      h('button.btn.sm.primary', { onclick: () => patchModeration({ lobby: false }) }, 'Open lobby'));
+  }
+
+  async function patchModeration(patch) {
+    try { applyRoomUpdate((await tapi.patch(`${base}/moderation`, patch)).room); } catch (e) { errorToast(e); }
   }
 
   async function rename() {
@@ -218,13 +309,23 @@ export function createRoomPane(opts) {
   }
   const reloadParticipants = debounce(loadParticipants, 400);
 
-  function toggleSide() {
-    side.hidden = !side.hidden;
-    if (!side.hidden) { paintSide(); loadParticipants(); }
+  /** Shows the side panel in `mode` (participants or breakouts), or hides it. */
+  function toggleSide(mode = sideMode, open = null) {
+    const show = open === null ? (side.hidden || mode !== sideMode) : open;
+    if (sideMode === 'breakouts' && (mode !== 'breakouts' || !show)) breakouts.closePanel();
+    sideMode = mode;
+    side.hidden = !show;
+    side.setAttribute('aria-label', mode === 'breakouts' ? 'Breakout rooms' : 'Participants');
+    if (show) {
+      paintSide();
+      if (mode === 'participants') loadParticipants();
+      else breakouts.load();
+    }
     paintHeader();
   }
 
   function paintSide() {
+    if (sideMode === 'breakouts') { breakouts.paintPanel(side, () => toggleSide('breakouts', false)); return; }
     const canManage = !guest && isMod() && groupish();
     const add = canManage ? userSearch({
       placeholder: 'Add people…',
@@ -239,10 +340,17 @@ export function createRoomPane(opts) {
       },
     }) : null;
     const roleLabel = { owner: 'Owner', moderator: 'Moderator' };
+    const lobbyList = isMod() && lobbyActive(room) ? h('div.talk-side-lobby',
+      h('div.talk-side-sub', icon('lock', 'sm'), `Waiting in the lobby (${lobbyWaiting.length})`),
+      lobbyWaiting.length
+        ? lobbyWaiting.map((w) => h('div.list-item.talk-person.waiting', avatar(plainName(w.name), { seed: w.id }),
+          h('div.grow.ellipsis', w.name), w.kind === 'guest' ? h('span.pill', 'Guest') : ''))
+        : h('div.small.muted.talk-side-empty', 'Nobody is waiting.')) : '';
     clear(side).append(
       h('div.talk-side-head', h('h3.grow', `Participants (${participants.length})`),
-        h('button.btn.ghost.icon.sm', { 'aria-label': 'Close participants', onclick: toggleSide }, icon('x'))),
+        h('button.btn.ghost.icon.sm', { 'aria-label': 'Close participants', onclick: () => toggleSide('participants', false) }, icon('x'))),
       add ? h('div.talk-side-add', add.el) : '',
+      lobbyList,
       h('div.talk-side-list', participants.map((p) => {
         const me = p.user_id === self.id;
         const actions = [];
@@ -295,6 +403,7 @@ export function createRoomPane(opts) {
         paintHeader();
       },
     });
+    attachCallModeration(call, { isMod, tapi, base });
     callHost.appendChild(call.el);
     el.classList.add('in-call');
     paintBanner();
@@ -309,6 +418,7 @@ export function createRoomPane(opts) {
 
   async function loadCall() {
     try {
+      if (waiting) return;
       const { members } = await tapi.get(`${base}/call`);
       callMembers.clear();
       members.forEach((m) => callMembers.set(m.session, m));
@@ -353,6 +463,7 @@ export function createRoomPane(opts) {
         h('div.msg-head',
           h('span.msg-author', m.actor_name),
           bot ? h('span.pill.info.msg-tag', 'AI') : '',
+          m.meta?.broadcast ? h('span.pill.info.msg-tag', { title: 'Sent to every breakout room' }, 'To all rooms') : '',
           m.actor_kind === 'guest' ? h('span.pill.msg-tag', 'Guest') : '',
           h('time', { datetime: m.created_at, title: dateTime(m.created_at) }, timeOnly(m.created_at))),
         m.parent ? h('button.msg-quote', { type: 'button', title: 'Jump to the original message', onclick: () => jumpTo(m.parent.id) },
@@ -721,7 +832,7 @@ export function createRoomPane(opts) {
         ]),
       }, icon('paperclip'));
     const sendBtn = h('button.btn.primary.icon.talk-send', { type: 'button', 'aria-label': 'Send message', title: 'Send (Enter)', onclick: () => send() }, icon('send'));
-    const readOnlyNote = h('div.talk-readonly.small.muted', { hidden: true }, icon('lock', 'sm'), 'Only moderators can write in this conversation.');
+    const readOnlyNote = h('div.talk-readonly.small.muted', { hidden: true }, icon('lock', 'sm'), h('span.talk-readonly-text'));
     const box = h('div.talk-composer-box', attach, h('div.talk-input-wrap', ta, sug.el), sendBtn);
     const wrap = h('div.talk-composer', replyChip, uploads, readOnlyNote, box, fileInput);
 
@@ -750,6 +861,9 @@ export function createRoomPane(opts) {
         ta.placeholder = room.kind === 'note_to_self' ? 'Write a note…' : `Message ${room.display_name || ''}`.trim();
         const ro = room.read_only && !isMod();
         readOnlyNote.hidden = !ro;
+        readOnlyNote.querySelector('.talk-readonly-text').textContent = room.kind === 'breakout'
+          ? 'This breakout room has ended. Its chat stays readable.'
+          : 'Only moderators can write in this conversation.';
         box.hidden = ro;
       },
       paintReply() {
@@ -892,6 +1006,21 @@ export function createRoomPane(opts) {
       paintTyping();
     }),
     live.on('talk.room_updated', (ev) => { if (ev.room && ev.room.id === roomId) applyRoomUpdate(ev.room); }),
+    live.on('talk.lobby', (ev) => { if (mine(ev)) applyLobby(ev); }),
+    live.on('talk.lobby_waiting', (ev) => {
+      if (!mine(ev)) return;
+      lobbyWaiting = ev.waiting;
+      paintLobbyBanner();
+      if (!side.hidden && sideMode === 'participants') paintSide();
+    }),
+    // What the server did to our call session (moderators' actions on others are in the stage).
+    live.on('call.moderated', (ev) => {
+      if (!mine(ev) || !call || ev.session !== call.session) return;
+      if (ev.action === 'removed') {
+        const video = !!call.state.video;
+        toast(`${ev.by ? ev.by.name : 'A moderator'} removed you from the call`, 'warn', { timeout: 10000, action: { label: 'Rejoin', run: () => startCall(video) } });
+      } else if (ev.action === 'breakout' || ev.action === 'breakout_ended') breakouts.callEnded();
+    }),
     live.on('talk.rooms_changed', () => reloadParticipants()),
     live.on('call.joined', (ev) => {
       if (!mine(ev)) return;
@@ -909,7 +1038,10 @@ export function createRoomPane(opts) {
 
   /** After a reconnect: fetch what we missed and refresh recent messages and the call. */
   async function resync() {
-    if (destroyed || !order.length) return;
+    if (destroyed) return;
+    if (groupish()) await refreshLobby();
+    if (groupish() || room.kind === 'breakout') breakouts.load();
+    if (waiting || !order.length) return;
     try {
       let after = order[order.length - 1];
       for (let i = 0; i < 10; i++) {
@@ -925,9 +1057,18 @@ export function createRoomPane(opts) {
     } catch (_) { /* next reconnect retries */ }
   }
 
+  /** The lobby may have opened or closed while we were offline. */
+  async function refreshLobby() {
+    try {
+      const r = guest ? (await tapi.get(`/api/talk/guest/${encodeURIComponent(token)}`)).room : (await tapi.get(base)).room;
+      applyLobby(r);
+      if (waiting) live.send({ type: 'lobby.wait', room: token });
+    } catch (_) { /* the next reconnect retries */ }
+  }
+
   // ---- initial load ------------------------------------------------------------------------------
-  (async () => {
-    list.appendChild(spinner());
+  async function initialLoad() {
+    clear(list).appendChild(spinner());
     try {
       const [{ messages }] = await Promise.all([tapi.get(`${base}/messages?limit=${PAGE}`), loadParticipants(), loadCall()]);
       if (destroyed) return;
@@ -952,12 +1093,20 @@ export function createRoomPane(opts) {
         } else scrollToBottom();
         markReadSoon();
       });
-      if (opts.query?.call === '1') startCall(true);
+      if (opts.query?.call === '1' && !call) startCall(true);
       if (!document.querySelector('.modal')) composer.focus();
     } catch (e) {
       clear(list).appendChild(h('div.empty', h('p', e.message)));
     }
-  })();
+  }
+
+  if (lobbyActive(room) && !isMod()) enterWaiting();
+  else {
+    initialLoad();
+    if (isMod() && lobbyActive(room)) loadWaiting();
+    paintLobbyBanner();
+  }
+  if (groupish() || room.kind === 'breakout') breakouts.load();
 
   return {
     el,
@@ -965,6 +1114,8 @@ export function createRoomPane(opts) {
     setRoom(patch) { Object.assign(room, patch); paintHeader(); },
     destroy() {
       destroyed = true;
+      if (waiting) live.send({ type: 'lobby.leave', room: token });
+      breakouts.destroy();
       offs.forEach((off) => off());
       ro.disconnect();
       window.removeEventListener('focus', onFocus);

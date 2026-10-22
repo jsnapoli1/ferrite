@@ -4,6 +4,12 @@
 //! seconds per open conversation. Here every event is pushed over one WebSocket per client
 //! from an in-memory hub, and call media flows peer to peer with the server only relaying
 //! signaling, so a small home server can carry many concurrent conversations and calls.
+//!
+//! Moderation (lobby, room passwords, call moderation) and breakout rooms live in the
+//! `moderation` and `breakout` submodules.
+
+pub mod breakout;
+pub mod moderation;
 
 use crate::util::{new_id, now, random_token, sha256_hex, short_token};
 use crate::{Core, Error, Result};
@@ -14,6 +20,7 @@ use serde_json::{Value, json};
 use sqlx::types::Json;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use tokio::sync::broadcast;
 
 pub const BOT_ACTOR_ID: &str = "assistant";
 pub const MAX_MESSAGE_LEN: usize = 32_000;
@@ -30,9 +37,38 @@ pub struct Room {
     pub last_activity_at: DateTime<Utc>,
     pub read_only: bool,
     pub ai_enabled: bool,
+    /// Lobby on: only moderators can read, write and call (until `lobby_timer`, when set).
+    pub lobby: bool,
+    pub lobby_timer: Option<DateTime<Utc>>,
+    /// Public rooms: whether guests and new participants need a password.
+    pub has_password: bool,
+    /// Who may start a call: "everyone" or "moderators".
+    pub call_permission: String,
+    /// Breakout rooms: the main conversation they belong to.
+    pub parent_id: Option<String>,
+    /// Main conversations: how people are assigned to breakout rooms (none when there are none).
+    pub breakout_mode: Option<String>,
+    pub breakout_status: String,
+    pub breakout_ends_at: Option<DateTime<Utc>>,
+    /// Breakout rooms: when someone in it asked the moderators for help.
+    pub help_requested_at: Option<DateTime<Utc>>,
 }
 
-const ROOM_COLS: &str = "id, token, kind, name, description, created_by, created_at, last_activity_at, read_only, ai_enabled";
+const ROOM_COLS: &str = "id, token, kind, name, description, created_by, created_at, last_activity_at, read_only, ai_enabled, \
+                         lobby, lobby_timer, password_hash IS NOT NULL AS has_password, call_permission, parent_id, breakout_mode, \
+                         breakout_status, breakout_ends_at, help_requested_at";
+
+impl Room {
+    /// Whether the lobby currently holds back non-moderators (a passed timer counts as open,
+    /// even before the background sweep has switched the lobby off).
+    pub fn lobby_active(&self) -> bool {
+        self.lobby && self.lobby_timer.is_none_or(|t| t > now())
+    }
+    /// Group-like rooms, where moderation, lobby and breakout rooms apply.
+    pub fn is_groupish(&self) -> bool {
+        matches!(self.kind.as_str(), "group" | "public")
+    }
+}
 
 /// A room as one participant sees it.
 #[derive(Debug, Clone, Serialize)]
@@ -49,6 +85,9 @@ pub struct RoomView {
     pub last_message: Option<Message>,
     pub participant_count: i64,
     pub call_active: bool,
+    /// Breakout rooms: the main conversation's token and name.
+    pub parent_token: Option<String>,
+    pub parent_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -155,16 +194,54 @@ pub struct CallMember {
     pub video: bool,
     pub screen: bool,
     pub hand: bool,
+    /// When the hand went up: raised hands are a queue ordered by this.
+    pub hand_raised_at: Option<DateTime<Utc>>,
     pub joined_at: DateTime<Utc>,
 }
 
+/// Who receives a room's events, cached until membership, roles or the lobby change.
+pub struct Audience {
+    /// Hub keys of every participant and guest.
+    pub all: Vec<String>,
+    /// Hub keys of owners and moderators (the only receivers while the lobby is on).
+    pub moderators: Vec<String>,
+    lobby: bool,
+    lobby_timer: Option<DateTime<Utc>>,
+}
+
+impl Audience {
+    /// The receivers of ordinary room events right now.
+    pub fn current(&self) -> &[String] {
+        if self.lobby && self.lobby_timer.is_none_or(|t| t > now()) {
+            &self.moderators
+        } else {
+            &self.all
+        }
+    }
+}
+
 /// In-memory state shared by the Talk service.
-#[derive(Default)]
 pub struct TalkState {
-    /// room id -> hub keys of everyone who should receive room events.
-    audience: DashMap<String, Arc<Vec<String>>>,
+    /// room id -> everyone who should receive room events.
+    audience: DashMap<String, Arc<Audience>>,
     /// room id -> active call members.
     calls: DashMap<String, Vec<CallMember>>,
+    /// room id -> people waiting in the lobby (one entry per connection).
+    waiting: DashMap<String, Vec<(Actor, u64)>>,
+    /// Call sessions the server ended (moderation, lobby, breakout rooms), so the SFU can
+    /// drop their media connections.
+    ended: broadcast::Sender<String>,
+}
+
+impl Default for TalkState {
+    fn default() -> Self {
+        Self {
+            audience: DashMap::new(),
+            calls: DashMap::new(),
+            waiting: DashMap::new(),
+            ended: broadcast::channel(256).0,
+        }
+    }
 }
 
 fn mention_names(body: &str) -> Vec<String> {
@@ -214,6 +291,17 @@ impl Core {
             return Err(Error::NotFound);
         }
         Ok(room)
+    }
+
+    /// Whether an actor moderates a room (owners and moderators; never guests or bots).
+    pub async fn is_moderator(&self, actor: &Actor, room: &Room) -> Result<bool> {
+        if actor.kind != "user" {
+            return Ok(false);
+        }
+        Ok(matches!(
+            self.participant_role(&room.id, &actor.id).await?.as_deref(),
+            Some("owner" | "moderator")
+        ))
     }
 
     async fn require_moderator(&self, room: &Room, user_id: &str) -> Result<()> {
@@ -344,7 +432,14 @@ impl Core {
         self.room(&id).await
     }
 
+    /// The user's conversations. Breakout rooms are reached through their main conversation,
+    /// so they are not listed.
     pub async fn list_rooms(&self, user_id: &str) -> Result<Vec<RoomView>> {
+        self.room_views(user_id, None).await
+    }
+
+    /// Views of the user's rooms: all listed ones, or only the room `only` (any kind).
+    async fn room_views(&self, user_id: &str, only: Option<&str>) -> Result<Vec<RoomView>> {
         #[derive(sqlx::FromRow)]
         struct Row {
             id: String,
@@ -361,21 +456,30 @@ impl Core {
                         AND m.deleted = 0 AND m.actor_id != p.user_id AND m.kind != 'system') AS unread,
                     (SELECT COUNT(*) FROM participants p2 WHERE p2.room_id = r.id) AS participant_count
              FROM rooms r JOIN participants p ON p.room_id = r.id
-             WHERE p.user_id = ? ORDER BY p.favorite DESC, r.last_activity_at DESC",
+             WHERE p.user_id = ?1 AND ((?2 IS NULL AND r.kind != 'breakout') OR r.id = ?2)
+             ORDER BY p.favorite DESC, r.last_activity_at DESC",
         )
         .bind(user_id)
+        .bind(only)
         .fetch_all(&self.db)
         .await?;
         let me = self.user(user_id).await?;
         let mut out = Vec::with_capacity(rows.len());
-        for row in rows {
+        for mut row in rows {
             let room = self.room(&row.id).await?;
-            let last_message: Option<Message> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-                "SELECT {MSG_COLS} FROM messages WHERE room_id = ? ORDER BY id DESC LIMIT 1"
-            )))
-            .bind(&room.id)
-            .fetch_optional(&self.db)
-            .await?;
+            // Someone waiting in the lobby sees the conversation but nothing of its history.
+            let waiting = room.lobby_active() && !matches!(row.role.as_str(), "owner" | "moderator");
+            let last_message: Option<Message> = if waiting {
+                row.unread = 0;
+                None
+            } else {
+                sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                    "SELECT {MSG_COLS} FROM messages WHERE room_id = ? ORDER BY id DESC LIMIT 1"
+                )))
+                .bind(&room.id)
+                .fetch_optional(&self.db)
+                .await?
+            };
             let unread_mention = if row.unread > 0 {
                 // LIKE narrows the candidates; `mentions` then applies the same token rules as the
                 // web client so `@bobby` is not a mention of `bob`.
@@ -393,6 +497,10 @@ impl Core {
             };
             let display_name = self.room_display_name(&room, user_id).await?;
             let call_active = self.talk.calls.get(&room.id).is_some_and(|c| !c.is_empty());
+            let parent = match &room.parent_id {
+                Some(pid) => self.room(pid).await.ok(),
+                None => None,
+            };
             out.push(RoomView {
                 display_name,
                 role: row.role,
@@ -404,6 +512,8 @@ impl Core {
                 last_message,
                 participant_count: row.participant_count,
                 call_active,
+                parent_token: parent.as_ref().map(|p| p.token.clone()),
+                parent_name: parent.map(|p| p.name),
                 room,
             });
         }
@@ -412,11 +522,7 @@ impl Core {
 
     pub async fn room_view(&self, user_id: &str, token: &str) -> Result<RoomView> {
         let room = self.room_for(user_id, token).await?;
-        self.list_rooms(user_id)
-            .await?
-            .into_iter()
-            .find(|r| r.room.id == room.id)
-            .ok_or(Error::NotFound)
+        self.room_views(user_id, Some(&room.id)).await?.pop().ok_or(Error::NotFound)
     }
 
     pub async fn room_display_name(&self, room: &Room, viewer_id: &str) -> Result<String> {
@@ -505,13 +611,15 @@ impl Core {
         Ok(())
     }
 
-    /// Joins a public room as a user.
-    pub async fn join_public(&self, user_id: &str, token: &str) -> Result<Room> {
+    /// Joins a public room as a user. A password-protected room needs its password, unless the
+    /// user is already a participant.
+    pub async fn join_public(&self, user_id: &str, token: &str, password: Option<&str>) -> Result<Room> {
         let room = self.room_by_token(token).await?;
         if room.kind != "public" {
             return Err(Error::NotFound);
         }
         if self.participant_role(&room.id, user_id).await?.is_none() {
+            self.check_room_password(&room, password).await?;
             self.add_participant_internal(&room.id, user_id, "member").await?;
             let u = self.user(user_id).await?;
             self.post_system(&room.id, &format!("{} joined", u.display_name)).await?;
@@ -530,6 +638,9 @@ impl Core {
             .execute(&self.db)
             .await?;
         self.talk.audience.remove(&room.id);
+        // Leaving a conversation also leaves its call and its breakout rooms.
+        self.end_actor_calls(&room.id, "user", user_id, "removed").await;
+        self.leave_breakouts(&room, user_id).await?;
         self.hub.publish([user_id], &json!({"type": "talk.rooms_changed"}));
         let u = self.user(user_id).await?;
         let text = if actor_id == user_id {
@@ -561,6 +672,10 @@ impl Core {
             .bind(user_id)
             .execute(&self.db)
             .await?;
+        self.talk.audience.remove(&room.id);
+        // Moderators of a main conversation moderate its breakout rooms too.
+        self.sync_breakout_moderators(&room).await?;
+        self.hub.publish([user_id], &json!({"type": "talk.rooms_changed"}));
         Ok(())
     }
 
@@ -634,54 +749,100 @@ impl Core {
 
     pub async fn delete_room(&self, actor_id: &str, token: &str) -> Result<()> {
         let room = self.room_for(actor_id, token).await?;
+        if room.kind == "breakout" {
+            return Err(Error::bad("breakout rooms are removed from their main conversation"));
+        }
         if self.participant_role(&room.id, actor_id).await?.as_deref() != Some("owner") {
             return Err(Error::Forbidden);
         }
         let audience = self.room_audience(&room.id).await?;
-        sqlx::query("DELETE FROM fts WHERE object_kind = 'message' AND scope = ?")
+        // Breakout rooms go with their main conversation (the foreign key cascades).
+        let mut ids: Vec<String> = sqlx::query_scalar("SELECT id FROM rooms WHERE parent_id = ?")
             .bind(&room.id)
-            .execute(&self.db)
+            .fetch_all(&self.db)
             .await?;
+        ids.push(room.id.clone());
+        for id in &ids {
+            self.end_room_calls(id, "ended").await;
+            sqlx::query("DELETE FROM fts WHERE object_kind = 'message' AND scope = ?")
+                .bind(id)
+                .execute(&self.db)
+                .await?;
+        }
         sqlx::query("DELETE FROM rooms WHERE id = ?").bind(&room.id).execute(&self.db).await?;
-        self.talk.audience.remove(&room.id);
-        self.talk.calls.remove(&room.id);
-        self.hub.publish(audience.iter().map(String::as_str), &json!({"type": "talk.rooms_changed"}));
+        for id in &ids {
+            self.talk.audience.remove(id);
+            self.talk.waiting.remove(id);
+        }
+        self.hub
+            .publish(audience.all.iter().map(String::as_str), &json!({"type": "talk.rooms_changed"}));
         Ok(())
     }
 
-    /// Hub keys of participants and guests of a room (cached until membership changes).
-    pub async fn room_audience(&self, room_id: &str) -> Result<Arc<Vec<String>>> {
+    /// Participants and guests of a room (cached until membership, roles or the lobby
+    /// change). Guests of a main conversation reach the breakout room they are assigned to.
+    pub async fn room_audience(&self, room_id: &str) -> Result<Arc<Audience>> {
         if let Some(a) = self.talk.audience.get(room_id) {
             return Ok(a.clone());
         }
-        let mut keys: Vec<String> = sqlx::query_scalar("SELECT user_id FROM participants WHERE room_id = ?")
+        let members: Vec<(String, String)> = sqlx::query_as("SELECT user_id, role FROM participants WHERE room_id = ?")
             .bind(room_id)
             .fetch_all(&self.db)
             .await?;
-        let guests: Vec<String> = sqlx::query_scalar("SELECT id FROM guests WHERE room_id = ?")
+        let guests: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM guests WHERE room_id = ?1
+             UNION SELECT actor_id FROM breakout_assignments WHERE room_id = ?1 AND actor_kind = 'guest'",
+        )
+        .bind(room_id)
+        .fetch_all(&self.db)
+        .await?;
+        let (lobby, lobby_timer): (bool, Option<DateTime<Utc>>) = sqlx::query_as("SELECT lobby, lobby_timer FROM rooms WHERE id = ?")
             .bind(room_id)
-            .fetch_all(&self.db)
-            .await?;
-        keys.extend(guests.into_iter().map(|g| format!("guest:{g}")));
-        let arc = Arc::new(keys);
+            .fetch_optional(&self.db)
+            .await?
+            .unwrap_or((false, None));
+        let moderators = members
+            .iter()
+            .filter(|(_, role)| role == "owner" || role == "moderator")
+            .map(|(u, _)| u.clone())
+            .collect();
+        let mut all: Vec<String> = members.into_iter().map(|(u, _)| u).collect();
+        all.extend(guests.into_iter().map(|g| format!("guest:{g}")));
+        let arc = Arc::new(Audience {
+            all,
+            moderators,
+            lobby,
+            lobby_timer,
+        });
         self.talk.audience.insert(room_id.to_string(), arc.clone());
         Ok(arc)
     }
 
+    /// Sends a room event to everyone who may follow the room right now (only moderators
+    /// while the lobby is on).
     pub async fn publish_room(&self, room_id: &str, event: &Value) -> Result<()> {
         let audience = self.room_audience(room_id).await?;
-        self.hub.publish(audience.iter().map(String::as_str), event);
+        self.hub.publish(audience.current().iter().map(String::as_str), event);
+        Ok(())
+    }
+
+    /// Sends a room event to every participant and guest, waiting or not.
+    pub async fn publish_room_all(&self, room_id: &str, event: &Value) -> Result<()> {
+        let audience = self.room_audience(room_id).await?;
+        self.hub.publish(audience.all.iter().map(String::as_str), event);
         Ok(())
     }
 
     // ---- guests --------------------------------------------------------------
 
-    /// Creates a guest identity for a public room. Returns (actor, secret).
-    pub async fn create_guest(&self, token: &str, display_name: &str) -> Result<(Actor, Room, String)> {
+    /// Creates a guest identity for a public room (which may need its password). Returns
+    /// (actor, room, secret).
+    pub async fn create_guest(&self, token: &str, display_name: &str, password: Option<&str>) -> Result<(Actor, Room, String)> {
         let room = self.room_by_token(token).await?;
         if room.kind != "public" {
             return Err(Error::NotFound);
         }
+        self.check_room_password(&room, password).await?;
         let name = display_name.trim();
         if name.is_empty() || name.len() > 64 {
             return Err(Error::bad("guest name must be 1-64 characters"));
@@ -726,16 +887,30 @@ impl Core {
         ))
     }
 
-    /// Checks that an actor may read/write a room.
+    /// Checks that an actor may read/write a room: a participant (or guest) of it, and not
+    /// held back by its lobby.
     pub async fn actor_in_room(&self, actor: &Actor, room: &Room) -> Result<()> {
+        self.actor_member_of(actor, room).await?;
+        if room.lobby_active() && !matches!(actor.kind.as_str(), "bot" | "system") && !self.is_moderator(actor, room).await? {
+            return Err(Error::Forbidden);
+        }
+        Ok(())
+    }
+
+    /// Checks that an actor belongs to a room, ignoring the lobby. Guests belong to their
+    /// public room and to the breakout room of it they are assigned to.
+    pub async fn actor_member_of(&self, actor: &Actor, room: &Room) -> Result<()> {
         match actor.kind.as_str() {
             "user" => self.participant_role(&room.id, &actor.id).await?.map(|_| ()).ok_or(Error::NotFound),
             "guest" => {
-                let ok: Option<String> = sqlx::query_scalar("SELECT id FROM guests WHERE id = ? AND room_id = ?")
-                    .bind(&actor.id)
-                    .bind(&room.id)
-                    .fetch_optional(&self.db)
-                    .await?;
+                let ok: Option<String> = sqlx::query_scalar(
+                    "SELECT id FROM guests WHERE id = ?1 AND room_id = ?2
+                     UNION SELECT actor_id FROM breakout_assignments WHERE actor_kind = 'guest' AND actor_id = ?1 AND room_id = ?2",
+                )
+                .bind(&actor.id)
+                .bind(&room.id)
+                .fetch_optional(&self.db)
+                .await?;
                 ok.map(|_| ()).ok_or(Error::NotFound)
             }
             "bot" | "system" => Ok(()),
@@ -1056,7 +1231,7 @@ impl Core {
         let audience = self.room_audience(&room.id).await?;
         let me = actor.hub_key();
         self.hub.publish(
-            audience.iter().filter(|k| **k != me).map(String::as_str),
+            audience.current().iter().filter(|k| **k != me).map(String::as_str),
             &json!({"type": "talk.typing", "room_id": room.id, "actor": actor}),
         );
         Ok(())
@@ -1180,6 +1355,8 @@ impl Core {
     pub async fn join_call(&self, actor: &Actor, token: &str, conn: u64, audio: bool, video: bool) -> Result<(String, Vec<CallMember>, Room)> {
         let room = self.room_by_token(token).await?;
         self.actor_in_room(actor, &room).await?;
+        // Who may start a call, and breakout rooms (which only call while they run).
+        self.check_call_allowed(actor, &room).await?;
         let session = short_token(16);
         let member = CallMember {
             session: session.clone(),
@@ -1189,6 +1366,7 @@ impl Core {
             video,
             screen: false,
             hand: false,
+            hand_raised_at: None,
             joined_at: now(),
         };
         let (others, started) = {
@@ -1271,6 +1449,11 @@ impl Core {
                 m.screen = s;
             }
             if let Some(h) = hand {
+                if h && !m.hand {
+                    m.hand_raised_at = Some(now());
+                } else if !h {
+                    m.hand_raised_at = None;
+                }
                 m.hand = h;
             }
             m.clone()

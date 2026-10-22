@@ -93,10 +93,15 @@ impl Core {
     }
 
     async fn access(&self, user_id: &str) -> Result<Access> {
-        let rooms: Vec<String> = sqlx::query_scalar("SELECT room_id FROM participants WHERE user_id = ?")
-            .bind(user_id)
-            .fetch_all(&self.db)
-            .await?;
+        // Messages of rooms whose lobby holds the user back stay hidden.
+        let rooms: Vec<String> = sqlx::query_scalar(
+            "SELECT p.room_id FROM participants p JOIN rooms r ON r.id = p.room_id WHERE p.user_id = ?
+               AND (r.lobby = 0 OR (r.lobby_timer IS NOT NULL AND r.lobby_timer <= ?) OR p.role IN ('owner', 'moderator'))",
+        )
+        .bind(user_id)
+        .bind(crate::util::now())
+        .fetch_all(&self.db)
+        .await?;
         Ok(Access {
             rooms,
             boards: self.accessible_board_ids(user_id).await?,

@@ -10,6 +10,8 @@ use ferrite_core::boards::CardUpdate;
 use ferrite_core::collab::{DocKind, codec};
 use ferrite_core::files::{Node, WriteOpts, perm};
 use ferrite_core::shares::NewShare;
+use ferrite_core::talk::breakout::Assignment;
+use ferrite_core::talk::moderation::ModerationUpdate;
 use ferrite_core::talk::{Actor, NewMessage};
 use ferrite_core::util::short_token;
 use ferrite_core::{Core, Error};
@@ -131,6 +133,21 @@ fn definitions() -> &'static Vec<Tool> {
             Tool::new("talk_react", "React", "Add an emoji reaction to a message.", &[("message_id", "integer", "Message id", true), ("emoji", "string", "Emoji", true)]),
             Tool::new("talk_poll", "Create poll", "Post a poll in a conversation.", &[("room", "string", "Room token or name", true), ("question", "string", "Question", true), ("options", "string[]", "2-20 answers", true), ("multiple", "boolean", "Allow several answers", false)]),
             Tool::new("talk_search", "Search messages", "Full text search over messages in your conversations.", &[("query", "string", "Words to search for", true)]).read_only(),
+            Tool::new("talk_lobby", "Lobby", "Turn the lobby of a group or public conversation you moderate on or off. While it is on, only moderators can read, write and call; everyone else waits until it opens.", &[
+                ("room", "string", "Room token or name", true),
+                ("enabled", "boolean", "true to hold people in the lobby, false to let everyone in", true),
+                ("opens_at", "string", "With enabled: when the lobby opens by itself (RFC 3339, e.g. 2026-11-05T14:00:00Z)", false),
+            ]),
+            Tool::new("talk_breakouts", "Breakout rooms", "The breakout rooms of a conversation: mode, whether they run, and who is in which room.", &[("room", "string", "Room token or name", true)]).read_only(),
+            Tool::new("talk_breakouts_start", "Start breakout rooms", "Split a conversation you moderate into breakout rooms and start them: participants move into their room's chat and call. Replaces earlier breakout rooms and their chats.", &[
+                ("room", "string", "Room token or name", true),
+                ("count", "integer", "Number of breakout rooms (1-20)", true),
+                ("mode", "string", "auto (spread people evenly, default), manual (use `assignments`) or free (participants pick a room)", false),
+                ("assignments", "object", "manual mode: username -> breakout room number (1-based), e.g. {\"bob\": 1, \"carol\": 2}", false),
+                ("minutes", "integer", "Stop automatically after this many minutes", false),
+            ]),
+            Tool::new("talk_breakouts_stop", "Stop breakout rooms", "Stop the running breakout rooms of a conversation and bring everyone back to the main room. Their chats stay readable.", &[("room", "string", "Room token or name", true)]),
+            Tool::new("talk_breakouts_broadcast", "Message all breakout rooms", "Post a message into every running breakout room of a conversation you moderate.", &[("room", "string", "Room token or name", true), ("text", "string", "Message (Markdown)", true)]),
             // Boards
             Tool::new("boards_list", "List boards", "Your kanban boards.", &[]).read_only(),
             Tool::new("boards_get", "Get board", "A board with its stacks (columns), cards, labels and members.", &[("board", "string", "Board id or title", true)]).read_only(),
@@ -568,6 +585,72 @@ impl FerriteTools {
                     )
                     .await?;
                 Ok(ToolResult::json(json!({"posted": m.message.id})))
+            }
+            "talk_lobby" => {
+                let room = self.room(ctx, s(a, "room")?).await?;
+                let enabled = a.get("enabled").and_then(Value::as_bool).ok_or_else(|| Error::bad("`enabled` is required"))?;
+                let timer = match opt(a, "opens_at") {
+                    Some(t) if enabled => Some(
+                        DateTime::parse_from_rfc3339(t)
+                            .map_err(|_| Error::bad("opens_at must be RFC 3339, e.g. 2026-11-05T14:00:00Z"))?
+                            .with_timezone(&Utc),
+                    ),
+                    _ => None,
+                };
+                let r = core
+                    .update_moderation(
+                        uid,
+                        &room.token,
+                        ModerationUpdate {
+                            lobby: Some(enabled),
+                            lobby_timer: Some(timer),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                let waiting: Vec<String> = core.waiting_in_lobby(&r.id).into_iter().map(|w| w.name).collect();
+                Ok(ToolResult::json(
+                    json!({"room": r.token, "lobby": r.lobby_active(), "opens_at": r.lobby_timer, "waiting": waiting}),
+                ))
+            }
+            "talk_breakouts" => {
+                let room = self.room(ctx, s(a, "room")?).await?;
+                Ok(ToolResult::json(
+                    serde_json::to_value(core.breakouts(&Self::me(ctx), &room.token).await?).unwrap_or_default(),
+                ))
+            }
+            "talk_breakouts_start" => {
+                let room = self.room(ctx, s(a, "room")?).await?;
+                let count = a.get("count").and_then(Value::as_u64).ok_or_else(|| Error::bad("`count` is required"))? as usize;
+                let mode = opt(a, "mode").unwrap_or("auto");
+                let view = core.configure_breakouts(uid, &room.token, mode, count).await?;
+                if let Some(map) = a.get("assignments").and_then(Value::as_object) {
+                    let mut list = Vec::new();
+                    for (username, n) in map {
+                        let user = core.user_by_name(username).await.map_err(|_| Error::bad(format!("no user {username}")))?;
+                        let n = n.as_u64().filter(|n| *n >= 1 && (*n as usize) <= view.rooms.len());
+                        let n = n.ok_or_else(|| Error::bad(format!("{username}: room number must be 1-{}", view.rooms.len())))?;
+                        list.push(Assignment {
+                            kind: "user".into(),
+                            id: user.id,
+                            room: Some(view.rooms[n as usize - 1].token.clone()),
+                        });
+                    }
+                    core.assign_breakouts(uid, &room.token, &list).await?;
+                }
+                let minutes = a.get("minutes").and_then(Value::as_i64);
+                let view = core.start_breakouts(uid, &room.token, minutes).await?;
+                Ok(ToolResult::json(serde_json::to_value(view).unwrap_or_default()))
+            }
+            "talk_breakouts_stop" => {
+                let room = self.room(ctx, s(a, "room")?).await?;
+                core.stop_breakouts(Some(uid), &room.token).await?;
+                Ok(ToolResult::text("Stopped the breakout rooms; everyone is back in the main conversation."))
+            }
+            "talk_breakouts_broadcast" => {
+                let room = self.room(ctx, s(a, "room")?).await?;
+                let n = core.broadcast_to_breakouts(uid, &room.token, s(a, "text")?).await?;
+                Ok(ToolResult::text(format!("Posted in {n} breakout {}.", if n == 1 { "room" } else { "rooms" })))
             }
             "talk_search" => {
                 let hits = core.search(uid, s(a, "query")?, Some(&["message"]), 25).await?;

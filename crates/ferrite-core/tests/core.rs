@@ -463,7 +463,7 @@ async fn talk_rooms_messages_calls() {
 
     // Guests in public rooms.
     let public = core.create_room(&a, "public", "Open house", &[]).await.unwrap();
-    let (guest, _, secret) = core.create_guest(&public.token, "Dana").await.unwrap();
+    let (guest, _, secret) = core.create_guest(&public.token, "Dana", None).await.unwrap();
     let (g2, _) = core.resolve_guest(&secret).await.unwrap();
     assert_eq!(guest, g2);
     core.post_message(
@@ -476,7 +476,7 @@ async fn talk_rooms_messages_calls() {
     )
     .await
     .unwrap();
-    assert!(core.create_guest(&room.token, "Eve").await.is_err(), "group rooms reject guests");
+    assert!(core.create_guest(&room.token, "Eve", None).await.is_err(), "group rooms reject guests");
 }
 
 #[tokio::test]
