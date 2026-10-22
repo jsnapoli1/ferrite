@@ -1140,6 +1140,7 @@ dependencies = [
  "dashmap",
  "futures",
  "hex",
+ "hmac 0.13.0",
  "lettre",
  "mime_guess",
  "parking_lot 0.13.0",

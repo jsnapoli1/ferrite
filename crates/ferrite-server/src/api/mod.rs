@@ -1,6 +1,7 @@
 //! JSON API used by the web UI (and scripts with app tokens).
 
 pub mod boards;
+pub mod calendar_sharing;
 pub mod files;
 pub mod groupware;
 pub mod push;
@@ -64,6 +65,7 @@ pub fn router() -> Router<AppState> {
         .merge(groupware::router())
         .merge(security::router())
         .merge(push::router())
+        .merge(calendar_sharing::router())
         .route("/api/{*rest}", get(not_found).post(not_found).put(not_found).patch(not_found).delete(not_found))
 }
 

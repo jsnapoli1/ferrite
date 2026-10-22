@@ -25,13 +25,27 @@ fn ok() -> Json<Value> {
     Json(json!({"ok": true}))
 }
 
+/// The user's calendars and those shared with them (with `shared_by`, `access` and
+/// `writable`); own calendars also tell how many shares they have and their public link.
 async fn calendars(State(s): State<AppState>, auth: Auth) -> ApiResult<Json<Value>> {
     auth.require_scope("groupware")?;
     let base = format!("{}/remote.php/dav/", s.core.config.public_url);
+    let mut calendars = Vec::new();
+    for cal in s.core.user_calendars(&auth.user.id).await? {
+        let mut v = serde_json::to_value(&cal).map_err(ferrite_core::Error::from)?;
+        if cal.is_owner() {
+            v["shares"] = json!(s.core.calendar_shares(&auth.user.id, &cal.collection.uri).await?.len());
+            v["public_url"] = json!(s.core.calendar_publication(&auth.user.id, &cal.collection.uri).await?);
+        }
+        calendars.push(v);
+    }
     Ok(Json(json!({
-        "calendars": s.core.dav_collections(&auth.user.id, KIND_CALENDAR).await?,
+        "calendars": calendars,
         "addressbooks": s.core.dav_collections(&auth.user.id, KIND_ADDRESSBOOK).await?,
         "dav_url": base,
+        // Invitations to people without an account go out by email only when [smtp] is set.
+        "can_email": s.core.mail_configured(),
+        "email": auth.user.email,
     })))
 }
 
@@ -71,17 +85,29 @@ struct CalendarUpdate {
     color: Option<String>,
 }
 
+/// Renames or recolours a calendar; for a calendar shared with the user, only for them.
 async fn update_calendar(State(s): State<AppState>, auth: Auth, Path(uri): Path<String>, Json(b): Json<CalendarUpdate>) -> ApiResult<Json<Value>> {
     auth.require_scope("groupware")?;
-    let c = s.core.dav_collection(&auth.user.id, KIND_CALENDAR, &uri).await?;
-    s.core.update_dav_collection(&c, b.name.as_deref(), b.color.as_deref()).await?;
+    let cal = s.core.calendar_ref(&auth.user.id, &uri).await?;
+    if cal.is_owner() {
+        s.core.update_dav_collection(&cal.collection, b.name.as_deref(), b.color.as_deref()).await?;
+    } else {
+        s.core
+            .set_shared_calendar_prefs(&auth.user.id, &cal, b.name.as_deref(), b.color.as_deref())
+            .await?;
+    }
     Ok(ok())
 }
 
+/// Deletes the user's calendar, or removes a calendar shared with them from their list.
 async fn delete_calendar(State(s): State<AppState>, auth: Auth, Path(uri): Path<String>) -> ApiResult<Json<Value>> {
     auth.require_scope("groupware")?;
-    let c = s.core.dav_collection(&auth.user.id, KIND_CALENDAR, &uri).await?;
-    s.core.delete_dav_collection(&c).await?;
+    let cal = s.core.calendar_ref(&auth.user.id, &uri).await?;
+    if cal.is_owner() {
+        s.core.delete_dav_collection(&cal.collection).await?;
+    } else {
+        s.core.leave_shared_calendar(&auth.user.id, &cal).await?;
+    }
     Ok(ok())
 }
 

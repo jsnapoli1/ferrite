@@ -242,7 +242,7 @@ pub fn parse_object(text: &str) -> Result<Parsed> {
 }
 
 /// Folds a content line at 75 octets (RFC 5545 §3.1).
-fn fold(line: &str) -> String {
+pub(crate) fn fold(line: &str) -> String {
     let mut out = String::new();
     let mut count = 0;
     for c in line.chars() {
@@ -281,6 +281,10 @@ pub struct EventInput {
     /// Calendar uri (default: the first calendar). On update, a different calendar moves the event.
     #[serde(default)]
     pub calendar: Option<String>,
+    /// People to invite ("ada@example.org" or "Ada Lovelace <ada@example.org>"); the user is
+    /// the organizer. On update, None keeps the current attendees and a list replaces them.
+    #[serde(default)]
+    pub attendees: Option<Vec<String>>,
 }
 
 pub fn build_event(uid: &str, e: &EventInput) -> String {
@@ -302,6 +306,7 @@ pub fn build_event(uid: &str, e: &EventInput) -> String {
     }
     s.push_str(&fold(&format!("UID:{uid}")));
     s.push_str(&fold(&format!("DTSTAMP:{}", ical_time(&now(), false))));
+    s.push_str(&fold("SEQUENCE:0"));
     s.push_str(&fold(&format!("DTSTART{date_param}:{}", ical_time(&e.start, e.all_day))));
     s.push_str(&fold(&format!("DTEND{date_param}:{}", ical_time(&end, e.all_day))));
     s.push_str(&fold(&format!("SUMMARY:{}", escape(&e.summary))));
@@ -478,6 +483,22 @@ pub struct EventView {
     pub tzid: Option<String>,
     pub description: String,
     pub location: String,
+    /// Who invited the attendees, when the event has any.
+    pub organizer: Option<crate::itip::Party>,
+    pub attendees: Vec<crate::itip::Party>,
+    /// The organizer cancelled the event.
+    pub cancelled: bool,
+    /// The viewer may change this calendar (owner or read-write sharee).
+    pub writable: bool,
+    /// The viewer may edit the event's details: they can write and it is not an invitation
+    /// from someone else.
+    pub can_edit: bool,
+    /// The viewer's own answer when they are invited (NEEDS-ACTION, ACCEPTED, …).
+    pub my_partstat: Option<String>,
+    /// Owner's name, for an event in a calendar shared with the viewer.
+    pub shared_by: Option<String>,
+    /// Who added the event, when that was not the calendar's owner.
+    pub created_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -493,6 +514,7 @@ pub struct ContactView {
 
 fn view_of(o: &DavObject, c: &Collection) -> EventView {
     let p = parse_object(&o.data).unwrap_or_default();
+    let cal = crate::itip::Component::parse(&o.data).ok();
     EventView {
         id: o.id.clone(),
         calendar: c.uri.clone(),
@@ -511,7 +533,29 @@ fn view_of(o: &DavObject, c: &Collection) -> EventView {
         tzid: p.tzid,
         description: p.description,
         location: p.location,
+        organizer: cal.as_ref().and_then(crate::itip::organizer),
+        attendees: cal.as_ref().map(crate::itip::attendees).unwrap_or_default(),
+        cancelled: cal.as_ref().is_some_and(crate::itip::is_cancelled),
+        writable: true,
+        can_edit: true,
+        my_partstat: None,
+        shared_by: None,
+        created_by: None,
     }
+}
+
+/// Fills the viewer-specific fields of an event view.
+fn annotate(v: &mut EventView, cal: &crate::calendar_sharing::CalendarRef, viewer_email: Option<&str>, owner_email: Option<&str>, created_by: Option<String>) {
+    v.writable = cal.writable;
+    v.shared_by = cal.shared_by.as_ref().map(|s| s.display_name.clone());
+    v.created_by = created_by;
+    let organizer = v.organizer.as_ref().map(|o| o.email.as_str());
+    let mine = |e: Option<&str>| e.is_some() && e == organizer;
+    v.can_edit = cal.writable && (organizer.is_none() || mine(viewer_email) || mine(owner_email));
+    v.my_partstat = match viewer_email {
+        Some(me) if !mine(Some(me)) => v.attendees.iter().find(|a| a.email == me).map(|a| a.partstat.clone()),
+        _ => None,
+    };
 }
 
 /// Most occurrences of one series returned for a single range query.
@@ -640,17 +684,18 @@ impl Core {
                 .await?;
         }
         self.touch_collection(&c.id).await?;
-        self.collections_changed(&c.owner_id, &c.kind);
+        self.publish_groupware_change(c, true).await?;
         Ok(())
     }
 
     pub async fn delete_dav_collection(&self, c: &Collection) -> Result<()> {
+        // Sharees lose the calendar too: tell them before the shares are gone.
+        self.publish_groupware_change(c, true).await?;
         sqlx::query("DELETE FROM fts WHERE object_kind IN ('event', 'contact') AND object_id IN (SELECT id FROM dav_objects WHERE collection_id = ?)")
             .bind(&c.id)
             .execute(&self.db)
             .await?;
         sqlx::query("DELETE FROM dav_collections WHERE id = ?").bind(&c.id).execute(&self.db).await?;
-        self.collections_changed(&c.owner_id, &c.kind);
         Ok(())
     }
 
@@ -781,8 +826,7 @@ impl Core {
             .bind(body)
             .execute(&self.db)
             .await?;
-        self.hub
-            .publish([c.owner_id.as_str()], &serde_json::json!({"type": "groupware.changed", "kind": c.kind}));
+        self.publish_groupware_change(c, false).await?;
         Ok((self.dav_object(c, uri).await?, existing.is_none()))
     }
 
@@ -797,30 +841,63 @@ impl Core {
             .execute(&self.db)
             .await?;
         self.touch_collection(&c.id).await?;
-        self.hub
-            .publish([c.owner_id.as_str()], &serde_json::json!({"type": "groupware.changed", "kind": c.kind}));
+        self.publish_groupware_change(c, false).await?;
         Ok(())
     }
 
     // ---- convenience API for the web UI and MCP tools ----------------------------
 
+    /// Events and tasks in [from, to) of the user's calendars and those shared with them,
+    /// recurring ones expanded into occurrences.
     pub async fn events_between(&self, user_id: &str, from: DateTime<Utc>, to: DateTime<Utc>) -> Result<Vec<EventView>> {
+        let me = self.user(user_id).await?;
+        let my_email = me.email.as_deref().map(crate::itip::normalize_address);
+        let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         let mut out = Vec::new();
-        for c in self.dav_collections(user_id, KIND_CALENDAR).await? {
-            for o in self.dav_objects_in_range(&c, Some(from), Some(to)).await? {
-                out.extend(views_in_range(&o, &c, from, to));
+        for cal in self.user_calendars(user_id).await? {
+            let owner_email = match &cal.shared_by {
+                Some(s) => s.email.as_deref().map(crate::itip::normalize_address),
+                None => my_email.clone(),
+            };
+            let authors = self.calendar_authors(&cal.collection.id).await?;
+            for o in self.dav_objects_in_range(&cal.collection, Some(from), Some(to)).await? {
+                let creator = authors.get(&o.id).and_then(|(c, _)| c.clone()).filter(|c| *c != cal.collection.owner_id);
+                let created_by = match creator {
+                    Some(id) => {
+                        if !names.contains_key(&id) {
+                            let name = self.user(&id).await.map(|u| u.display_name).unwrap_or_default();
+                            names.insert(id.clone(), name);
+                        }
+                        names.get(&id).cloned()
+                    }
+                    None => None,
+                };
+                for mut v in views_in_range(&o, &cal.collection, from, to) {
+                    annotate(&mut v, &cal, my_email.as_deref(), owner_email.as_deref(), created_by.clone());
+                    out.push(v);
+                }
             }
         }
         out.sort_by_key(|e| e.starts_at);
         Ok(out)
     }
 
-    async fn calendar_for(&self, user_id: &str, uri: Option<&str>) -> Result<Collection> {
-        let cals = self.dav_collections(user_id, KIND_CALENDAR).await?;
-        match uri {
-            Some(u) => cals.into_iter().find(|c| c.uri == u || c.name.eq_ignore_ascii_case(u)).ok_or(Error::NotFound),
-            None => cals.into_iter().next().ok_or(Error::NotFound),
-        }
+    /// One event as `user_id` sees it.
+    pub async fn event_view(&self, user_id: &str, id: &str) -> Result<EventView> {
+        let (cal, o) = self.calendar_object_access(user_id, id).await?;
+        let me = self.user(user_id).await?;
+        let my_email = me.email.as_deref().map(crate::itip::normalize_address);
+        let owner_email = match &cal.shared_by {
+            Some(s) => s.email.as_deref().map(crate::itip::normalize_address),
+            None => my_email.clone(),
+        };
+        let created_by = match self.calendar_authors(&cal.collection.id).await?.remove(&o.id).and_then(|(c, _)| c) {
+            Some(c) if c != cal.collection.owner_id => self.user(&c).await.ok().map(|u| u.display_name),
+            _ => None,
+        };
+        let mut v = view_of(&o, &cal.collection);
+        annotate(&mut v, &cal, my_email.as_deref(), owner_email.as_deref(), created_by);
+        Ok(v)
     }
 
     async fn object_by_id(&self, user_id: &str, id: &str) -> Result<(Collection, DavObject)> {
@@ -838,6 +915,35 @@ impl Core {
         Ok((c, o))
     }
 
+    /// Sets the organizer (the acting user, unless the event already has one) and the
+    /// attendees of new or edited event data. Returns the data unchanged when `attendees`
+    /// is None.
+    fn with_attendees(data: &str, actor: &crate::auth::User, attendees: Option<&[String]>) -> Result<String> {
+        let Some(list) = attendees else { return Ok(data.to_string()) };
+        let mut cal = crate::itip::Component::parse(data)?;
+        let organizer = crate::itip::organizer(&cal).map(|o| o.email);
+        let actor_email = actor
+            .email
+            .as_deref()
+            .map(crate::itip::normalize_address)
+            .filter(|e| crate::itip::valid_email(e));
+        let mut invitees: Vec<crate::itip::Invitee> = Vec::new();
+        for a in list.iter().filter(|a| !a.trim().is_empty()) {
+            let inv = crate::itip::parse_invitee(a)?;
+            let is_organizer = organizer.as_ref().or(actor_email.as_ref()) == Some(&inv.email);
+            if !is_organizer && !invitees.iter().any(|i| i.email == inv.email) {
+                invitees.push(inv);
+            }
+        }
+        if !invitees.is_empty() && organizer.is_none() {
+            let email = actor_email.ok_or_else(|| Error::bad("add your email address in Settings before inviting people"))?;
+            crate::itip::set_organizer(&mut cal, &email, &actor.display_name, None);
+        }
+        crate::itip::set_attendees(&mut cal, &invitees);
+        crate::itip::drop_organizer_without_attendees(&mut cal);
+        Ok(cal.to_ics())
+    }
+
     pub async fn create_event(&self, user_id: &str, e: &EventInput) -> Result<EventView> {
         if e.summary.trim().is_empty() {
             return Err(Error::bad("summary required"));
@@ -845,16 +951,19 @@ impl Core {
         if e.end.is_some_and(|end| end < e.start) {
             return Err(Error::bad("end must not be before start"));
         }
-        let c = self.calendar_for(user_id, e.calendar.as_deref()).await?;
+        let actor = self.user(user_id).await?;
+        let cal = self.writable_calendar(user_id, e.calendar.as_deref()).await?;
         let uid = format!("{}@ferrite", new_id());
-        let (o, _) = self.put_dav_object(&c, &format!("{uid}.ics"), &build_event(&uid, e), None, true).await?;
-        Ok(view_of(&o, &c))
+        let data = Self::with_attendees(&build_event(&uid, e), &actor, e.attendees.as_deref())?;
+        let saved = self.save_calendar_object(&actor, &cal, &format!("{uid}.ics"), &data, None, true).await?;
+        self.event_view(user_id, &saved.object.id).await
     }
 
     /// Edits an event (for a recurring event, the whole series). When `e.calendar` names a
-    /// different calendar, the event moves there.
+    /// different calendar, the event moves there. Attendees are invited, updated or
+    /// cancelled as needed (see `scheduling`).
     pub async fn update_event(&self, user_id: &str, id: &str, e: &EventInput) -> Result<EventView> {
-        let (c, o) = self.object_by_id(user_id, id).await?;
+        let (cal, o) = self.calendar_object_access(user_id, id).await?;
         if o.component != "VEVENT" {
             return Err(Error::bad("not an event"));
         }
@@ -864,18 +973,28 @@ impl Core {
         if e.end.is_some_and(|end| end < e.start) {
             return Err(Error::bad("end must not be before start"));
         }
-        let data = patch_event(&o.data, e);
+        cal.require_write()?;
+        if !self.event_view(user_id, id).await?.can_edit {
+            return Err(Error::bad("only the organizer can change this event; answer the invitation instead"));
+        }
+        let actor = self.user(user_id).await?;
+        let data = Self::with_attendees(&patch_event(&o.data, e), &actor, e.attendees.as_deref())?;
         let target = match e.calendar.as_deref() {
-            Some(uri) if uri != c.uri => Some(self.calendar_for(user_id, Some(uri)).await?),
+            Some(uri) if uri != cal.collection.uri => Some(self.writable_calendar(user_id, Some(uri)).await?),
             _ => None,
         };
         match target {
             Some(to) => {
-                if !to.components.split(',').any(|x| x == "VEVENT") {
+                if !to.collection.components.split(',').any(|x| x == "VEVENT") {
                     return Err(Error::bad("that calendar does not hold events"));
                 }
-                let (moved, _) = self.put_dav_object(&to, &o.uri, &data, None, true).await?;
-                self.delete_dav_object(&c, &o.uri, Some(&o.etag)).await?;
+                let created_by: Option<String> = sqlx::query_scalar("SELECT created_by FROM calendar_object_authors WHERE object_id = ?")
+                    .bind(&o.id)
+                    .fetch_optional(&self.db)
+                    .await?
+                    .flatten();
+                let (moved, _) = self.put_dav_object(&to.collection, &o.uri, &data, None, true).await?;
+                self.delete_dav_object(&cal.collection, &o.uri, Some(&o.etag)).await?;
                 // Keep the event's id across the move, so links and tool calls holding it work.
                 let mut tx = self.db.begin().await?;
                 sqlx::query("UPDATE dav_objects SET id = ? WHERE id = ?")
@@ -888,23 +1007,31 @@ impl Core {
                     .bind(&moved.id)
                     .execute(&mut *tx)
                     .await?;
+                sqlx::query("INSERT INTO calendar_object_authors (object_id, created_by, modified_by) VALUES (?, ?, ?)")
+                    .bind(&o.id)
+                    .bind(created_by.as_deref().unwrap_or(user_id))
+                    .bind(user_id)
+                    .execute(&mut *tx)
+                    .await?;
                 tx.commit().await?;
-                let (to, moved) = self.object_by_id(user_id, &o.id).await?;
-                Ok(view_of(&moved, &to))
+                self.schedule_moved(&actor, &to, &o.uri, &o.data, &data).await?;
             }
             None => {
-                let (o, _) = self.put_dav_object(&c, &o.uri, &data, Some(&o.etag), false).await?;
-                Ok(view_of(&o, &c))
+                self.save_calendar_object(&actor, &cal, &o.uri, &data, Some(&o.etag), false).await?;
             }
         }
+        self.event_view(user_id, id).await
     }
 
+    /// Deletes an event. Deleting an event you organize cancels it for its attendees;
+    /// removing an invitation declines it.
     pub async fn delete_event(&self, user_id: &str, id: &str) -> Result<()> {
-        let (c, o) = self.object_by_id(user_id, id).await?;
-        if c.kind != KIND_CALENDAR {
+        let (cal, o) = self.calendar_object_access(user_id, id).await?;
+        if cal.collection.kind != KIND_CALENDAR {
             return Err(Error::NotFound);
         }
-        self.delete_dav_object(&c, &o.uri, None).await
+        let actor = self.user(user_id).await?;
+        self.delete_calendar_object(&actor, &cal, &o.uri, None, true).await
     }
 
     pub async fn contacts(&self, user_id: &str, query: Option<&str>) -> Result<Vec<ContactView>> {

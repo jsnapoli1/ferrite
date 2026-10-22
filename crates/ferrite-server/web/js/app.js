@@ -29,6 +29,7 @@ const ROUTES = [
 const PUBLIC_ROUTES = [
   ['/s/:token', 'public'],
   ['/join/:token', 'guest'],
+  ['/invitation/:token', 'invitation'],
 ];
 
 const NAV = [
