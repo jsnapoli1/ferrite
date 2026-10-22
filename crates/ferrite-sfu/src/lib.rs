@@ -13,8 +13,19 @@
 //! leave or add tracks) travel over a WebRTC data channel, as in str0m's reference SFU.
 //! Outgoing tracks are labeled with the sender's Talk call session id (the MediaStream id),
 //! so clients know whose tile a track belongs to.
+//!
+//! **Simulcast.** Browsers send video in three layers (rids `l`, `m`, `h`: quarter, half and
+//! full resolution, all at the full frame rate). Each receiver tells the SFU over the data
+//! channel which layer it wants per sender (from the size of that person's tile), and the SFU
+//! forwards just that layer, so a small tile never costs a 720p decode and a weak link never
+//! forces everyone's frame rate down. Switching layers waits for a keyframe of the new layer
+//! (requested from the sender), and when a sender stops sending the wanted layer (its encoder
+//! is short on bandwidth or CPU) the best layer still arriving is forwarded instead. Senders
+//! are told the highest layer anyone currently wants from them (`{"type": "publish"}`) and
+//! pause the layers above it, so nobody spends CPU and upload on a 720p encode that no tile
+//! shows; that budget goes to keeping the frame rate up.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -149,7 +160,9 @@ fn run(socket: UdpSocket, rx: Receiver<Command>, counters: Arc<Counters>) {
     let mut queue: VecDeque<Propagated> = VecDeque::new();
     let mut buf = vec![0u8; 2000];
     loop {
+        let before = clients.len();
         clients.retain(|c| c.rtc.is_alive());
+        let mut layers_changed = clients.len() != before;
         counters.clients.store(clients.len(), Ordering::Relaxed);
 
         loop {
@@ -165,6 +178,7 @@ fn run(socket: UdpSocket, rx: Receiver<Command>, counters: Arc<Counters>) {
                         client.track_open(t);
                     }
                     clients.push(*client);
+                    layers_changed = true;
                 }
                 Ok(Command::RemoveSession(s)) => {
                     for c in clients.iter_mut().filter(|c| c.session == s) {
@@ -175,6 +189,12 @@ fn run(socket: UdpSocket, rx: Receiver<Command>, counters: Arc<Counters>) {
                 Err(TryRecvError::Disconnected) => return,
             }
         }
+        for c in clients.iter_mut() {
+            layers_changed |= std::mem::take(&mut c.layers_dirty);
+        }
+        if layers_changed {
+            update_published_layers(&mut clients);
+        }
 
         let mut timeout = Instant::now() + Duration::from_millis(100);
         for c in clients.iter_mut() {
@@ -182,7 +202,7 @@ fn run(socket: UdpSocket, rx: Receiver<Command>, counters: Arc<Counters>) {
         }
 
         if let Some(p) = queue.pop_front() {
-            propagate(&p, &mut clients, &counters);
+            propagate(&p, &mut clients, &counters, &mut queue);
             continue;
         }
 
@@ -222,16 +242,44 @@ fn run(socket: UdpSocket, rx: Receiver<Command>, counters: Arc<Counters>) {
     }
 }
 
-fn propagate(p: &Propagated, clients: &mut [Client], counters: &Counters) {
+/// Tells each sender the highest simulcast layer any receiver in its room wants from it.
+fn update_published_layers(clients: &mut [Client]) {
+    for i in 0..clients.len() {
+        let (id, room, session) = (clients[i].id, clients[i].room.clone(), clients[i].session.clone());
+        let top = clients
+            .iter()
+            .filter(|c| c.id != id && c.room == room)
+            .map(|c| c.layer_prefs.get(&session).copied().unwrap_or(LAYERS.len() - 1))
+            .max()
+            // Nobody to send to: the smallest layer keeps the track alive at almost no cost.
+            .unwrap_or(0);
+        let sender = &mut clients[i];
+        if sender.published_top != Some(top) && sender.send_channel(&serde_json::json!({"type": "publish", "max": LAYERS[top]}).to_string()) {
+            sender.published_top = Some(top);
+        }
+    }
+}
+
+fn propagate(p: &Propagated, clients: &mut [Client], counters: &Counters, queue: &mut VecDeque<Propagated>) {
     let Some((origin, room)) = p.origin() else { return };
     let room = room.to_string();
     for c in clients.iter_mut().filter(|c| c.id != origin && c.room == room) {
         match p {
             Propagated::TrackOpen(_, _, track) => c.track_open(track.clone()),
             Propagated::MediaData(_, _, data) => {
-                if c.media_out(origin, data) {
+                let (sent, keyframe) = c.media_out(origin, data);
+                if sent {
                     counters.packets_forwarded.fetch_add(1, Ordering::Relaxed);
                     counters.bytes_forwarded.fetch_add(data.data.len() as u64, Ordering::Relaxed);
+                }
+                // The receiver needs a keyframe of another layer to switch to it.
+                if let Some(rid) = keyframe {
+                    let req = KeyframeRequest {
+                        mid: data.mid,
+                        rid: Some(rid),
+                        kind: KeyframeRequestKind::Pli,
+                    };
+                    queue.push_back(Propagated::KeyframeRequest(c.id, room.clone(), req, origin, data.mid));
                 }
             }
             Propagated::KeyframeRequest(_, _, req, source, mid) => {
@@ -270,10 +318,26 @@ enum OutState {
     NegotiatingStop(Mid),
 }
 
+/// Simulcast layers by rank, lowest first.
+const LAYERS: [&str; 3] = ["l", "m", "h"];
+/// A layer counts as being sent if a frame of it arrived this recently.
+const LAYER_ALIVE: Duration = Duration::from_millis(1000);
+/// Minimum spacing of the SFU's own keyframe requests for one forwarded track.
+const LAYER_KEYFRAME_SPACING: Duration = Duration::from_millis(300);
+
+fn layer_rank(rid: &str) -> usize {
+    LAYERS.iter().position(|l| *l == rid).unwrap_or(LAYERS.len() - 1)
+}
+
 #[derive(Debug)]
 struct TrackOut {
     track_in: Weak<TrackIn>,
     state: OutState,
+    /// Simulcast layer currently forwarded (None until the first keyframe, or no simulcast).
+    current: Option<Rid>,
+    /// When each layer (by rank) last arrived from the sender.
+    seen: [Option<Instant>; 3],
+    last_layer_keyframe_request: Option<Instant>,
 }
 
 impl TrackOut {
@@ -308,7 +372,12 @@ struct Client {
     channel: Option<ChannelId>,
     tracks_in: Vec<TrackInEntry>,
     tracks_out: Vec<TrackOut>,
-    chosen_rid: Option<Rid>,
+    /// Wanted simulcast layer (rank) per sender session; unlisted senders get the top layer.
+    layer_prefs: HashMap<String, usize>,
+    /// Highest layer this client was last told to publish.
+    published_top: Option<usize>,
+    /// Preferences changed or the data channel opened: recompute what senders publish.
+    layers_dirty: bool,
 }
 
 impl Client {
@@ -323,7 +392,9 @@ impl Client {
             channel: None,
             tracks_in: Vec::new(),
             tracks_out: Vec::new(),
-            chosen_rid: None,
+            layer_prefs: HashMap::new(),
+            published_top: None,
+            layers_dirty: false,
         }
     }
 
@@ -398,11 +469,13 @@ impl Client {
             Event::KeyframeRequest(mut req) => {
                 let track_out = self.tracks_out.iter().find(|t| t.mid() == Some(req.mid))?;
                 let track_in = track_out.track_in.upgrade()?;
-                req.rid = self.chosen_rid;
+                // The receiver's decoder wants a keyframe of whatever layer it is being sent.
+                req.rid = track_out.current;
                 Some(Propagated::KeyframeRequest(self.id, self.room.clone(), req, track_in.origin, track_in.mid))
             }
             Event::ChannelOpen(cid, _) => {
                 self.channel = Some(cid);
+                self.layers_dirty = true;
                 None
             }
             Event::ChannelData(d) => {
@@ -426,10 +499,21 @@ impl Client {
         }
     }
 
+    /// Sends a JSON control message on the data channel; false if it isn't open.
+    fn send_channel(&mut self, json: &str) -> bool {
+        match self.channel.and_then(|id| self.rtc.channel(id)) {
+            Some(mut ch) => ch.write(false, json.as_bytes()).is_ok(),
+            None => false,
+        }
+    }
+
     fn track_open(&mut self, track_in: Weak<TrackIn>) {
         self.tracks_out.push(TrackOut {
             track_in,
             state: OutState::ToOpen,
+            current: None,
+            seen: [None; 3],
+            last_layer_keyframe_request: None,
         });
     }
 
@@ -481,6 +565,20 @@ impl Client {
     }
 
     fn channel_data(&mut self, d: ChannelData) {
+        // `{"type": "layers", "want": {"<sender session>": "l" | "m" | "h"}}` replaces the
+        // receiver's simulcast preferences.
+        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&d.data) {
+            if v["type"] == "layers" {
+                if let Some(want) = v["want"].as_object() {
+                    self.layer_prefs = want
+                        .iter()
+                        .filter_map(|(session, layer)| layer.as_str().map(|l| (session.clone(), layer_rank(l))))
+                        .collect();
+                    self.layers_dirty = true;
+                }
+                return;
+            }
+        }
         if let Ok(offer) = serde_json::from_slice::<SdpOffer>(&d.data) {
             // Client-initiated renegotiation (e.g. a new track).
             let answer = match self.rtc.sdp_api().accept_offer(offer) {
@@ -518,32 +616,57 @@ impl Client {
         }
     }
 
-    /// Forwards media from `origin` if this client subscribes to it. Returns true if sent.
-    fn media_out(&mut self, origin: ClientId, data: &MediaData) -> bool {
-        let Some(mid) = self
+    /// Forwards media from `origin` if this client subscribes to it. Returns whether it was
+    /// sent, and a simulcast layer whose keyframe this receiver is waiting for.
+    fn media_out(&mut self, origin: ClientId, data: &MediaData) -> (bool, Option<Rid>) {
+        let Some(out) = self
             .tracks_out
-            .iter()
+            .iter_mut()
             .find(|o| o.track_in.upgrade().is_some_and(|i| i.origin == origin && i.mid == data.mid))
-            .and_then(|o| match o.state {
-                OutState::Open(m) => Some(m),
-                _ => None,
-            })
         else {
-            return false;
+            return (false, None);
         };
-        // Simulcast: forward the high layer (or the only layer).
-        if data.rid.is_some() && data.rid != Some("h".into()) {
-            return false;
+        let OutState::Open(mid) = out.state else { return (false, None) };
+        let mut keyframe = None;
+        if let Some(rid) = data.rid {
+            let want = out
+                .track_in
+                .upgrade()
+                .and_then(|i| self.layer_prefs.get(&i.session).copied())
+                .unwrap_or(LAYERS.len() - 1);
+            let now = data.network_time;
+            let rank = layer_rank(&rid);
+            out.seen[rank] = Some(now);
+            let alive = |r: usize| out.seen[r].is_some_and(|t| now.saturating_duration_since(t) < LAYER_ALIVE);
+            // The wanted layer, else the best one below it that is arriving, else any above.
+            let target = (0..=want).rev().find(|&r| alive(r)).or_else(|| (want + 1..LAYERS.len()).find(|&r| alive(r)));
+            let current = out.current.map(|c| layer_rank(&c));
+            if current != Some(rank) {
+                if target == Some(rank) && data.is_keyframe() {
+                    out.current = Some(rid);
+                } else {
+                    if target == Some(rank)
+                        && out
+                            .last_layer_keyframe_request
+                            .is_none_or(|t| now.saturating_duration_since(t) >= LAYER_KEYFRAME_SPACING)
+                    {
+                        out.last_layer_keyframe_request = Some(now);
+                        keyframe = Some(rid);
+                    }
+                    return (false, keyframe);
+                }
+            }
         }
-        self.chosen_rid = data.rid;
-        let Some(writer) = self.rtc.writer(mid) else { return false };
-        let Some(pt) = writer.match_params(data.params) else { return false };
+        let Some(writer) = self.rtc.writer(mid) else { return (false, keyframe) };
+        let Some(pt) = writer.match_params(data.params) else {
+            return (false, keyframe);
+        };
         if let Err(e) = writer.write(pt, data.network_time, data.time, data.data.clone()) {
             debug!(session = %self.session, error = ?e, "SFU write failed");
             self.rtc.disconnect();
-            return false;
+            return (false, keyframe);
         }
-        true
+        (true, keyframe)
     }
 
     fn keyframe_request(&mut self, req: KeyframeRequest, mid_in: Mid) {

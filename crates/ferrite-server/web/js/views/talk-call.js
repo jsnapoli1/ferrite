@@ -18,8 +18,44 @@ import { h, icon, avatar, toast, errorToast } from '../ui.js';
 
 const KINDS = ['audio', 'video'];
 
-// Modest capture settings keep a mesh call affordable on small machines and links.
-const VIDEO_CONSTRAINTS = { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } };
+// Cameras and screens are captured at up to 720p30. What is actually sent adapts per path:
+// through the SFU as three simulcast layers (receivers get the one their tile needs), in a
+// mesh as one stream per peer, scaled down once there are several peers.
+const VIDEO_CONSTRAINTS = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } };
+const SCREEN_CONSTRAINTS = { video: { frameRate: { ideal: 30, max: 30 } }, audio: false };
+const MAX_FPS = 30;
+
+// Simulcast layers sent to the SFU, lowest first (rids match the SFU's): every layer keeps
+// the full frame rate; the encoder drops the top layers first when bandwidth or CPU is short.
+const SIMULCAST = [
+  { rid: 'l', scaleResolutionDownBy: 4, maxBitrate: 150_000, maxFramerate: MAX_FPS },
+  { rid: 'm', scaleResolutionDownBy: 2, maxBitrate: 500_000, maxFramerate: MAX_FPS },
+  { rid: 'h', scaleResolutionDownBy: 1, maxBitrate: 1_500_000, maxFramerate: MAX_FPS },
+];
+
+/**
+ * Encoder hints for the track a video sender carries: cameras keep their frame rate under
+ * pressure (resolution drops first); screens (contentHint "detail") balance both so text
+ * stays readable. `extra(encoding, index)` adjusts each encoding. Best effort: browsers
+ * without these parameters keep their defaults.
+ */
+async function tuneVideoSender(sender, extra) {
+  if (!sender || !sender.getParameters) return;
+  try {
+    const params = sender.getParameters();
+    if (!params.encodings || !params.encodings.length) return;
+    const track = sender.track;
+    const screen = !!track && (track.contentHint === 'detail' || track.contentHint === 'text');
+    params.degradationPreference = screen ? 'balanced' : 'maintain-framerate';
+    params.encodings.forEach((e, i) => {
+      e.maxFramerate = MAX_FPS;
+      if (extra) extra(e, i);
+    });
+    await sender.setParameters(params);
+  } catch (e) {
+    console.warn('video sender parameters', e);
+  }
+}
 
 export class MeshTransport {
   /** @param {{roomId: string, session: string, iceServers: RTCIceServer[]}} opts */
@@ -61,8 +97,25 @@ export class MeshTransport {
     this.tracks[kind] = track || null;
     for (const p of this.peers.values()) {
       const t = this.transceiver(p.pc, kind);
-      if (t) t.sender.replaceTrack(track || null).catch((e) => console.warn('replaceTrack', e));
+      if (t) t.sender.replaceTrack(track || null).then(() => kind === 'video' && this.tune(p)).catch((e) => console.warn('replaceTrack', e));
     }
+  }
+
+  /**
+   * Every peer gets its own encode in a mesh, so with several peers each stream is halved in
+   * resolution (720p capture → 360p) to keep the frame rate on small machines and uplinks.
+   */
+  tune(p) {
+    const t = this.transceiver(p.pc, 'video');
+    const several = this.peers.size > 1;
+    return tuneVideoSender(t && t.sender, (e) => {
+      e.scaleResolutionDownBy = several ? 2 : 1;
+      e.maxBitrate = several ? 600_000 : 1_500_000;
+    });
+  }
+
+  tuneAll() {
+    for (const p of this.peers.values()) this.tune(p);
   }
 
   stop() {
@@ -116,6 +169,8 @@ export class MeshTransport {
     pc.onconnectionstatechange = () => {
       this.onConnectionState(session, pc.connectionState);
       if (pc.connectionState === 'failed') pc.restartIce();
+      // Encodings exist once negotiated; the peer count may also have changed meanwhile.
+      if (pc.connectionState === 'connected') this.tuneAll();
     };
     if (initiator) {
       // Always negotiate one audio and one video transceiver, even without local devices:
@@ -163,6 +218,7 @@ export class MeshTransport {
     if (!p) return;
     this.peers.delete(session);
     p.pc.close();
+    this.tuneAll();
     if (notify) this.onPeerClosed(session);
   }
 }
@@ -203,8 +259,15 @@ export class SfuTransport {
     // the camera on later or screen sharing is just replaceTrack().
     for (const kind of KINDS) {
       const track = (kind === 'audio' ? localStream.getAudioTracks() : localStream.getVideoTracks())[0];
-      this.senders[kind] = pc.addTransceiver(track || kind, { direction: 'sendonly' }).sender;
+      const init = { direction: 'sendonly' };
+      if (kind === 'video') init.sendEncodings = SIMULCAST.map((e) => ({ ...e }));
+      this.senders[kind] = pc.addTransceiver(track || kind, init).sender;
     }
+    // Tell the SFU which layer to send for each person once the channel opens.
+    this.channel.onopen = () => this.sendLayers();
+    pc.addEventListener('connectionstatechange', () => {
+      if (pc.connectionState === 'connected') this.tuneVideo();
+    });
     pc.ontrack = ({ track, streams }) => this.onTrack(track, streams[0]);
     pc.onconnectionstatechange = () => {
       for (const s of this.peers.keys()) this.onConnectionState(s, pc.connectionState);
@@ -221,7 +284,28 @@ export class SfuTransport {
 
   replaceTrack(kind, track) {
     const sender = this.senders[kind];
-    if (sender) sender.replaceTrack(track || null).catch((e) => console.warn('replaceTrack', e));
+    if (!sender) return;
+    sender.replaceTrack(track || null).then(() => kind === 'video' && this.tuneVideo()).catch((e) => console.warn('replaceTrack', e));
+  }
+
+  /** Applies encoder hints, sending only the layers up to the one someone wants. */
+  tuneVideo() {
+    const top = this.publishTop ?? SIMULCAST.length - 1;
+    return tuneVideoSender(this.senders.video, (e, i) => {
+      e.active = i <= top;
+    });
+  }
+
+  /** Which simulcast layer ('l', 'm' or 'h') to receive from each remote session. */
+  setLayers(want) {
+    this.layers = want;
+    this.sendLayers();
+  }
+
+  sendLayers() {
+    if (this.layers && this.channel && this.channel.readyState === 'open') {
+      this.channel.send(JSON.stringify({ type: 'layers', want: this.layers }));
+    }
   }
 
   stop() {
@@ -250,6 +334,12 @@ export class SfuTransport {
     try {
       desc = JSON.parse(data);
     } catch (_) {
+      return;
+    }
+    // The highest simulcast layer anyone watches: pause the layers above it.
+    if (desc && desc.type === 'publish') {
+      this.publishTop = Math.max(0, SIMULCAST.findIndex((e) => e.rid === desc.max));
+      this.tuneVideo();
       return;
     }
     // Strictly in order: an offer must not overlap the previous negotiation.
@@ -366,6 +456,7 @@ export class Call {
     if (this.ended) { stream.getTracks().forEach((t) => t.stop()); return; }
     this.stream = stream;
     this.camTrack = stream.getVideoTracks()[0] || null;
+    if (this.camTrack) this.camTrack.contentHint = 'motion';
     this.state.audio = !!stream.getAudioTracks()[0];
     this.state.video = !!this.camTrack;
     if (note) toast(note, 'warn');
@@ -382,6 +473,13 @@ export class Call {
     if (this.stream.getAudioTracks()[0]) this.watchLevel(null, this.stream);
     window.__ferriteCall = this;
     this.levelTimer = setInterval(() => this.measureLevels(), 250);
+    // Ask the SFU for the simulcast layer each tile needs, now and whenever tiles resize or
+    // the tab is hidden (then the smallest layer is enough).
+    this.layerObserver = new ResizeObserver(() => this.scheduleLayers());
+    for (const [key, t] of this.tiles) if (key !== 'local') this.layerObserver.observe(t.el);
+    this.onVisibility = () => this.scheduleLayers();
+    document.addEventListener('visibilitychange', this.onVisibility);
+    this.scheduleLayers();
   }
 
   async connect() {
@@ -400,6 +498,7 @@ export class Call {
     for (const m of res.members) this.addMember(m);
     const outgoing = [this.stream.getAudioTracks()[0], this.currentVideoTrack()].filter(Boolean);
     this.transport.start(new MediaStream(outgoing), res.members);
+    if (this.layerObserver) this.scheduleLayers();
     // Report a hand or screen state that survived a rejoin.
     if (this.state.hand || this.state.screen) this.sendState();
   }
@@ -428,6 +527,9 @@ export class Call {
     this.camTrack?.stop();
     this.screenTrack?.stop();
     this.audioCtx?.close().catch(() => {});
+    this.layerObserver?.disconnect();
+    clearTimeout(this.layerTimer);
+    if (this.onVisibility) document.removeEventListener('visibilitychange', this.onVisibility);
     this.el.remove();
     if (window.__ferriteCall === this) window.__ferriteCall = null;
     this.onEnd();
@@ -468,6 +570,7 @@ export class Call {
   removeMember(session) {
     this.members.delete(session);
     const t = this.tiles.get(session);
+    if (t) this.layerObserver?.unobserve(t.el);
     if (t) {
       t.el.remove();
       this.tiles.delete(session);
@@ -521,6 +624,7 @@ export class Call {
       try {
         const s = await navigator.mediaDevices.getUserMedia({ video: VIDEO_CONSTRAINTS });
         this.camTrack = s.getVideoTracks()[0];
+        this.camTrack.contentHint = 'motion';
         this.state.video = true;
       } catch (e) {
         toast('Camera unavailable', 'error');
@@ -535,8 +639,9 @@ export class Call {
   async toggleScreen() {
     if (this.state.screen) return this.stopScreen();
     try {
-      const s = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      const s = await navigator.mediaDevices.getDisplayMedia(SCREEN_CONSTRAINTS);
       this.screenTrack = s.getVideoTracks()[0];
+      this.screenTrack.contentHint = 'detail';
     } catch (e) {
       if (e.name !== 'NotAllowedError') toast(`Screen sharing failed: ${e.message}`, 'error');
       return;
@@ -625,10 +730,30 @@ export class Call {
     t = { el, video, flags, local };
     this.tiles.set(key, t);
     if (local) this.grid.prepend(el);
-    else this.grid.appendChild(el);
+    else {
+      this.grid.appendChild(el);
+      this.layerObserver?.observe(el);
+    }
     if (local) this.paintLocalVideo();
     this.layout();
     return t;
+  }
+
+  scheduleLayers() {
+    clearTimeout(this.layerTimer);
+    this.layerTimer = setTimeout(() => this.updateLayers(), 250);
+  }
+
+  /** Picks a simulcast layer per remote tile from its size on screen (in device pixels). */
+  updateLayers() {
+    if (!this.transport || !this.transport.setLayers) return;
+    const want = {};
+    for (const [session, t] of this.tiles) {
+      if (session === 'local') continue;
+      const px = t.el.clientHeight * (window.devicePixelRatio || 1);
+      want[session] = document.hidden ? 'l' : px >= 480 ? 'h' : px >= 200 ? 'm' : 'l';
+    }
+    this.transport.setLayers(want);
   }
 
   paintLocalVideo() {

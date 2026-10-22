@@ -1,7 +1,8 @@
 // Browser test of calls through the built-in SFU: three users join one call, and each must
 // receive and decode live video from both others over a single peer connection to the
-// server. Also checks that the server's forwarding counters grow and that a leaver's tile
-// disappears for the rest.
+// server. Also checks that the server's forwarding counters grow, that a leaver's tile
+// disappears for the rest, and simulcast: with small tiles a receiver gets a small layer, and
+// when a tile grows the SFU switches it to a larger one without interrupting the video.
 //
 // Run against a server with the SFU enabled and a fresh data dir:
 //   FERRITE_URL=http://127.0.0.1:8824 node sfu.mjs
@@ -124,6 +125,24 @@ try {
   const gained = a2.peers[bobSession].framesDecoded - (a1.peers[bobSession]?.framesDecoded || 0);
   console.log(`    alice ← bob after carol left: ${gained} frames in 1.5s`);
   if (gained < 8) throw new Error('video stalled after a participant left');
+
+  step('simulcast: alice enlarges her window, so bob\'s tile grows and the SFU switches her to a larger layer');
+  const small = a2.peers[bobSession].width;
+  await users[0].page.setViewportSize({ width: 1800, height: 1100 });
+  await users[0].page.waitForFunction(([s, w]) => {
+    const c = window.__ferriteCall;
+    const v = c && c.transport.peers.get(s) && c.transport.peers.get(s).stream.getVideoTracks()[0];
+    const tile = document.querySelector(`.call-tile[data-session="${s}"] video`);
+    return v && tile && tile.videoWidth > w;
+  }, [bobSession, small], { timeout: T, polling: 250 });
+  const b1 = await callState(users[0].page);
+  await new Promise((r) => setTimeout(r, 1500));
+  const b2 = await callState(users[0].page);
+  const grown = b2.peers[bobSession];
+  const kept = grown.framesDecoded - b1.peers[bobSession].framesDecoded;
+  console.log(`    alice ← bob: ${small}px wide in a small tile, ${grown.width}px after growing; ${kept} frames in 1.5s after the switch`);
+  if (!(grown.width > small)) throw new Error(`layer did not switch up (${small} → ${grown.width})`);
+  if (kept < 8) throw new Error('video stalled after the layer switch');
   const after2 = await api(setupCtx, 'GET', '/api/admin/stats');
   if (after2.sfu.clients !== 2) throw new Error(`expected 2 SFU clients after leave, got ${after2.sfu.clients}`);
 
