@@ -149,11 +149,11 @@ export default async function render(root, ctx) {
 
   const stored = loadStored(token);
   if (stored && stored.secret && stored.guest) {
-    // Check the stored identity still works (the room may have stopped being public). A 403
-    // means it does, but the lobby holds guests back for now.
+    // Check the stored identity still works (the room may have stopped being public).
     try {
-      await api.get(`/api/talk/rooms/${encodeURIComponent(token)}/messages?limit=1`, { 'X-Guest-Token': stored.secret })
-        .catch((e) => { if (e.status !== 403) throw e; });
+      const res = await api.get(`/api/talk/guest/${encodeURIComponent(token)}`, { 'X-Guest-Token': stored.secret });
+      if (!res.guest_valid) throw new Error('guest identity expired');
+      info = res.room;
       enter(stored.secret, stored.guest);
     } catch (_) {
       try { sessionStorage.removeItem(storeKey(token)); } catch (__) { /* ignore */ }

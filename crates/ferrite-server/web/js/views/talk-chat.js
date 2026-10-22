@@ -296,6 +296,7 @@ export function createRoomPane(opts) {
 
   // ---- participants panel ------------------------------------------------------------
   async function loadParticipants() {
+    if (waiting) return;
     try {
       ({ participants } = await tapi.get(`${base}/participants`));
       if (room.participant_count !== participants.length && room.kind !== 'note_to_self') {
@@ -319,7 +320,7 @@ export function createRoomPane(opts) {
     if (show) {
       paintSide();
       if (mode === 'participants') loadParticipants();
-      else breakouts.load();
+      else breakouts.ensureLoaded();
     }
     paintHeader();
   }
@@ -996,8 +997,9 @@ export function createRoomPane(opts) {
   // ---- live events -----------------------------------------------------------------------------
   const mine = (ev) => roomId && ev.room_id === roomId;
   offs.push(
-    live.on('talk.message', (ev) => { if (mine(ev)) addLive(ev.message); }),
-    live.on('talk.message_updated', (ev) => { if (mine(ev)) updateMessage(ev.message); }),
+    // While waiting in the lobby the history stays hidden (it loads when the lobby opens).
+    live.on('talk.message', (ev) => { if (mine(ev) && !waiting) addLive(ev.message); }),
+    live.on('talk.message_updated', (ev) => { if (mine(ev) && !waiting) updateMessage(ev.message); }),
     live.on('talk.typing', (ev) => {
       if (!mine(ev) || (ev.actor.id === self.id && ev.actor.kind === self.kind)) return;
       const prev = typers.get(ev.actor.id);
@@ -1040,8 +1042,9 @@ export function createRoomPane(opts) {
   async function resync() {
     if (destroyed) return;
     if (groupish()) await refreshLobby();
+    if (waiting) return;
     if (groupish() || room.kind === 'breakout') breakouts.load();
-    if (waiting || !order.length) return;
+    if (!order.length) return;
     try {
       let after = order[order.length - 1];
       for (let i = 0; i < 10; i++) {
@@ -1068,14 +1071,23 @@ export function createRoomPane(opts) {
 
   // ---- initial load ------------------------------------------------------------------------------
   async function initialLoad() {
+    entries.clear();
+    order.length = 0;
     clear(list).appendChild(spinner());
+    if (groupish() || room.kind === 'breakout') breakouts.load();
     try {
       const [{ messages }] = await Promise.all([tapi.get(`${base}/messages?limit=${PAGE}`), loadParticipants(), loadCall()]);
       if (destroyed) return;
+      // Messages that arrived live during the fetch were placed around the spinner: rebuild the
+      // list from the page plus those, in order.
+      const arrived = order.map((id) => entries.get(id).m);
+      entries.clear();
+      order.length = 0;
       clear(list);
       if (!roomId && messages.length) roomId = messages[0].room_id;
       hasMore = messages.length === PAGE;
       messages.forEach(insertMessage);
+      arrived.forEach(insertMessage);
       if (!hasMore) olderStatus.replaceChildren(h('div.talk-start', roomAvatar(room, 'lg'), h('strong', room.display_name), h('span.small.muted', 'This is the beginning of the conversation.')));
       // Unread divider before the first message from someone else after our read marker.
       const lastRead = room.last_read_message_id || 0;
@@ -1106,7 +1118,6 @@ export function createRoomPane(opts) {
     if (isMod() && lobbyActive(room)) loadWaiting();
     paintLobbyBanner();
   }
-  if (groupish() || room.kind === 'breakout') breakouts.load();
 
   return {
     el,

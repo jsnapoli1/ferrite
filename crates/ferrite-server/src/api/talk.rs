@@ -341,12 +341,18 @@ async fn guest_join(State(s): State<AppState>, Path(token): Path<String>, Json(b
 }
 
 /// Public information about a public room (for the guest join page).
-async fn guest_room(State(s): State<AppState>, Path(token): Path<String>) -> ApiResult<Json<Value>> {
+/// With `X-Guest-Token`, also says whether that guest identity still belongs to the room.
+async fn guest_room(State(s): State<AppState>, headers: axum::http::HeaderMap, Path(token): Path<String>) -> ApiResult<Json<Value>> {
     let room = s.core.room_by_token(&token).await?;
     if room.kind != "public" {
         return Err(ApiError(Error::NotFound));
     }
-    Ok(Json(json!({"room": guest_room_info(&s, &room).await?})))
+    let mut out = json!({"room": guest_room_info(&s, &room).await?});
+    if let Some(secret) = headers.get(GUEST_HEADER).and_then(|v| v.to_str().ok()) {
+        let valid = matches!(s.core.resolve_guest(secret).await, Ok((_, r)) if r.id == room.id);
+        out["guest_valid"] = json!(valid);
+    }
+    Ok(Json(out))
 }
 
 /// What a guest may know about a public room: enough to filter live events and show its state.

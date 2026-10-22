@@ -7,7 +7,7 @@
 // it shows the room's own banner and follows the main conversation's state.
 
 import { live } from '../ws.js';
-import { h, clear, icon, avatar, confirmDialog, toast, errorToast } from '../ui.js';
+import { h, clear, icon, avatar, confirmDialog, toast, errorToast, spinner } from '../ui.js';
 
 const MODES = { auto: 'Automatic', manual: 'Manual', free: 'Free choice' };
 const MODE_HINTS = {
@@ -40,6 +40,7 @@ export function createBreakouts(opts) {
   const isChild = room.kind === 'breakout';
   const parentId = isChild ? room.parent_id : room.id;
   let view = null;
+  let loaded = false;
   let panelHost = null;
   let panelClose = null;
   // A call of ours the server ended to move us (we rejoin a call in the next room).
@@ -56,6 +57,7 @@ export function createBreakouts(opts) {
     } catch (_) {
       view = null; // the lobby holds us back, or no access: nothing to show
     }
+    loaded = true;
     paint();
   }
 
@@ -175,14 +177,27 @@ export function createBreakouts(opts) {
     const body = ta.value.trim();
     if (!body) { ta.focus(); return; }
     const res = await act(() => tapi.post(`${base}/breakouts/broadcast`, { body }));
-    if (res) { ta.value = ''; toast(`Sent to ${res.rooms} ${res.rooms === 1 ? 'room' : 'rooms'}`, 'ok', { timeout: 2500 }); }
+    if (res) { ta.value = ''; delete drafts.broadcast; toast(`Sent to ${res.rooms} ${res.rooms === 1 ? 'room' : 'rooms'}`, 'ok', { timeout: 2500 }); }
   }
 
   // ---- panel ----------------------------------------------------------------------------------
+  // The panel is rebuilt on every live change; what the moderator is typing survives that.
+  const drafts = {};
+  function kept(el, key) {
+    el.dataset.keep = key;
+    if (key in drafts) el.value = drafts[key];
+    const save = () => { drafts[key] = el.value; };
+    el.addEventListener('input', save);
+    el.addEventListener('change', save);
+    return el;
+  }
+
   function setupForm(again) {
     const count = h('input', { type: 'number', min: 1, max: 20, value: view && view.rooms.length ? view.rooms.length : 2, id: 'bo-count', 'aria-label': 'Number of rooms' });
     const mode = h('select', { id: 'bo-mode', 'aria-label': 'Assignment' }, Object.entries(MODES).map(([v, label]) => h('option', { value: v }, label)));
     if (view && view.mode) mode.value = view.mode;
+    kept(count, 'count');
+    kept(mode, 'mode');
     const hint = h('p.small.muted', MODE_HINTS[mode.value]);
     mode.addEventListener('change', () => { hint.textContent = MODE_HINTS[mode.value]; });
     return h('form.bo-setup', {
@@ -191,6 +206,8 @@ export function createBreakouts(opts) {
         const n = Number(count.value);
         if (!(n >= 1 && n <= 20)) { toast('Between 1 and 20 rooms', 'warn'); return; }
         if (again && !await confirmDialog('Set up again', 'This replaces the current breakout rooms and their chats.', { confirm: 'Replace', danger: true })) return;
+        delete drafts.count;
+        delete drafts.mode;
         configure(mode.value, n);
       },
     },
@@ -208,12 +225,22 @@ export function createBreakouts(opts) {
   }
 
   function paintPanel(container, close) {
+    const focused = container.contains(document.activeElement) ? document.activeElement.dataset.keep : null;
+    paintPanelContent(container, close);
+    if (focused) container.querySelector(`[data-keep="${focused}"]`)?.focus();
+  }
+
+  function paintPanelContent(container, close) {
     panelHost = container;
     panelClose = close;
     const mod = opts.isMod();
     const head = h('div.talk-side-head', h('h3.grow', 'Breakout rooms'),
       h('button.btn.ghost.icon.sm', { 'aria-label': 'Close breakout rooms', onclick: close }, icon('x')));
     const content = h('div.bo-panel');
+    if (!loaded) {
+      clear(container).append(head, spinner());
+      return;
+    }
     if (!view || !view.mode) {
       content.append(mod
         ? h('div', h('p.small.muted', 'Split this conversation into smaller rooms with their own chat and call, then bring everyone back.'), setupForm(false))
@@ -226,7 +253,7 @@ export function createBreakouts(opts) {
       : h('div.bo-status', icon('canvas', 'sm'), h('strong', 'Not started'), h('span.muted', `· ${MODES[view.mode]}`));
     content.append(status);
     if (mod && running()) {
-      const ta = h('textarea', { rows: 2, 'aria-label': 'Message to all breakout rooms', placeholder: 'Message to all rooms…' });
+      const ta = kept(h('textarea', { rows: 2, 'aria-label': 'Message to all breakout rooms', placeholder: 'Message to all rooms…' }), 'broadcast');
       ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); broadcast(ta); } });
       content.append(h('div.bo-broadcast', ta, h('button.btn.sm.primary', { onclick: () => broadcast(ta) }, icon('send', 'sm'), 'Send to all rooms')));
     }
@@ -251,11 +278,11 @@ export function createBreakouts(opts) {
       if (running()) {
         content.append(h('div.bo-actions', h('button.btn.danger.sm', { onclick: stop }, icon('phone-off', 'sm'), 'Stop breakout rooms')));
       } else {
-        const minutes = h('input', { type: 'number', min: 1, max: 1440, placeholder: 'No limit', id: 'bo-minutes', 'aria-label': 'Timer in minutes' });
+        const minutes = kept(h('input', { type: 'number', min: 1, max: 1440, placeholder: 'No limit', id: 'bo-minutes', 'aria-label': 'Timer in minutes' }), 'minutes');
         content.append(
           h('div.bo-actions',
             h('div.bo-start', h('label', { for: 'bo-minutes' }, 'Timer (minutes)'), minutes),
-            h('button.btn.primary.sm', { onclick: () => start(Number(minutes.value) || null) }, icon('play', 'sm'), 'Start breakout rooms')),
+            h('button.btn.primary.sm', { onclick: () => { delete drafts.minutes; start(Number(minutes.value) || null); } }, icon('play', 'sm'), 'Start breakout rooms')),
           h('details.bo-more', h('summary.small', 'Set up again or remove'), setupForm(true),
             h('button.btn.ghost.sm.danger', { onclick: removeAll }, icon('trash', 'sm'), 'Remove breakout rooms')));
       }
@@ -282,6 +309,8 @@ export function createBreakouts(opts) {
   return {
     banner,
     load,
+    /** Loads the state unless it already arrived (live events keep it current). */
+    ensureLoaded() { if (!loaded) load(); },
     paintPanel,
     closePanel() { panelHost = null; panelClose = null; },
     /** The server ended our call to move us: rejoin a call wherever we go next. */

@@ -397,7 +397,8 @@ async fn guests_wait_in_the_lobby_and_need_the_password() {
         guest.status(Method::PATCH, &format!("{base}/moderation"), Some(json!({"lobby": false}))).await,
         StatusCode::FORBIDDEN
     );
-    assert_eq!(guest.get(&gpath).await["room"]["lobby"], true);
+    let info = guest.get(&gpath).await;
+    assert_eq!((info["room"]["lobby"].as_bool(), info["guest_valid"].as_bool()), (Some(true), Some(true)));
     alice
         .ok(Method::PATCH, &format!("{base}/moderation"), Some(json!({"lobby": false, "password": null})))
         .await;

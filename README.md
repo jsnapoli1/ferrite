@@ -31,12 +31,12 @@ cargo build --release
 |---|---|
 | **Files** | Upload/download (drag and drop, multi-file progress), folders, rename/move/copy, favorites, recent, quotas, **versions** (restore any), **trash** (30-day retention, restore), **locks**, content-addressed storage with **deduplication** (BLAKE3), full-text search inside text files, previews for images, PDF, text, audio and video. |
 | **Sharing** | Share with users, groups or a Talk conversation (read / edit / create / delete / reshare bits). Public links can have a password, an expiry, and an "upload" mode (file drop). |
-| **Talk** | Group, public, one-to-one and note-to-self conversations. Markdown, replies, reactions, edits, deletes, @mentions with unread badges, typing indicators, polls, file sharing (from Files or by upload, drop or paste). **Guests** join public conversations by link. **Video/audio calls** with screen sharing, raise hand, speaker detection, and mute/camera indicators; routed through the built-in **SFU**, with peer-to-peer as the fallback. |
+| **Talk** | Group, public, one-to-one and note-to-self conversations. Markdown, replies, reactions, edits, deletes, @mentions with unread badges, typing indicators, polls, file sharing (from Files or by upload, drop or paste). **Guests** join public conversations by link. **Video/audio calls** with screen sharing, raise hand, speaker detection, and mute/camera indicators; routed through the built-in **SFU**, with peer-to-peer as the fallback. **Moderation:** lobby (with an opening time), room passwords, who may start calls, ask to mute / mute everyone, lower hands (a raised-hands queue), remove from a call. **Breakout rooms** (automatic, manual or free choice) with live moves, broadcast, help requests and a timer. |
 | **Boards** | Kanban boards with columns, cards (drag or keyboard), labels, due dates, assignees, comments, links to files/folders/conversations/URLs, read-only members and archive. |
 | **Live documents** | Real-time co-editing (CRDT, Yjs-compatible) of **Markdown/text**, **spreadsheets** (formulas: arithmetic, refs, SUM/AVERAGE/MIN/MAX/COUNT), **mind maps** (`.fmind`) and **canvases** (`.fcanvas`: notes, frames, files, embedded mind maps and boards, arrows). They show peers' presence and cursors, and save automatically, with versions. |
 | **Calendar and contacts** | CalDAV and CardDAV at Nextcloud-compatible URLs. Month/week/list views. **Recurring events are expanded** (RRULE, EXDATE, RDATE, overridden instances), DST-correct with IANA time zones. Changes from any client or tab appear live. Contacts can be edited. |
 | **Search** | One search across files, messages, cards, events and contacts. Full text always; **semantic** (by meaning) when an embedding model is configured. |
-| **MCP** | Ferrite is an **MCP server**: 59 tools, resources and prompts over Streamable HTTP and stdio, for both protocol eras. It is also an **MCP client**: it uses the Crafting Apps' MCP servers and any MCP servers you add. |
+| **MCP** | Ferrite is an **MCP server**: 64 tools, resources and prompts over Streamable HTTP and stdio, for both protocol eras. It is also an **MCP client**: it uses the Crafting Apps' MCP servers and any MCP servers you add. |
 | **AI** | Bring your own model: any **OpenAI-compatible** server (Ollama, llama.cpp, LM Studio, vLLM, …) or **Anthropic's Claude API**. The assistant uses the same MCP tools with the user's own permissions, and is **read-only unless the user allows changes**. Typing `@assistant` in any conversation brings in the Talk bot. Per-user consent. |
 | **Admin** | Users, groups, quotas, disabling, password reset, app tokens with scopes, server stats (memory, dedup savings, SFU traffic). |
 
@@ -101,7 +101,8 @@ side-by-side performance claims.
   - When the SFU is disabled or its port is busy, calls fall back to a peer-to-peer mesh automatically. The server tells all participants which transport to use, so they always agree.
 - Capture is capped at 640×360 / 24 fps, which keeps calls light on small machines and links.
 - **TURN:** on a LAN nothing extra is needed. Across NATs, add a TURN server under `ice_servers` (see [Configuration](#configuration)).
-- **Guests** open `https://your-server/join/<token>`, pick a name, and can chat, react, vote and join calls. They cannot share files or administer the room.
+- **Guests** open `https://your-server/join/<token>`, pick a name (and the room password, when set), and can chat, react, vote and join calls. They cannot share files or administer the room.
+- **Moderation:** moderators can hold everyone else in a **lobby** (optionally until a set time), ask people to mute, lower hands, remove someone from the call, and limit starting calls to moderators. **Breakout rooms** are child conversations of the main one: participants' clients move into their room's chat and call when they start and come back when they stop (by hand or on a timer); their chats stay readable.
 - **Assistant in Talk:** in rooms where it is enabled, mentioning `@assistant` makes the AI answer in the thread, using the asker's permissions.
 
 ## ArtCraft Crafting Apps
@@ -153,12 +154,12 @@ HTTP client configuration:
 { "mcpServers": { "ferrite": { "url": "https://your-server/mcp", "headers": { "Authorization": "Bearer <app token>" } } } }
 ```
 
-**Tools (59)**, each annotated read-only or destructive, and each limited by the token's scopes:
+**Tools (64)**, each annotated read-only or destructive, and each limited by the token's scopes:
 
 | Group | Tools |
 |---|---|
 | Files | `files_list` `files_info` `files_read` `files_write` `files_mkdir` `files_move` `files_copy` `files_delete` `files_search` `files_recent` `files_versions` `files_restore_version` `files_share` `files_shares` `trash_list` `trash_restore` |
-| Talk | `talk_rooms` `talk_read` `talk_post` `talk_create_room` `talk_direct` `talk_share_file` `talk_react` `talk_poll` `talk_search` |
+| Talk | `talk_rooms` `talk_read` `talk_post` `talk_create_room` `talk_direct` `talk_share_file` `talk_react` `talk_poll` `talk_search` `talk_lobby` `talk_breakouts` `talk_breakouts_start` `talk_breakouts_stop` `talk_breakouts_broadcast` |
 | Boards | `boards_list` `boards_get` `boards_create` `boards_add_card` `boards_update_card` `boards_move_card` `boards_assign` `boards_comment` `boards_link` `boards_my_cards` |
 | Live documents | `docs_create` `docs_read` `docs_append` `docs_replace` `sheet_set` `mindmap_add` `mindmap_update` `canvas_add` `canvas_connect` |
 | Calendar and contacts | `calendar_events` `calendar_create_event` `calendar_update_event` `calendar_delete_event` `contacts_search` `contacts_create` `contacts_update` |
@@ -297,7 +298,8 @@ This is an honest map against Nextcloud's core feature set: ✅ done, 🟡 parti
 | Talk: chat, replies, reactions, edits, mentions, polls, file sharing | ✅ | |
 | Talk: guests via link | ✅ | |
 | Talk: audio/video calls, screen sharing | ✅ | Built-in SFU (no separate High-performance Backend) |
-| Talk: recording, SIP dial-in, breakout rooms, lobby, federation, Matterbridge | ❌ | |
+| Talk: lobby, room passwords, call moderation, breakout rooms | ✅ | Enforced on the server (REST, event socket, SFU) |
+| Talk: recording, SIP dial-in, federation, Matterbridge | ❌ | |
 | Mobile push notifications | ❌ | In-app live notifications only |
 | Deck (kanban boards) | ✅ | |
 | Collaborative text | ✅ | Markdown |
@@ -332,11 +334,11 @@ e2e/               Playwright browser tests
 docs/bench/        benchmark results
 ```
 
-**Rust tests:** `cargo test --workspace` runs 59 tests. They include end-to-end tests that
+**Rust tests:** `cargo test --workspace` runs 66 tests. They include end-to-end tests that
 start real servers and cover:
 - login/CSRF and tokens
 - files, sharing, WebDAV, CalDAV/CardDAV
-- Talk with call signaling
+- Talk with call signaling, lobby, passwords, call moderation and breakout rooms
 - live co-editing over WebSockets
 - MCP in both protocol eras
 - the assistant and Talk bot against a mock model
@@ -360,6 +362,7 @@ cd e2e && FERRITE_URL=http://127.0.0.1:8821 node files.mjs
 | `files.mjs` | Files, sharing dialog, public links (password, upload), versions, trash, Settings (profile, AI, tokens/MCP, MCP servers, Craft, admin), the assistant against a mock model, mobile layouts |
 | `talk.mjs` | Two-user chat (mentions, unread, replies, reactions, edit/delete, typing, polls, files), a video call (connect, mute/hand/camera/screen-share indicators, leave), guest join, deep links, narrow layouts |
 | `sfu.mjs` | Three-person call through the SFU: one connection each, ~20 fps decoded from both others, server forwarding counters, clean leave |
+| `moderation.mjs` | Lobby (waiting screen, who waits, live opening), guest password, raised-hands queue, ask to mute, mute everyone, remove and rejoin, who may start calls, breakout rooms (manual assignment, live chat and call moves for users and a guest, broadcast, help request, stop and return), phone and dark layouts |
 | `boards.mjs` | Boards, card modal, drag and keyboard moves, read-only members, and the four live editors with two users co-editing |
 | `calendar.mjs` | Month/week/list, create/edit/move events, recurring series across DST (Europe/Berlin), EXDATE, series edits, live refresh across tabs, contacts create/edit/search/delete, phone layouts |
 | `search.mjs` | Search results for files, events and contacts open the right views |
