@@ -1,0 +1,6 @@
+{
+  "name": "ferrite-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Browser tests: run against a server with FERRITE_URL=http://host:port node <file>.mjs"
+}
