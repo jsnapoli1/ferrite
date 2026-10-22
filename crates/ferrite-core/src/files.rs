@@ -191,6 +191,12 @@ impl Core {
         Ok((node, p))
     }
 
+    /// The entry called `name` in a folder the user can read, if any.
+    pub async fn child_by_name(&self, user_id: &str, parent_id: &str, name: &str) -> Result<Option<Node>> {
+        self.node_for(user_id, parent_id, perm::READ).await?;
+        self.child(parent_id, name).await
+    }
+
     async fn child(&self, parent_id: &str, name: &str) -> Result<Option<Node>> {
         Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {NODE_COLS} FROM nodes WHERE parent_id = ? AND name = ? AND trashed_at IS NULL"

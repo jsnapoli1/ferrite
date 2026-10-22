@@ -24,6 +24,15 @@
 //! are told the highest layer anyone currently wants from them (`{"type": "publish"}`) and
 //! pause the layers above it, so nobody spends CPU and upload on a 720p encode that no tile
 //! shows; that budget goes to keeping the frame rate up.
+//!
+//! **Recording.** A room being recorded gets every participant's audio and best video layer
+//! written to one WebM file per person as the frames pass through (see `record`): no
+//! decoding or encoding, so recording costs disk writes and little else.
+
+mod record;
+pub mod webm;
+
+pub use record::RecordedFile;
 
 use std::collections::{HashMap, VecDeque};
 use std::io::ErrorKind;
@@ -56,6 +65,7 @@ struct Counters {
     clients: AtomicUsize,
     packets_forwarded: AtomicU64,
     bytes_forwarded: AtomicU64,
+    recordings: AtomicUsize,
 }
 
 /// Snapshot of SFU activity.
@@ -65,11 +75,22 @@ pub struct SfuStats {
     pub clients: usize,
     pub packets_forwarded: u64,
     pub bytes_forwarded: u64,
+    /// Rooms being recorded right now.
+    pub recordings: usize,
 }
 
 enum Command {
     Add(Box<Client>),
     RemoveSession(String),
+    StartRecording {
+        room: String,
+        dir: std::path::PathBuf,
+        reply: SyncSender<Result<(), String>>,
+    },
+    StopRecording {
+        room: String,
+        reply: SyncSender<Vec<RecordedFile>>,
+    },
 }
 
 /// Handle to the running SFU thread.
@@ -127,7 +148,9 @@ impl Sfu {
     /// `{"type": "answer", "sdp": "…"}`). Any previous connection of the session is replaced.
     pub fn connect(&self, room: &str, session: &str, offer: serde_json::Value) -> Result<serde_json::Value, String> {
         let offer: SdpOffer = serde_json::from_value(offer).map_err(|e| format!("invalid offer: {e}"))?;
-        let mut rtc = Rtc::builder().build(Instant::now());
+        // VP8 + Opus only: every browser has them, VP8 simulcast is the best supported, and
+        // recordings can go straight into WebM.
+        let mut rtc = Rtc::builder().clear_codecs().enable_vp8(true).enable_opus(true, false).build(Instant::now());
         for addr in &self.candidates {
             let c = Candidate::host(*addr, "udp").map_err(|e| format!("bad candidate {addr}: {e}"))?;
             rtc.add_local_candidate(c);
@@ -144,11 +167,36 @@ impl Sfu {
         let _ = self.tx.send(Command::RemoveSession(session.to_string()));
     }
 
+    /// Starts writing everyone's media in `room` into `dir` (one WebM file per call session).
+    /// Blocks briefly; call from a blocking context.
+    pub fn start_recording(&self, room: &str, dir: std::path::PathBuf) -> Result<(), String> {
+        let (reply, rx) = mpsc::sync_channel(1);
+        self.tx
+            .send(Command::StartRecording {
+                room: room.to_string(),
+                dir,
+                reply,
+            })
+            .map_err(|_| "SFU stopped".to_string())?;
+        rx.recv_timeout(Duration::from_secs(10)).map_err(|_| "SFU did not answer".to_string())?
+    }
+
+    /// Stops recording `room` and returns the finished files (empty if it wasn't recording).
+    /// Blocks while files are finalized; call from a blocking context.
+    pub fn stop_recording(&self, room: &str) -> Vec<RecordedFile> {
+        let (reply, rx) = mpsc::sync_channel(1);
+        if self.tx.send(Command::StopRecording { room: room.to_string(), reply }).is_err() {
+            return Vec::new();
+        }
+        rx.recv_timeout(Duration::from_secs(120)).unwrap_or_default()
+    }
+
     pub fn stats(&self) -> SfuStats {
         SfuStats {
             udp_addr: self.local.to_string(),
             clients: self.counters.clients.load(Ordering::Relaxed),
             packets_forwarded: self.counters.packets_forwarded.load(Ordering::Relaxed),
+            recordings: self.counters.recordings.load(Ordering::Relaxed),
             bytes_forwarded: self.counters.bytes_forwarded.load(Ordering::Relaxed),
         }
     }
@@ -157,6 +205,7 @@ impl Sfu {
 /// The SFU loop: reads UDP, drives every connection and forwards media within rooms.
 fn run(socket: UdpSocket, rx: Receiver<Command>, counters: Arc<Counters>) {
     let mut clients: Vec<Client> = Vec::new();
+    let mut recordings: HashMap<String, record::RoomRecording> = HashMap::new();
     let mut queue: VecDeque<Propagated> = VecDeque::new();
     let mut buf = vec![0u8; 2000];
     loop {
@@ -185,6 +234,25 @@ fn run(socket: UdpSocket, rx: Receiver<Command>, counters: Arc<Counters>) {
                         c.rtc.disconnect();
                     }
                 }
+                Ok(Command::StartRecording { room, dir, reply }) => {
+                    let result = match recordings.entry(room) {
+                        std::collections::hash_map::Entry::Occupied(_) => Err("this call is already being recorded".to_string()),
+                        std::collections::hash_map::Entry::Vacant(slot) => record::RoomRecording::new(dir)
+                            .map_err(|e| format!("cannot create the recording folder: {e}"))
+                            .map(|r| {
+                                slot.insert(r);
+                            }),
+                    };
+                    let _ = reply.send(result);
+                    layers_changed = true;
+                    counters.recordings.store(recordings.len(), Ordering::Relaxed);
+                }
+                Ok(Command::StopRecording { room, reply }) => {
+                    let files = recordings.remove(&room).map(record::RoomRecording::finish).unwrap_or_default();
+                    let _ = reply.send(files);
+                    layers_changed = true;
+                    counters.recordings.store(recordings.len(), Ordering::Relaxed);
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,
             }
@@ -193,7 +261,7 @@ fn run(socket: UdpSocket, rx: Receiver<Command>, counters: Arc<Counters>) {
             layers_changed |= std::mem::take(&mut c.layers_dirty);
         }
         if layers_changed {
-            update_published_layers(&mut clients);
+            update_published_layers(&mut clients, &recordings);
         }
 
         let mut timeout = Instant::now() + Duration::from_millis(100);
@@ -202,7 +270,7 @@ fn run(socket: UdpSocket, rx: Receiver<Command>, counters: Arc<Counters>) {
         }
 
         if let Some(p) = queue.pop_front() {
-            propagate(&p, &mut clients, &counters, &mut queue);
+            propagate(&p, &mut clients, &counters, &mut queue, &mut recordings);
             continue;
         }
 
@@ -242,17 +310,22 @@ fn run(socket: UdpSocket, rx: Receiver<Command>, counters: Arc<Counters>) {
     }
 }
 
-/// Tells each sender the highest simulcast layer any receiver in its room wants from it.
-fn update_published_layers(clients: &mut [Client]) {
+/// Tells each sender the highest simulcast layer any receiver in its room wants from it (a
+/// recording wants the top layer).
+fn update_published_layers(clients: &mut [Client], recordings: &HashMap<String, record::RoomRecording>) {
     for i in 0..clients.len() {
         let (id, room, session) = (clients[i].id, clients[i].room.clone(), clients[i].session.clone());
-        let top = clients
-            .iter()
-            .filter(|c| c.id != id && c.room == room)
-            .map(|c| c.layer_prefs.get(&session).copied().unwrap_or(LAYERS.len() - 1))
-            .max()
-            // Nobody to send to: the smallest layer keeps the track alive at almost no cost.
-            .unwrap_or(0);
+        let top = if recordings.contains_key(&room) {
+            LAYERS.len() - 1
+        } else {
+            clients
+                .iter()
+                .filter(|c| c.id != id && c.room == room)
+                .map(|c| c.layer_prefs.get(&session).copied().unwrap_or(LAYERS.len() - 1))
+                .max()
+                // Nobody to send to: the smallest layer keeps the track alive at almost no cost.
+                .unwrap_or(0)
+        };
         let sender = &mut clients[i];
         if sender.published_top != Some(top) && sender.send_channel(&serde_json::json!({"type": "publish", "max": LAYERS[top]}).to_string()) {
             sender.published_top = Some(top);
@@ -260,9 +333,28 @@ fn update_published_layers(clients: &mut [Client]) {
     }
 }
 
-fn propagate(p: &Propagated, clients: &mut [Client], counters: &Counters, queue: &mut VecDeque<Propagated>) {
+fn propagate(
+    p: &Propagated,
+    clients: &mut [Client],
+    counters: &Counters,
+    queue: &mut VecDeque<Propagated>,
+    recordings: &mut HashMap<String, record::RoomRecording>,
+) {
     let Some((origin, room)) = p.origin() else { return };
     let room = room.to_string();
+    if let (Propagated::MediaData(_, _, data), Some(rec)) = (p, recordings.get_mut(&room)) {
+        if let Some(session) = clients.iter().find(|c| c.id == origin).map(|c| c.session.clone()) {
+            // The recording waits for a keyframe of the layer it records.
+            if let Some(rid) = rec.write(&session, data) {
+                let req = KeyframeRequest {
+                    mid: data.mid,
+                    rid: Some(rid),
+                    kind: KeyframeRequestKind::Pli,
+                };
+                queue.push_back(Propagated::KeyframeRequest(RECORDER, room.clone(), req, origin, data.mid));
+            }
+        }
+    }
     for c in clients.iter_mut().filter(|c| c.id != origin && c.room == room) {
         match p {
             Propagated::TrackOpen(_, _, track) => c.track_open(track.clone()),
@@ -293,6 +385,9 @@ fn propagate(p: &Propagated, clients: &mut [Client], counters: &Counters, queue:
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ClientId(u64);
+
+/// The origin of keyframe requests made on behalf of a recording (no client has id 0).
+const RECORDER: ClientId = ClientId(0);
 
 #[derive(Debug)]
 struct TrackIn {
@@ -329,15 +424,57 @@ fn layer_rank(rid: &str) -> usize {
     LAYERS.iter().position(|l| *l == rid).unwrap_or(LAYERS.len() - 1)
 }
 
+/// Chooses which simulcast layer of one incoming video track to pass on (to a receiver or to
+/// a recording): the wanted layer when it is arriving, else the best one below it that is,
+/// else any above. It switches only on a keyframe of the new layer and asks for one.
+#[derive(Debug, Default)]
+struct LayerPicker {
+    /// Layer currently passed on (None until the first keyframe).
+    current: Option<Rid>,
+    /// When each layer (by rank) last arrived from the sender.
+    seen: [Option<Instant>; 3],
+    last_keyframe_request: Option<Instant>,
+}
+
+enum Pick {
+    Pass,
+    /// Drop this frame; the layer given (if any) needs a keyframe before the switch.
+    Skip(Option<Rid>),
+}
+
+impl LayerPicker {
+    fn pick(&mut self, data: &MediaData, want: usize) -> Pick {
+        let Some(rid) = data.rid else { return Pick::Pass };
+        let now = data.network_time;
+        let rank = layer_rank(&rid);
+        self.seen[rank] = Some(now);
+        let seen = self.seen;
+        let alive = |r: usize| seen[r].is_some_and(|t| now.saturating_duration_since(t) < LAYER_ALIVE);
+        let target = (0..=want).rev().find(|&r| alive(r)).or_else(|| (want + 1..LAYERS.len()).find(|&r| alive(r)));
+        if self.current.map(|c| layer_rank(&c)) == Some(rank) {
+            return Pick::Pass;
+        }
+        if target == Some(rank) && data.is_keyframe() {
+            self.current = Some(rid);
+            return Pick::Pass;
+        }
+        if target == Some(rank)
+            && self
+                .last_keyframe_request
+                .is_none_or(|t| now.saturating_duration_since(t) >= LAYER_KEYFRAME_SPACING)
+        {
+            self.last_keyframe_request = Some(now);
+            return Pick::Skip(Some(rid));
+        }
+        Pick::Skip(None)
+    }
+}
+
 #[derive(Debug)]
 struct TrackOut {
     track_in: Weak<TrackIn>,
     state: OutState,
-    /// Simulcast layer currently forwarded (None until the first keyframe, or no simulcast).
-    current: Option<Rid>,
-    /// When each layer (by rank) last arrived from the sender.
-    seen: [Option<Instant>; 3],
-    last_layer_keyframe_request: Option<Instant>,
+    layers: LayerPicker,
 }
 
 impl TrackOut {
@@ -470,7 +607,7 @@ impl Client {
                 let track_out = self.tracks_out.iter().find(|t| t.mid() == Some(req.mid))?;
                 let track_in = track_out.track_in.upgrade()?;
                 // The receiver's decoder wants a keyframe of whatever layer it is being sent.
-                req.rid = track_out.current;
+                req.rid = track_out.layers.current;
                 Some(Propagated::KeyframeRequest(self.id, self.room.clone(), req, track_in.origin, track_in.mid))
             }
             Event::ChannelOpen(cid, _) => {
@@ -511,9 +648,7 @@ impl Client {
         self.tracks_out.push(TrackOut {
             track_in,
             state: OutState::ToOpen,
-            current: None,
-            seen: [None; 3],
-            last_layer_keyframe_request: None,
+            layers: LayerPicker::default(),
         });
     }
 
@@ -627,36 +762,15 @@ impl Client {
             return (false, None);
         };
         let OutState::Open(mid) = out.state else { return (false, None) };
-        let mut keyframe = None;
-        if let Some(rid) = data.rid {
-            let want = out
-                .track_in
-                .upgrade()
-                .and_then(|i| self.layer_prefs.get(&i.session).copied())
-                .unwrap_or(LAYERS.len() - 1);
-            let now = data.network_time;
-            let rank = layer_rank(&rid);
-            out.seen[rank] = Some(now);
-            let alive = |r: usize| out.seen[r].is_some_and(|t| now.saturating_duration_since(t) < LAYER_ALIVE);
-            // The wanted layer, else the best one below it that is arriving, else any above.
-            let target = (0..=want).rev().find(|&r| alive(r)).or_else(|| (want + 1..LAYERS.len()).find(|&r| alive(r)));
-            let current = out.current.map(|c| layer_rank(&c));
-            if current != Some(rank) {
-                if target == Some(rank) && data.is_keyframe() {
-                    out.current = Some(rid);
-                } else {
-                    if target == Some(rank)
-                        && out
-                            .last_layer_keyframe_request
-                            .is_none_or(|t| now.saturating_duration_since(t) >= LAYER_KEYFRAME_SPACING)
-                    {
-                        out.last_layer_keyframe_request = Some(now);
-                        keyframe = Some(rid);
-                    }
-                    return (false, keyframe);
-                }
-            }
-        }
+        let want = out
+            .track_in
+            .upgrade()
+            .and_then(|i| self.layer_prefs.get(&i.session).copied())
+            .unwrap_or(LAYERS.len() - 1);
+        let keyframe = match out.layers.pick(data, want) {
+            Pick::Pass => None,
+            Pick::Skip(keyframe) => return (false, keyframe),
+        };
         let Some(writer) = self.rtc.writer(mid) else { return (false, keyframe) };
         let Some(pt) = writer.match_params(data.params) else {
             return (false, keyframe);

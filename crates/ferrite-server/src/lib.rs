@@ -9,6 +9,7 @@ pub mod external;
 pub mod groupdav;
 pub mod mcp_http;
 pub mod public;
+pub mod recording;
 pub mod semantic;
 pub mod tools;
 pub mod web;
@@ -32,6 +33,8 @@ pub struct AppState {
     /// Built-in SFU for calls; None when disabled or its UDP port is unavailable (calls then
     /// fall back to peer-to-peer).
     pub sfu: Option<Arc<ferrite_sfu::Sfu>>,
+    /// Calls being recorded (through the SFU).
+    pub recordings: Arc<recording::Recordings>,
 }
 
 impl AppState {
@@ -55,6 +58,7 @@ impl AppState {
             mcp,
             throttle: Arc::new(auth::Throttle::default()),
             sfu,
+            recordings: Arc::new(recording::Recordings::default()),
         }
     }
 

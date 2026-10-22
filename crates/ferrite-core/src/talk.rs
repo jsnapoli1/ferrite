@@ -752,7 +752,8 @@ impl Core {
             .await?)
     }
 
-    async fn post_system(&self, room_id: &str, text: &str) -> Result<Message> {
+    /// Posts a system notice (e.g. "Alice started recording the call") into a room.
+    pub async fn post_system(&self, room_id: &str, text: &str) -> Result<Message> {
         self.insert_message(room_id, &Actor::system(), "system", text, None, json!({})).await
     }
 

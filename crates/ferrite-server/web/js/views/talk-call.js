@@ -464,6 +464,12 @@ export class Call {
       live.on('call.joined', (ev) => this.onJoined(ev)),
       live.on('call.left', (ev) => this.onLeft(ev)),
       live.on('call.state', (ev) => this.onState(ev)),
+      live.on('call.recording', (ev) => {
+        if (ev.room_id !== this.roomId || this.recording === ev.active) return;
+        this.recording = ev.active;
+        this.paintControls();
+        if (ev.by && ev.by !== this.self.name) toast(ev.active ? `${ev.by} started recording this call` : `${ev.by} stopped the recording`);
+      }),
       // The server drops our session when the socket closes; rejoin after a reconnect.
       live.on('hello', () => { if (this.session) this.rejoin(); }),
     );
@@ -487,6 +493,9 @@ export class Call {
     if (this.ended) { live.send({ type: 'call.leave', room_id: res.room_id, session: res.session }); return; }
     this.roomId = res.room_id;
     this.session = res.session;
+    this.recording = !!res.recording;
+    this.canRecord = !!res.can_record;
+    this.paintControls();
     const iceServers = (res.ice_servers && res.ice_servers.length ? res.ice_servers : this.config.ice_servers) || [];
     this.transport = createTransport({ roomId: this.roomId, session: this.session, iceServers, sfu: !!res.sfu });
     this.transport.onRemoteStream = (s, st) => this.attachRemote(s, st);
@@ -666,6 +675,18 @@ export class Call {
     }
   }
 
+  async toggleRecording() {
+    const action = this.recording ? 'stop' : 'start';
+    this.btns.record.disabled = true;
+    try {
+      await live.request({ type: 'call.record', room_id: this.roomId, action }, 'call.recording', 15000);
+    } catch (e) {
+      errorToast(e);
+    } finally {
+      this.btns.record.disabled = false;
+    }
+  }
+
   toggleHand() {
     this.state.hand = !this.state.hand;
     this.sendState();
@@ -689,7 +710,11 @@ export class Call {
         btn('cam', 'Turn camera off', () => this.toggleCam()),
         screenOk && btn('screen', 'Share screen', () => this.toggleScreen()),
         btn('hand', 'Raise hand', () => this.toggleHand()),
+        btn('record', 'Start recording', () => this.toggleRecording()),
         btn('leave', 'Leave call', () => this.leave(), '.danger')));
+    // Everyone sees when a call is recorded.
+    this.recBadge = h('div.call-rec', { role: 'status', hidden: true }, h('span.call-rec-dot'), 'Recording');
+    this.el.prepend(this.recBadge);
     this.paintControls();
   }
 
@@ -708,6 +733,11 @@ export class Call {
     set('cam', this.state.video, 'video', 'video-off', 'Turn camera off', 'Turn camera on', true);
     set('screen', this.state.screen, 'screen', 'screen', 'Stop sharing screen', 'Share screen');
     set('hand', this.state.hand, 'hand', 'hand', 'Lower hand', 'Raise hand');
+    set('record', !!this.recording, 'record', 'record', 'Stop recording', 'Start recording');
+    // Only moderators can record, and only through the server's SFU.
+    this.btns.record.hidden = !this.canRecord;
+    this.btns.record.classList.toggle('recording', !!this.recording);
+    if (this.recBadge) this.recBadge.hidden = !this.recording;
     this.btns.leave.replaceChildren(icon('phone-off'));
   }
 

@@ -114,6 +114,7 @@ async fn event_loop(s: AppState, actor: Actor, mut socket: WebSocket) {
             sfu.disconnect(&sess);
         }
     }
+    crate::recording::after_leave(&s).await;
 }
 
 async fn handle_client_event(s: &AppState, actor: &Actor, conn: u64, v: Value) -> Option<Value> {
@@ -128,7 +129,12 @@ async fn handle_client_event(s: &AppState, actor: &Actor, conn: u64, v: Value) -
             }
             "call.join" => {
                 let (session, members, room) = s.core.join_call(actor, &str_of("room"), conn, v["audio"].as_bool().unwrap_or(true), v["video"].as_bool().unwrap_or(false)).await?;
-                Ok(Some(json!({"type": "call.self", "room_id": room.id, "room": room.token, "session": session, "members": members, "ice_servers": s.core.config.ice_servers, "sfu": s.sfu.is_some()})))
+                let recording = s.recordings.is_recording(&room.id);
+                if recording {
+                    s.recordings.note_member(&room.id, &session, &actor.name);
+                }
+                let can_record = s.sfu.is_some() && crate::recording::can_record(s, actor, &room).await?;
+                Ok(Some(json!({"type": "call.self", "room_id": room.id, "room": room.token, "session": session, "members": members, "ice_servers": s.core.config.ice_servers, "sfu": s.sfu.is_some(), "recording": recording, "can_record": can_record})))
             }
             "call.leave" => {
                 let (room_id, session) = (str_of("room_id"), str_of("session"));
@@ -137,6 +143,16 @@ async fn handle_client_event(s: &AppState, actor: &Actor, conn: u64, v: Value) -
                     if let Some(sfu) = &s.sfu {
                         sfu.disconnect(&session);
                     }
+                    crate::recording::after_leave(s).await;
+                }
+                Ok(None)
+            }
+            "call.record" => {
+                let room_id = str_of("room_id");
+                match str_of("action").as_str() {
+                    "start" => crate::recording::start(s, actor, &room_id).await?,
+                    "stop" => crate::recording::stop(s, Some(actor), &room_id).await?,
+                    _ => return Err(Error::bad("action must be start or stop")),
                 }
                 Ok(None)
             }
