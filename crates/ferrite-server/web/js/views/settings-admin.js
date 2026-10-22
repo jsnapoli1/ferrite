@@ -41,16 +41,16 @@ export async function adminTab(host, ctx) {
       const { users } = await api.get('/api/admin/users');
       clear(usersHost).appendChild(h('div.set-table-wrap', h('table.table.set-table',
         h('thead', h('tr', h('th', 'User'), h('th.fl-hide-sm', 'Storage'), h('th.fl-hide-sm', 'Joined'), h('th', h('span.sr-only', 'Actions')))),
-        h('tbody', users.map(({ user: u, quota }) => h(`tr${u.disabled ? '.set-disabled' : ''}`,
+        h('tbody', users.map(({ user: u, quota, two_factor: tf }) => h(`tr${u.disabled ? '.set-disabled' : ''}`,
           h('td', h('div.row', { style: { gap: '10px' } }, avatar(u.display_name, { size: 'sm', seed: u.id }),
             h('div.grow', h('div.row.wrap', { style: { gap: '6px' } }, h('strong', u.display_name),
-              u.is_admin ? pill('admin', 'info') : null, u.disabled ? pill('disabled', 'danger') : null, u.id === ctx.me.user.id ? pill('you') : null),
+              u.is_admin ? pill('admin', 'info') : null, tf ? pill('2FA', 'ok') : null, u.disabled ? pill('disabled', 'danger') : null, u.id === ctx.me.user.id ? pill('you') : null),
             h('div.small.muted.ellipsis', `@${u.username}${u.email ? ` · ${u.email}` : ''}`)))),
           h('td.fl-hide-sm.small', bytes(quota.used), quota.limit ? h('span.muted', ` of ${bytes(quota.limit)}`) : h('span.muted', ' · no limit'),
             quota.limit ? h('div.progress.set-mini', h('div', { style: { width: `${Math.min(100, (quota.used / quota.limit) * 100)}%` } })) : null),
           h('td.fl-hide-sm.small.muted', relTime(u.created_at)),
           h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
-            h('button.btn.sm', { type: 'button', onclick: () => editUser(u), 'aria-label': `Edit ${u.username}` }, icon('edit', 'sm'), h('span.fl-hide-sm', 'Edit')),
+            h('button.btn.sm', { type: 'button', onclick: () => editUser(u, tf), 'aria-label': `Edit ${u.username}` }, icon('edit', 'sm'), h('span.fl-hide-sm', 'Edit')),
             u.id !== ctx.me.user.id ? h('button.btn.sm.ghost.danger', { type: 'button', onclick: () => deleteUser(u), 'aria-label': `Delete ${u.username}`, title: 'Delete' }, icon('trash', 'sm')) : null)))))));
     } catch (e) {
       clear(usersHost).appendChild(h('p.error-text', e.message));
@@ -88,7 +88,7 @@ export async function adminTab(host, ctx) {
     });
   }
 
-  async function editUser(u) {
+  async function editUser(u, tf) {
     const name = h('input', { type: 'text', value: u.display_name });
     const email = h('input', { type: 'email', value: u.email || '' });
     const password = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'Leave empty to keep' });
@@ -100,6 +100,8 @@ export async function adminTab(host, ctx) {
       h('div.set-grid', field('Reset password', password), field('Storage quota (GB)', quota, 'Leave empty for no limit.')),
       h('label.check', admin, h('span', 'Administrator')),
       h('label.check', disabled, h('span', 'Disabled (can’t sign in; tokens stop working)')),
+      tf ? h('div.set-2fa-reset', icon('lock', 'sm'), h('span.grow', 'Two-factor authentication is on.'),
+        h('button.btn.sm.danger', { type: 'button', onclick: () => resetTwoFactor(u) }, 'Reset 2FA')) : null,
       h('button', { type: 'submit', hidden: true }));
     await modal({
       title: `Edit @${u.username}`,
@@ -116,6 +118,16 @@ export async function adminTab(host, ctx) {
         },
       }],
     });
+  }
+
+  async function resetTwoFactor(u) {
+    if (!(await confirmDialog(`Reset two-factor authentication for @${u.username}?`, `${u.display_name} can then sign in with their password alone, and set up a new authenticator app in Settings → Security.`, { confirm: 'Reset 2FA', danger: true }))) return;
+    try {
+      await api.del(`/api/admin/users/${u.id}/2fa`);
+      document.querySelector('.set-2fa-reset')?.remove();
+      toast(`Two-factor authentication reset for @${u.username}`, 'ok');
+      loadUsers();
+    } catch (e) { errorToast(e); }
   }
 
   async function deleteUser(u) {

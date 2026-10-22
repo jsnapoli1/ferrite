@@ -39,6 +39,7 @@ cargo build --release
 | **MCP** | Ferrite is an **MCP server**: 59 tools, resources and prompts over Streamable HTTP and stdio, for both protocol eras. It is also an **MCP client**: it uses the Crafting Apps' MCP servers and any MCP servers you add. |
 | **AI** | Bring your own model: any **OpenAI-compatible** server (Ollama, llama.cpp, LM Studio, vLLM, …) or **Anthropic's Claude API**. The assistant uses the same MCP tools with the user's own permissions, and is **read-only unless the user allows changes**. Typing `@assistant` in any conversation brings in the Talk bot. Per-user consent. |
 | **Admin** | Users, groups, quotas, disabling, password reset, app tokens with scopes, server stats (memory, dedup savings, SFU traffic). |
+| **Sign-in security** | **Two-factor authentication** (TOTP authenticator apps, one-time recovery codes; optionally required for everyone) and **single sign-on** with any OpenID Connect provider (Keycloak, Authentik, Entra ID, Google, …). |
 
 The web app is embedded in the binary: no build step, no CDN, light and dark themes, and
 usable at phone width.
@@ -225,6 +226,7 @@ max_upload = 17179869184
 trash_retention_days = 30
 max_versions = 50
 secure_cookies = true                       # set when served over HTTPS (behind a TLS proxy)
+require_two_factor = false                  # true: every account must use 2FA (set up at next sign-in)
 
 [sfu]
 enabled = true
@@ -241,6 +243,18 @@ bin_dir = "/opt/craft/bin"                  # where <app>-cli binaries live (PAT
 [craft.commands.gridcraft]                  # optional per-app override of the MCP launch command
 command = "/opt/craft/bin/gridcraft-cli"
 args = ["mcp"]
+
+[[oidc]]                                    # single sign-on; repeat for more providers
+id = "corp"                                 # in URLs: register <public_url>/api/auth/oidc/corp/callback
+display_name = "Company login"              # the sign-in button says "Continue with Company login"
+issuer = "https://id.example.org/realms/main"  # discovery: <issuer>/.well-known/openid-configuration
+client_id = "ferrite"
+client_secret = "…"
+scopes = "openid email profile"             # default
+username_claim = "preferred_username"       # default; becomes the username of created accounts
+auto_create = true                          # create an account at the first sign-in (default false)
+admin_group = "ferrite-admins"              # members (from the `groups` claim) are administrators
+link_by_email = false                       # link to the account with the same, verified, email
 ```
 
 **Environment variables:**
@@ -248,6 +262,7 @@ args = ["mcp"]
 - `FERRITE_OPEN_REGISTRATION`
 - `FERRITE_SFU` (`0`/`false`/`off` disables it), `FERRITE_SFU_UDP`
 - `FERRITE_CRAFT_BIN_DIR`
+- `FERRITE_REQUIRE_2FA`
 
 **Command line:**
 
@@ -257,6 +272,7 @@ ferrite user-add bob --password … [--admin] [--display-name "Bob B"]
 ferrite passwd bob --password …
 ferrite token bob --name laptop --scopes files,groupware   # prints an app token
 ferrite mcp --user bob                          # MCP over stdio
+ferrite 2fa-reset bob                           # turn off bob's two-factor authentication
 ```
 
 **Deployment:**
@@ -271,6 +287,11 @@ ferrite mcp --user bob                          # MCP over stdio
 - **Sessions and tokens:**
   - Browser sessions use an HttpOnly, SameSite cookie, and every mutating request must carry a custom `X-Ferrite-Request` header (CSRF).
   - App tokens are stored hashed and carry scopes. Tokens can only be minted from an interactive session.
+- **Two-factor authentication (TOTP, RFC 6238):**
+  - A correct password for a 2FA account returns a short-lived (5 minutes), single-use challenge instead of a session; the session starts only with a valid code. Five wrong codes discard a challenge, and wrong codes are throttled per account like passwords.
+  - Codes are accepted for the current 30-second step and one either side, and each step only once (no replay). Secrets are encrypted at rest (AES-256-GCM, key derived from the server secret). The ten recovery codes (80 bits each) are stored as keyed hashes and work once each.
+  - Basic auth refuses the account password of a 2FA account (the error says to use an app token); app tokens keep working. Turning 2FA off needs the password and a code. Admins can reset it (*Administration* or `ferrite 2fa-reset`). With `[smtp]` configured, users get a security notice by email when 2FA is turned on or off.
+- **Single sign-on (OpenID Connect):** Authorization Code flow with PKCE (S256). `state`, `nonce` and the verifier are kept server-side and bound to the browser by a short-lived cookie; each state works once. The ID token's signature (RS256 or ES256, from the provider's JWKS), `iss`, `aud`, `azp`, `exp`, `iat` and `nonce` are checked. Identities are linked by (provider, subject); linking by email requires `email_verified`. SSO sign-ins skip Ferrite's own 2FA (the provider is responsible for it).
 - **Sockets:** the WebSocket checks `Origin`. Call signaling only relays between sessions the server issued to that connection.
 - **User files** are served with `Content-Security-Policy: sandbox`, and only safe types render inline. Everything else downloads.
 - **AI:** the assistant and the Talk bot act through the same tools with the **requesting user's** permissions, and are read-only unless the user allows changes for that request. Stdio MCP servers (which run commands) can only be added by admins.
@@ -308,8 +329,8 @@ This is an honest map against Nextcloud's core feature set: ✅ done, 🟡 parti
 | Mail | ❌ | |
 | Activity stream, notifications | ✅ | |
 | Users and groups admin | ✅ | |
-| LDAP/AD, SAML/OIDC single sign-on | ❌ | |
-| Two-factor authentication | ❌ | |
+| LDAP/AD, SAML/OIDC single sign-on | 🟡 | OpenID Connect (any provider, several at once, auto-create, admin group, link by email). No LDAP or SAML |
+| Two-factor authentication | ✅ | TOTP apps and recovery codes; can be required for everyone. No WebAuthn/security keys |
 | Server-side encryption | ❌ | |
 | End-to-end encryption | ❌ | |
 | App store, third-party apps | ❌ | Extension happens through **MCP** instead: any MCP server's tools become available to the assistant |
@@ -363,6 +384,7 @@ cd e2e && FERRITE_URL=http://127.0.0.1:8821 node files.mjs
 | `boards.mjs` | Boards, card modal, drag and keyboard moves, read-only members, and the four live editors with two users co-editing |
 | `calendar.mjs` | Month/week/list, create/edit/move events, recurring series across DST (Europe/Berlin), EXDATE, series edits, live refresh across tabs, contacts create/edit/search/delete, phone layouts |
 | `search.mjs` | Search results for files, events and contacts open the right views |
+| `security.mjs` | 2FA set-up in Settings, sign-in with a TOTP code (computed in the test) and with a recovery code, the admin's 2FA view, SSO through a mock OpenID Connect provider served by the script (cancel and success); needs the `[[oidc]]` block from its header |
 
 ## License
 

@@ -8,6 +8,7 @@ pub mod error;
 pub mod external;
 pub mod groupdav;
 pub mod mcp_http;
+pub mod oidc;
 pub mod public;
 pub mod recording;
 pub mod semantic;
@@ -30,6 +31,8 @@ pub struct AppState {
     pub ai: Arc<ai::AiService>,
     pub mcp: Arc<ferrite_mcp::Server<tools::McpHandler>>,
     pub throttle: Arc<auth::Throttle>,
+    /// OpenID Connect discovery and key cache.
+    pub oidc: Arc<oidc::Oidc>,
     /// Built-in SFU for calls; None when disabled or its UDP port is unavailable (calls then
     /// fall back to peer-to-peer).
     pub sfu: Option<Arc<ferrite_sfu::Sfu>>,
@@ -57,6 +60,7 @@ impl AppState {
             ai,
             mcp,
             throttle: Arc::new(auth::Throttle::default()),
+            oidc: Arc::new(oidc::Oidc::default()),
             sfu,
             recordings: Arc::new(recording::Recordings::default()),
         }

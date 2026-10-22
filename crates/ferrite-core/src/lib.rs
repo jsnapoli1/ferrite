@@ -20,7 +20,9 @@ pub mod notify;
 pub mod recur;
 pub mod search;
 pub mod shares;
+pub mod sso;
 pub mod talk;
+pub mod twofactor;
 pub mod util;
 
 pub use config::Config;

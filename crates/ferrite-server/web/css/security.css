@@ -1,0 +1,52 @@
+/* sign-in extras (single sign-on, two-factor step) and Settings → Security */
+
+.auth-or { display: flex; align-items: center; gap: 10px; margin: 18px 0 12px; color: var(--text-3); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+.auth-or::before, .auth-or::after { content: ''; flex: 1; border-top: 1px solid var(--border); }
+.auth-sso { display: flex; flex-direction: column; gap: 8px; }
+.auth-sso-btn { width: 100%; height: 38px; }
+.auth-sso-btn:hover { border-color: var(--accent); }
+.auth-alert { display: flex; align-items: flex-start; gap: 8px; margin: 4px 0 12px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger); font-size: 13px; overflow-wrap: anywhere; }
+.auth-alert svg { margin-top: 1px; }
+
+.auth .card.tf-card { width: min(440px, 100%); }
+.tf-card h1 { font-size: 21px; line-height: 1.25; align-items: flex-start; }
+.tf-card h1 .brand-mark { flex: none; margin-top: 0; }
+.tf-submit { width: 100%; margin-top: 8px; }
+.tf-links { margin: 14px 0 0; line-height: 1.9; }
+
+.tf-code { font-family: var(--mono); font-size: 22px; letter-spacing: .35em; text-align: center; padding: 9px 10px; }
+.tf-code.recovery { font-size: 17px; letter-spacing: .08em; }
+.tf-code::placeholder { color: var(--text-3); opacity: .45; }
+
+.tf-enroll { display: grid; grid-template-columns: auto 1fr; gap: 18px; align-items: start; margin: 4px 0 8px; }
+.tf-qr { display: block; width: 168px; height: 168px; padding: 8px; background: #fff; border: 1px solid var(--border); border-radius: var(--radius); box-sizing: content-box; }
+.tf-qr img { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+.tf-steps { margin: 0; padding-left: 1.2em; color: var(--text-2); font-size: 13.5px; }
+.tf-steps li { margin-bottom: 6px; }
+.tf-secret { display: flex; align-items: center; gap: 4px; margin: 2px 0 10px -1.2em; padding: 6px 4px 6px 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.tf-secret code { flex: 1; min-width: 0; background: none; padding: 0; font-size: 13px; letter-spacing: .04em; overflow-wrap: anywhere; color: var(--text); }
+.tf-confirm { max-width: 280px; }
+
+.tf-recovery > p { margin: 0 0 10px; color: var(--text-2); }
+.tf-codes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 18px; margin: 0; padding: 12px 14px 12px 36px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; color: var(--text-3); }
+.tf-codes code { background: none; padding: 0; font-size: 14px; color: var(--text); letter-spacing: .03em; white-space: nowrap; }
+.tf-code-actions { margin: 10px 0 4px; }
+.tf-card .tf-recovery { margin-top: 6px; }
+/* The sign-in card is narrow: QR code above the steps. */
+.tf-card .tf-enroll { grid-template-columns: 1fr; justify-items: center; gap: 12px; }
+.tf-card .tf-enroll-text { justify-self: stretch; }
+
+.tf-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.tf-dl { font-size: 14px; }
+.tf-done { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; color: var(--ok); font-weight: 500; }
+
+.set-2fa-reset { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 10px 12px; background: var(--surface-2); border-radius: var(--radius-sm); font-size: 14px; }
+
+@media (max-width: 520px) {
+  .tf-enroll { grid-template-columns: 1fr; justify-items: center; }
+  .tf-enroll-text { justify-self: stretch; }
+  .tf-codes { grid-template-columns: 1fr; padding-left: 32px; }
+  .tf-confirm { max-width: none; }
+  .tf-dl { grid-template-columns: 1fr; gap: 2px; }
+  .tf-dl dd { margin-bottom: 8px; }
+}
