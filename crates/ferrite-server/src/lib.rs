@@ -9,6 +9,7 @@ pub mod external;
 pub mod groupdav;
 pub mod mcp_http;
 pub mod public;
+pub mod semantic;
 pub mod tools;
 pub mod web;
 pub mod webdav;
@@ -37,10 +38,12 @@ impl AppState {
     pub fn new(core: Core) -> Self {
         let craft = craft_bridge::CraftBridge::new(core.clone());
         let external = external::ExternalMcp::new(core.clone());
+        let semantic = semantic::Semantic::new(core.clone());
         let tools = Arc::new(tools::FerriteTools {
             core: core.clone(),
             craft,
             external,
+            semantic: semantic.clone(),
         });
         let ai = ai::AiService::new(core.clone(), tools.clone());
         let mcp = Arc::new(ferrite_mcp::Server::new(tools::McpHandler { tools: tools.clone() }));
@@ -58,6 +61,7 @@ impl AppState {
     /// Starts background work: the Talk bot and periodic maintenance.
     pub fn start_background(&self) {
         self.ai.spawn_talk_bot();
+        self.tools.semantic.spawn_indexer();
         let core = self.core.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(3600));

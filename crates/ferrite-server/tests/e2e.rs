@@ -16,6 +16,7 @@ use yrs::{GetString, ReadTxn, Text, Transact};
 struct Server {
     url: String,
     core: Core,
+    state: AppState,
     _dir: tempfile::TempDir,
 }
 
@@ -34,9 +35,9 @@ async fn start(tweak: impl FnOnce(&mut Config)) -> Server {
     let core = Core::open(cfg).await.unwrap();
     let state = AppState::new(core.clone());
     state.start_background();
-    let app = ferrite_server::router(state);
+    let app = ferrite_server::router(state.clone());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    Server { url, core, _dir: dir }
+    Server { url, core, state, _dir: dir }
 }
 
 /// A browser-like client: cookie session + the CSRF header the web app sends.
@@ -1328,4 +1329,109 @@ async fn caldav_carddav_sync_and_mcp_tools() {
         .await
         .unwrap();
     assert!(all.contains("SUMMARY:Dentist") && all.contains("DTSTART:20261111T100000Z"), "{all}");
+}
+
+/// OpenAI-compatible embeddings whose dimensions are "concepts": synonyms share a dimension,
+/// so a query can match a document that has none of its words.
+async fn mock_embedder() -> String {
+    use axum::{Json, Router, routing::post};
+    fn embed(text: &str) -> Vec<f32> {
+        let mut v = vec![0f32; 16];
+        for w in text.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()) {
+            let dim = match w {
+                "invoice" | "bill" | "payment" | "unpaid" | "outstanding" => 0,
+                "car" | "vehicle" | "automobile" => 1,
+                "meeting" | "standup" | "sync" => 2,
+                _ => 3 + w.bytes().map(usize::from).sum::<usize>() % 13,
+            };
+            v[dim] += if dim < 3 { 1.0 } else { 0.2 };
+        }
+        v
+    }
+    async fn embeddings(Json(body): Json<Value>) -> Json<Value> {
+        let inputs: Vec<String> = match &body["input"] {
+            Value::String(s) => vec![s.clone()],
+            Value::Array(a) => a.iter().filter_map(|x| x.as_str().map(String::from)).collect(),
+            _ => vec![],
+        };
+        let data: Vec<Value> = inputs.iter().enumerate().map(|(i, t)| json!({"index": i, "embedding": embed(t)})).collect();
+        Json(json!({"data": data, "model": body["model"]}))
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, Router::new().route("/v1/embeddings", post(embeddings))).await.unwrap() });
+    url
+}
+
+#[tokio::test]
+async fn semantic_search_finds_meaning_and_respects_permissions() {
+    let srv = start(|_| {}).await;
+    let (alice, bob, _) = admin_and_user(&srv.url).await;
+    let upload = |who: &Browser, name: &str, body: &str| {
+        let (http, url, name, body) = (who.http.clone(), srv.url.clone(), name.to_string(), body.to_string());
+        async move {
+            let me: Value = http.get(format!("{url}/api/me")).send().await.unwrap().json().await.unwrap();
+            let r = http
+                .put(format!("{url}/api/files/{}/upload?name={name}", me["root_id"].as_str().unwrap()))
+                .header("X-Ferrite-Request", "1")
+                .body(body)
+                .send()
+                .await
+                .unwrap();
+            assert!(r.status().is_success());
+        }
+    };
+    upload(&alice, "acme.txt", "Outstanding invoice from Acme, due next week.").await;
+    upload(&alice, "garage.txt", "The car needs new tyres before winter.").await;
+    upload(&bob, "bob-private.txt", "My own invoice that Alice must never see.").await;
+
+    // Full text alone cannot connect "bill" with "invoice".
+    let r = alice.get("/api/search?q=bill").await;
+    assert_eq!(r["results"].as_array().unwrap().len(), 0, "{r}");
+    assert_eq!(r["semantic"], false);
+
+    let p = alice
+        .post(
+            "/api/ai/providers",
+            json!({"name": "Embeddings", "kind": "openai", "base_url": mock_embedder().await}),
+        )
+        .await;
+    let (st, _) = alice
+        .call(
+            Method::PUT,
+            "/api/ai/roles",
+            Some(json!({"role": "embed", "provider_id": p["id"], "model": "concepts"})),
+        )
+        .await;
+    assert!(st.is_success());
+    let (provider, model) = ferrite_server::ai::provider_for_role(&srv.core, "embed").await.unwrap();
+    let n = srv.state.tools.semantic.sync(&provider, &model, true).await.unwrap();
+    assert!(n >= 3, "embedded {n} rows");
+    // Unchanged rows are not embedded again.
+    assert_eq!(srv.state.tools.semantic.sync(&provider, &model, false).await.unwrap(), 0);
+
+    let r = alice.get("/api/search?q=bill").await;
+    assert_eq!(r["semantic"], true);
+    let titles: Vec<&str> = r["results"].as_array().unwrap().iter().map(|h| h["title"].as_str().unwrap()).collect();
+    assert_eq!(titles.first(), Some(&"acme.txt"), "{r}");
+    assert!(!titles.contains(&"bob-private.txt"), "other users' files never leak: {titles:?}");
+    let r = alice.get("/api/search?q=automobile").await;
+    assert_eq!(r["results"][0]["title"], "garage.txt", "{r}");
+
+    // An edit is picked up and re-embedded.
+    upload(&alice, "acme.txt", "Team standup notes.").await;
+    srv.state.tools.semantic.sync(&provider, &model, false).await.unwrap();
+    let r = alice.get("/api/search?q=meeting").await;
+    assert_eq!(r["results"][0]["title"], "acme.txt", "{r}");
+
+    // The MCP search tool uses the same hybrid search.
+    let token = alice.post("/api/me/tokens", json!({"name": "mcp"})).await["secret"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let v = mcp_call(&srv.url, &token, "tools/call", json!({"name": "search", "arguments": {"query": "vehicle"}})).await;
+    let sc = &v["result"]["structuredContent"];
+    assert_eq!(sc["semantic"], true, "{v}");
+    assert_eq!(sc["results"][0]["title"], "garage.txt", "{v}");
+    drop(bob);
 }

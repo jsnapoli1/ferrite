@@ -53,6 +53,36 @@ pub struct ChatTurn {
     pub content: String,
 }
 
+fn provider_of(row: &ProviderRow) -> Provider {
+    Provider::new(ProviderConfig {
+        kind: ProviderKind::parse(&row.kind).unwrap_or(ProviderKind::Openai),
+        base_url: row.base_url.clone(),
+        api_key: row.api_key.clone(),
+    })
+}
+
+async fn roles(core: &Core) -> Result<Vec<RoleRow>> {
+    Ok(sqlx::query_as("SELECT role, provider_id, model FROM ai_roles ORDER BY role")
+        .fetch_all(&core.db)
+        .await?)
+}
+
+/// The provider and model serving a role; "summarize" falls back to "chat", "embed" does not.
+pub async fn provider_for_role(core: &Core, role: &str) -> Result<(Provider, String)> {
+    let roles = roles(core).await?;
+    let pick = roles
+        .iter()
+        .find(|r| r.role == role)
+        .or_else(|| if role != "embed" { roles.iter().find(|r| r.role == "chat") } else { None });
+    let r = pick.ok_or_else(|| Error::Unavailable("AI is not configured yet: an administrator can add a provider under Settings → AI".into()))?;
+    let row: ProviderRow = sqlx::query_as("SELECT id, name, kind, base_url, api_key, models FROM ai_providers WHERE id = ?")
+        .bind(&r.provider_id)
+        .fetch_optional(&core.db)
+        .await?
+        .ok_or_else(|| Error::Unavailable("the configured AI provider was removed".into()))?;
+    Ok((provider_of(&row), r.model.clone()))
+}
+
 pub struct AiService {
     core: Core,
     tools: Arc<FerriteTools>,
@@ -118,18 +148,10 @@ impl AiService {
         Ok(())
     }
 
-    fn provider_of(row: &ProviderRow) -> Provider {
-        Provider::new(ProviderConfig {
-            kind: ProviderKind::parse(&row.kind).unwrap_or(ProviderKind::Openai),
-            base_url: row.base_url.clone(),
-            api_key: row.api_key.clone(),
-        })
-    }
-
     /// Asks the provider which models it serves (and caches the list).
     pub async fn refresh_models(&self, id: &str) -> Result<Vec<String>> {
         let row = self.providers().await?.into_iter().find(|r| r.id == id).ok_or(Error::NotFound)?;
-        let models = Self::provider_of(&row).list_models().await.map_err(|e| Error::Unavailable(e.to_string()))?;
+        let models = provider_of(&row).list_models().await.map_err(|e| Error::Unavailable(e.to_string()))?;
         sqlx::query("UPDATE ai_providers SET models = ? WHERE id = ?")
             .bind(serde_json::to_string(&models).unwrap_or_default())
             .bind(id)
@@ -139,9 +161,7 @@ impl AiService {
     }
 
     pub async fn roles(&self) -> Result<Vec<RoleRow>> {
-        Ok(sqlx::query_as("SELECT role, provider_id, model FROM ai_roles ORDER BY role")
-            .fetch_all(&self.core.db)
-            .await?)
+        roles(&self.core).await
     }
 
     pub async fn set_role(&self, role: &str, provider_id: &str, model: &str) -> Result<()> {
@@ -162,19 +182,7 @@ impl AiService {
 
     /// The provider and model for a role (summarize falls back to chat).
     pub async fn for_role(&self, role: &str) -> Result<(Provider, String)> {
-        let roles = self.roles().await?;
-        let pick = roles
-            .iter()
-            .find(|r| r.role == role)
-            .or_else(|| if role != "embed" { roles.iter().find(|r| r.role == "chat") } else { None });
-        let r = pick.ok_or_else(|| Error::Unavailable("AI is not configured yet: an administrator can add a provider under Settings → AI".into()))?;
-        let row = self
-            .providers()
-            .await?
-            .into_iter()
-            .find(|p| p.id == r.provider_id)
-            .ok_or_else(|| Error::Unavailable("the configured AI provider was removed".into()))?;
-        Ok((Self::provider_of(&row), r.model.clone()))
+        provider_for_role(&self.core, role).await
     }
 
     pub async fn status(&self) -> Result<Value> {

@@ -35,6 +35,7 @@ pub struct FerriteTools {
     pub core: Core,
     pub craft: Arc<CraftBridge>,
     pub external: Arc<ExternalMcp>,
+    pub semantic: Arc<crate::semantic::Semantic>,
 }
 
 type R = Result<ToolResult, Error>;
@@ -225,7 +226,7 @@ fn definitions() -> &'static Vec<Tool> {
                 ("note", "string", "Note", false),
             ]),
             // Everything else
-            Tool::new("search", "Search", "Search everything you can access: files, messages, cards.", &[("query", "string", "Words to search for", true), ("kinds", "string[]", "Limit to file, message and/or card", false)]).read_only(),
+            Tool::new("search", "Search", "Search everything you can access: files, chat messages, cards, calendar events and contacts. Matches words, and also meaning when the server has an embedding model (so a paraphrase finds the original).", &[("query", "string", "Words or a description of what you are looking for", true), ("kinds", "string[]", "Limit to file, message, card, event and/or contact", false)]).read_only(),
             Tool::new("notifications", "Notifications", "Your unread notifications.", &[]).read_only(),
             Tool::new("activity", "Activity", "Recent activity in your account.", &[]).read_only(),
             Tool::new("users_search", "Find people", "Find users by name (for sharing, mentions and assignments).", &[("query", "string", "Name or username", true)]).read_only(),
@@ -1021,10 +1022,11 @@ impl FerriteTools {
             "search" => {
                 let kinds = strings(a, "kinds");
                 let kinds_ref: Vec<&str> = kinds.iter().map(String::as_str).collect();
-                let hits = core
+                let (hits, semantic) = self
+                    .semantic
                     .search(uid, s(a, "query")?, if kinds.is_empty() { None } else { Some(&kinds_ref) }, 30)
                     .await?;
-                Ok(ToolResult::json(json!({"results": hits})))
+                Ok(ToolResult::json(json!({"results": hits, "semantic": semantic})))
             }
             "notifications" => Ok(ToolResult::json(json!({"notifications": core.notifications(uid, true, 50).await?}))),
             "activity" => Ok(ToolResult::json(json!({"activity": core.activity(uid, None, 50).await?}))),

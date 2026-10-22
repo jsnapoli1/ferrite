@@ -368,8 +368,9 @@ async fn stats(State(s): State<AppState>, auth: Auth) -> ApiResult<Json<Value>> 
 async fn search(State(s): State<AppState>, auth: Auth, Query(q): Query<Q>) -> ApiResult<Json<Value>> {
     let kinds: Vec<String> = q.kinds.as_deref().map(|k| k.split(',').map(String::from).collect()).unwrap_or_default();
     let kinds_ref: Vec<&str> = kinds.iter().map(String::as_str).collect();
-    let hits = s
-        .core
+    let (hits, semantic) = s
+        .tools
+        .semantic
         .search(
             &auth.user.id,
             q.q.as_deref().unwrap_or(""),
@@ -377,7 +378,7 @@ async fn search(State(s): State<AppState>, auth: Auth, Query(q): Query<Q>) -> Ap
             50,
         )
         .await?;
-    Ok(Json(json!({"results": hits})))
+    Ok(Json(json!({"results": hits, "semantic": semantic})))
 }
 
 async fn notifications(State(s): State<AppState>, auth: Auth, Query(q): Query<Q>) -> ApiResult<Json<Value>> {
