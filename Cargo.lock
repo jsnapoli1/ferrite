@@ -1164,6 +1164,7 @@ dependencies = [
  "futures",
  "hex",
  "http-body-util",
+ "libc",
  "mime_guess",
  "percent-encoding",
  "quick-xml",
