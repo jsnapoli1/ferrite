@@ -1202,6 +1202,7 @@ impl Core {
         };
         if started {
             self.post_system(&room.id, &format!("{} started a call", actor.name)).await?;
+            self.push_incoming_call(&room, actor);
         }
         self.publish_room(&room.id, &json!({"type": "call.joined", "room_id": room.id, "member": member}))
             .await?;

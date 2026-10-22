@@ -3,6 +3,7 @@
 pub mod boards;
 pub mod files;
 pub mod groupware;
+pub mod push;
 pub mod talk;
 
 use crate::AppState;
@@ -60,6 +61,7 @@ pub fn router() -> Router<AppState> {
         .merge(talk::router())
         .merge(boards::router())
         .merge(groupware::router())
+        .merge(push::router())
         .route("/api/{*rest}", get(not_found).post(not_found).put(not_found).patch(not_found).delete(not_found))
 }
 

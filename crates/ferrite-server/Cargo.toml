@@ -12,6 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.104"
+# Web Push crypto (ECDH, HKDF, AES-GCM, ECDSA); already in the tree through rustls.
+aws-lc-rs = "1.18.2"
 axum = { version = "0.8.9", features = ["ws", "macros"] }
 base64 = "0.23.1"
 blake3 = "1.8.7"
@@ -29,6 +31,7 @@ http-body-util = "0.1.5"
 mime_guess = "2.0.5"
 percent-encoding = "2.3.2"
 quick-xml = "0.41.0"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 rust-embed = "8.13.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

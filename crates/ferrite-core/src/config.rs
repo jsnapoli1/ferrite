@@ -31,6 +31,8 @@ pub struct Config {
     pub sfu: SfuSettings,
     /// Outgoing mail for the server's own messages (invitations, security notices).
     pub smtp: Option<crate::mailer::SmtpSettings>,
+    /// Web Push (browser and installed-app notifications).
+    pub push: crate::push::PushConfig,
 }
 
 /// Settings of the built-in Selective Forwarding Unit (calls beyond a handful of people).
@@ -96,6 +98,7 @@ impl Default for Config {
             secure_cookies: false,
             sfu: SfuSettings::default(),
             smtp: None,
+            push: crate::push::PushConfig::default(),
         }
     }
 }
@@ -127,6 +130,9 @@ impl Config {
         }
         if let Ok(v) = std::env::var("FERRITE_CRAFT_BIN_DIR") {
             cfg.craft.bin_dir = Some(v.into());
+        }
+        if let Ok(v) = std::env::var("FERRITE_PUSH_ALLOW_INSECURE") {
+            cfg.push.allow_insecure_endpoints = v == "1" || v.eq_ignore_ascii_case("true");
         }
         cfg.public_url = cfg.public_url.trim_end_matches('/').to_string();
         Ok(cfg)

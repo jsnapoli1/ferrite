@@ -1,7 +1,7 @@
 /* settings view */
 
 .set-page { max-width: 980px; }
-.set-tabs a { display: inline-flex; align-items: center; gap: 7px; }
+.set-tabs a { display: inline-flex; align-items: center; gap: 7px; padding-left: 11px; padding-right: 11px; }
 .set-stack { display: flex; flex-direction: column; gap: 16px; }
 .set-card { padding: 0; }
 .set-card-head { display: flex; align-items: flex-start; gap: 12px; padding: 16px 20px 0; }
@@ -101,3 +101,19 @@
   .set-probe { padding-left: 12px; }
   .set-scopes { padding-left: 0; }
 }
+
+/* notifications */
+.set-push-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.set-push-note { display: flex; align-items: flex-start; gap: 8px; }
+.set-push-note.ok { color: var(--ok); }
+.set-push-note.warn { color: var(--warn); }
+.set-push-note .muted { margin-top: 2px; }
+.set-push-master { padding-bottom: 12px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
+.set-push-prefs { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 18px; }
+.set-push-pref { padding: 8px 0; }
+.set-push-pref .muted { margin: 2px 0 0 48px; }
+.set-push-pref:has(input:disabled) { opacity: .55; }
+.set-push-device { flex-wrap: wrap; }
+.set-push-device > .grow { min-width: 180px; }
+.set-push-results:not(:empty) { margin-top: 10px; }
+.set-push-err { color: var(--danger); overflow-wrap: anywhere; }

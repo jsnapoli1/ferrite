@@ -6,6 +6,7 @@
 
 import { api, ApiError } from './api.js';
 import { live } from './ws.js';
+import { registerServiceWorker, resyncPush, forgetDevice } from './push.js';
 import { h, clear, icon, avatar, toast, errorToast, menu, relTime, spinner } from './ui.js';
 
 const ROUTES = [
@@ -171,7 +172,7 @@ function buildShell() {
     { label: 'Toggle dark mode', icon: 'moon', run: toggleTheme },
     me.is_admin && { label: 'Administration', icon: 'users', run: () => navigate('/settings/admin') },
     'sep',
-    { label: 'Sign out', icon: 'logout', run: async () => { await api.post('/api/auth/logout'); location.href = '/'; } },
+    { label: 'Sign out', icon: 'logout', run: async () => { await forgetDevice(); await api.post('/api/auth/logout'); location.href = '/'; } },
   ]) }, avatar(me.display_name, { size: 'sm', seed: me.id }), h('span.ellipsis', { style: { maxWidth: '140px' } }, me.display_name));
   const main = h('main.main', { id: 'main' });
   const shell = h('div.shell',
@@ -327,6 +328,7 @@ async function start() {
     throw e;
   }
   live.start();
+  resyncPush();
   wireLiveEvents();
   buildShell();
   route();
@@ -340,6 +342,7 @@ export async function refreshMe() {
 async function boot() {
   applyTheme();
   window.addEventListener('popstate', route);
+  registerServiceWorker(navigate);
   // Internal links anywhere in the app use the router.
   document.addEventListener('click', (e) => {
     const a = e.target.closest && e.target.closest('a[data-route]');

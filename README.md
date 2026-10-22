@@ -236,6 +236,9 @@ urls = ["turn:turn.example.org:3478"]
 username = "ferrite"
 credential = "secret"
 
+[push]
+contact = "mailto:admin@example.org"        # VAPID contact for push services (default: public_url)
+
 [craft]
 bin_dir = "/opt/craft/bin"                  # where <app>-cli binaries live (PATH is also searched)
 [craft.commands.gridcraft]                  # optional per-app override of the MCP launch command
@@ -248,6 +251,7 @@ args = ["mcp"]
 - `FERRITE_OPEN_REGISTRATION`
 - `FERRITE_SFU` (`0`/`false`/`off` disables it), `FERRITE_SFU_UDP`
 - `FERRITE_CRAFT_BIN_DIR`
+- `FERRITE_PUSH_ALLOW_INSECURE` (`1`: accept `http`/private push endpoints; tests only)
 
 **Command line:**
 
@@ -298,7 +302,7 @@ This is an honest map against Nextcloud's core feature set: ✅ done, 🟡 parti
 | Talk: guests via link | ✅ | |
 | Talk: audio/video calls, screen sharing | ✅ | Built-in SFU (no separate High-performance Backend) |
 | Talk: recording, SIP dial-in, breakout rooms, lobby, federation, Matterbridge | ❌ | |
-| Mobile push notifications | ❌ | In-app live notifications only |
+| Push notifications (browser, installed app, phone) | ✅ | Standard Web Push (VAPID, RFC 8291 encryption) through each browser's push service; on iPhone/iPad from the Home Screen app (iOS 16.4+) |
 | Deck (kanban boards) | ✅ | |
 | Collaborative text | ✅ | Markdown |
 | Collaborative office (Collabora/OnlyOffice) | 🟡 | Live spreadsheets and text built in. Word/Excel/PowerPoint and more through the Crafting Apps (desktop over WebDAV, or headless via MCP), but no in-browser rendering of .docx/.xlsx/.pptx |
@@ -363,6 +367,7 @@ cd e2e && FERRITE_URL=http://127.0.0.1:8821 node files.mjs
 | `boards.mjs` | Boards, card modal, drag and keyboard moves, read-only members, and the four live editors with two users co-editing |
 | `calendar.mjs` | Month/week/list, create/edit/move events, recurring series across DST (Europe/Berlin), EXDATE, series edits, live refresh across tabs, contacts create/edit/search/delete, phone layouts |
 | `search.mjs` | Search results for files, events and contacts open the right views |
+| `push.mjs` | Service worker and manifest, Settings → Notifications, pushes to a mock push service decrypted independently, push handling and notification clicks in the service worker (run the server with `FERRITE_PUSH_ALLOW_INSECURE=1`) |
 
 ## License
 

@@ -1,4 +1,4 @@
-// Settings: /settings/:tab with Profile, AI, Tokens & MCP, MCP servers, Craft apps,
+// Settings: /settings/:tab with Profile, Notifications, AI, Tokens & MCP, MCP servers, Craft apps,
 // Administration (admins) and About. The bigger tabs live in settings-*.js.
 
 import { api } from '../api.js';
@@ -7,10 +7,12 @@ import { refreshMe } from '../app.js';
 import { card, field, codeBlock, pill } from './settings-common.js';
 import { aiTab, mcpServersTab } from './settings-ai.js';
 import { adminTab } from './settings-admin.js';
+import { notificationsTab } from './settings-notifications.js';
 import { copyField } from './files-dialogs.js';
 
 const TABS = [
   ['profile', 'Profile', 'user'],
+  ['notifications', 'Notifications', 'bell'],
   ['ai', 'AI', 'assistant'],
   ['tokens', 'Tokens & MCP', 'key'],
   ['mcp', 'MCP servers', 'plug'],
@@ -36,7 +38,7 @@ export default async function render(root, ctx) {
     }, icon(ic, 'sm'), l))),
     body));
 
-  const fn = { profile: profileTab, ai: aiTab, tokens: tokensTab, mcp: mcpServersTab, craft: craftTab, admin: adminTab, about: aboutTab }[tab];
+  const fn = { profile: profileTab, notifications: notificationsTab, ai: aiTab, tokens: tokensTab, mcp: mcpServersTab, craft: craftTab, admin: adminTab, about: aboutTab }[tab];
   const host = h('div.set-stack');
   const cleanup = await fn(host, ctx);
   clear(body).appendChild(host);

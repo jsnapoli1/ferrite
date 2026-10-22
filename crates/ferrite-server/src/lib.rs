@@ -9,6 +9,7 @@ pub mod external;
 pub mod groupdav;
 pub mod mcp_http;
 pub mod public;
+pub mod push;
 pub mod semantic;
 pub mod tools;
 pub mod web;
@@ -32,6 +33,8 @@ pub struct AppState {
     /// Built-in SFU for calls; None when disabled or its UDP port is unavailable (calls then
     /// fall back to peer-to-peer).
     pub sfu: Option<Arc<ferrite_sfu::Sfu>>,
+    /// Web Push sender (drains the core's push queue from the moment the state exists).
+    pub push: Arc<push::PushService>,
 }
 
 impl AppState {
@@ -48,6 +51,7 @@ impl AppState {
         let ai = ai::AiService::new(core.clone(), tools.clone());
         let mcp = Arc::new(ferrite_mcp::Server::new(tools::McpHandler { tools: tools.clone() }));
         let sfu = start_sfu(&core.config.sfu);
+        let push = push::PushService::start(core.clone());
         AppState {
             core,
             tools,
@@ -55,6 +59,7 @@ impl AppState {
             mcp,
             throttle: Arc::new(auth::Throttle::default()),
             sfu,
+            push,
         }
     }
 
