@@ -9,7 +9,7 @@
 
 use crate::util::{new_id, now, short_token};
 use crate::{Core, Error, Result};
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub const KIND_CALENDAR: &str = "calendar";
@@ -59,6 +59,8 @@ pub struct Parsed {
     pub ends_at: Option<DateTime<Utc>>,
     pub all_day: bool,
     pub recurring: bool,
+    /// IANA zone of DTSTART, when it names one.
+    pub tzid: Option<String>,
     pub description: String,
     pub location: String,
     pub emails: Vec<String>,
@@ -134,19 +136,8 @@ pub fn escape(v: &str) -> String {
         .replace('\n', "\\n")
 }
 
-/// Parses DATE or DATE-TIME values. Returns (instant, is_date).
-pub fn parse_ical_time(value: &str) -> Option<(DateTime<Utc>, bool)> {
-    let v = value.trim();
-    if v.len() == 8 {
-        let d = NaiveDate::parse_from_str(v, "%Y%m%d").ok()?;
-        return Some((d.and_hms_opt(0, 0, 0)?.and_utc(), true));
-    }
-    let v = v.trim_end_matches('Z');
-    NaiveDateTime::parse_from_str(v, "%Y%m%dT%H%M%S").ok().map(|t| (t.and_utc(), false))
-}
-
 /// Parses an ISO 8601 duration such as `PT1H30M` or `P1D` into seconds.
-fn parse_duration(v: &str) -> Option<i64> {
+pub(crate) fn parse_duration(v: &str) -> Option<i64> {
     let (neg, v) = match v.strip_prefix('-') {
         Some(rest) => (true, rest),
         None => (false, v.strip_prefix('+').unwrap_or(v)),
@@ -218,14 +209,15 @@ pub fn parse_object(text: &str) -> Result<Parsed> {
             "TEL" => p.phones.push(value.trim().to_string()),
             "RRULE" | "RDATE" => p.recurring = true,
             "DTSTART" => {
-                if let Some((t, is_date)) = parse_ical_time(&value) {
-                    p.starts_at = Some(t);
-                    p.all_day = is_date || params.iter().any(|(k, v)| k == "VALUE" && v.eq_ignore_ascii_case("DATE"));
+                if let Some(t) = crate::recur::parse_time(&value, &params) {
+                    p.starts_at = Some(t.utc());
+                    p.all_day = t.date_only;
+                    p.tzid = t.zone.name().map(str::to_string);
                 }
             }
             "DTEND" | "DUE" => {
-                if let Some((t, _)) = parse_ical_time(&value) {
-                    p.ends_at = Some(t);
+                if let Some(t) = crate::recur::parse_time(&value, &params) {
+                    p.ends_at = Some(t.utc());
                 }
             }
             "DURATION" => duration = parse_duration(value.trim()),
@@ -286,7 +278,7 @@ pub struct EventInput {
     pub description: Option<String>,
     #[serde(default)]
     pub location: Option<String>,
-    /// Calendar uri (default: the first calendar).
+    /// Calendar uri (default: the first calendar). On update, a different calendar moves the event.
     #[serde(default)]
     pub calendar: Option<String>,
 }
@@ -327,6 +319,9 @@ pub fn build_event(uid: &str, e: &EventInput) -> String {
 
 /// Replaces the simple properties of the first VEVENT, keeping everything else (alarms,
 /// attendees, recurrence, custom properties) exactly as the client wrote them.
+///
+/// Timed events whose DTSTART named a known time zone keep it, so recurring series continue
+/// to follow local time across daylight-saving changes.
 pub fn patch_event(data: &str, e: &EventInput) -> String {
     let lines = unfold(data);
     let end = e.end.unwrap_or(if e.all_day {
@@ -334,7 +329,16 @@ pub fn patch_event(data: &str, e: &EventInput) -> String {
     } else {
         e.start + chrono::Duration::hours(1)
     });
-    let date_param = if e.all_day { ";VALUE=DATE" } else { "" };
+    let zone = parse_object(data)
+        .ok()
+        .and_then(|p| p.tzid)
+        .map(|z| crate::recur::Zone::from_tzid(&z))
+        .filter(|_| !e.all_day);
+    let stamp = |name: &str, t: &DateTime<Utc>| match zone {
+        Some(z @ crate::recur::Zone::Tz(_)) => format!("{name};TZID={}:{}", z.name().unwrap_or("UTC"), z.to_local(*t).format("%Y%m%dT%H%M%S")),
+        _ if e.all_day => format!("{name};VALUE=DATE:{}", ical_time(t, true)),
+        _ => format!("{name}:{}", ical_time(t, false)),
+    };
     let mut out = String::new();
     let mut in_event = false;
     let mut done_event = false;
@@ -343,8 +347,8 @@ pub fn patch_event(data: &str, e: &EventInput) -> String {
         if name == "BEGIN" && value.eq_ignore_ascii_case("VEVENT") && !done_event {
             in_event = true;
             out.push_str(&fold(line));
-            out.push_str(&fold(&format!("DTSTART{date_param}:{}", ical_time(&e.start, e.all_day))));
-            out.push_str(&fold(&format!("DTEND{date_param}:{}", ical_time(&end, e.all_day))));
+            out.push_str(&fold(&stamp("DTSTART", &e.start)));
+            out.push_str(&fold(&stamp("DTEND", &end)));
             out.push_str(&fold(&format!("SUMMARY:{}", escape(&e.summary))));
             if let Some(d) = e.description.as_deref().filter(|d| !d.is_empty()) {
                 out.push_str(&fold(&format!("DESCRIPTION:{}", escape(d))));
@@ -390,6 +394,37 @@ pub struct ContactInput {
     pub org: Option<String>,
     #[serde(default)]
     pub note: Option<String>,
+    /// Address book uri (default: the first address book).
+    #[serde(default)]
+    pub addressbook: Option<String>,
+}
+
+/// Replaces the fields of a vCard that the web UI edits, keeping all other properties
+/// (photos, addresses, birthdays, custom fields) as the client wrote them.
+pub fn patch_contact(data: &str, c: &ContactInput) -> String {
+    let fresh = build_contact("", c);
+    let replaced = ["FN", "N", "EMAIL", "TEL", "ORG", "NOTE", "REV"];
+    let new_props: Vec<String> = unfold(&fresh)
+        .into_iter()
+        .filter(|l| {
+            let (name, _, _) = split_prop(l);
+            replaced.contains(&name.as_str())
+        })
+        .collect();
+    let mut out = String::new();
+    for line in unfold(data) {
+        let (name, _, value) = split_prop(&line);
+        if replaced.contains(&name.as_str()) {
+            continue;
+        }
+        if name == "END" && value.trim().eq_ignore_ascii_case("VCARD") {
+            for l in &new_props {
+                out.push_str(&fold(l));
+            }
+        }
+        out.push_str(&fold(&line));
+    }
+    out
 }
 
 pub fn build_contact(uid: &str, c: &ContactInput) -> String {
@@ -434,6 +469,13 @@ pub struct EventView {
     pub ends_at: Option<DateTime<Utc>>,
     pub all_day: bool,
     pub recurring: bool,
+    /// For an occurrence of a recurring event: the start it was generated for.
+    pub recurrence_id: Option<DateTime<Utc>>,
+    /// For an occurrence: the series' first start and end (what editing the series changes).
+    pub series_start: Option<DateTime<Utc>>,
+    pub series_end: Option<DateTime<Utc>>,
+    /// IANA time zone the event was written in, if any.
+    pub tzid: Option<String>,
     pub description: String,
     pub location: String,
 }
@@ -463,9 +505,55 @@ fn view_of(o: &DavObject, c: &Collection) -> EventView {
         ends_at: o.ends_at,
         all_day: o.all_day,
         recurring: o.recurring,
+        recurrence_id: None,
+        series_start: None,
+        series_end: None,
+        tzid: p.tzid,
         description: p.description,
         location: p.location,
     }
+}
+
+/// Most occurrences of one series returned for a single range query.
+const MAX_OCCURRENCES: usize = 1000;
+
+/// The views of `o` within `[from, to)`: its occurrences when it recurs, else itself.
+fn views_in_range(o: &DavObject, c: &Collection, from: DateTime<Utc>, to: DateTime<Utc>) -> Vec<EventView> {
+    let base = view_of(o, c);
+    if !o.recurring {
+        return vec![base];
+    }
+    match crate::recur::expand(&o.data, from, to, MAX_OCCURRENCES) {
+        Some(occurrences) => occurrences
+            .into_iter()
+            .map(|oc| EventView {
+                summary: oc.summary.unwrap_or_else(|| base.summary.clone()),
+                description: oc.description.unwrap_or_else(|| base.description.clone()),
+                location: oc.location.unwrap_or_else(|| base.location.clone()),
+                starts_at: Some(oc.start),
+                ends_at: Some(oc.end),
+                recurrence_id: Some(oc.recurrence_id),
+                series_start: base.starts_at,
+                series_end: base.ends_at,
+                ..base.clone()
+            })
+            .collect(),
+        // A rule this server cannot expand: show the first occurrence as stored.
+        None => vec![base],
+    }
+}
+
+fn contact_view(o: DavObject) -> Result<ContactView> {
+    let p = parse_object(&o.data)?;
+    Ok(ContactView {
+        id: o.id,
+        uid: o.uid,
+        name: p.summary,
+        emails: p.emails,
+        phones: p.phones,
+        org: p.org,
+        note: p.description,
+    })
 }
 
 impl Core {
@@ -527,7 +615,13 @@ impl Core {
             .bind(now())
             .execute(&self.db)
             .await?;
+        self.collections_changed(user_id, kind);
         self.dav_collection(user_id, kind, uri).await
+    }
+
+    fn collections_changed(&self, owner_id: &str, kind: &str) {
+        self.hub
+            .publish([owner_id], &serde_json::json!({"type": "groupware.changed", "kind": kind, "collections": true}));
     }
 
     pub async fn update_dav_collection(&self, c: &Collection, name: Option<&str>, color: Option<&str>) -> Result<()> {
@@ -545,7 +639,9 @@ impl Core {
                 .execute(&self.db)
                 .await?;
         }
-        self.touch_collection(&c.id).await
+        self.touch_collection(&c.id).await?;
+        self.collections_changed(&c.owner_id, &c.kind);
+        Ok(())
     }
 
     pub async fn delete_dav_collection(&self, c: &Collection) -> Result<()> {
@@ -554,6 +650,7 @@ impl Core {
             .execute(&self.db)
             .await?;
         sqlx::query("DELETE FROM dav_collections WHERE id = ?").bind(&c.id).execute(&self.db).await?;
+        self.collections_changed(&c.owner_id, &c.kind);
         Ok(())
     }
 
@@ -711,7 +808,7 @@ impl Core {
         let mut out = Vec::new();
         for c in self.dav_collections(user_id, KIND_CALENDAR).await? {
             for o in self.dav_objects_in_range(&c, Some(from), Some(to)).await? {
-                out.push(view_of(&o, &c));
+                out.extend(views_in_range(&o, &c, from, to));
             }
         }
         out.sort_by_key(|e| e.starts_at);
@@ -754,18 +851,45 @@ impl Core {
         Ok(view_of(&o, &c))
     }
 
+    /// Edits an event (for a recurring event, the whole series). When `e.calendar` names a
+    /// different calendar, the event moves there.
     pub async fn update_event(&self, user_id: &str, id: &str, e: &EventInput) -> Result<EventView> {
         let (c, o) = self.object_by_id(user_id, id).await?;
         if o.component != "VEVENT" {
             return Err(Error::bad("not an event"));
         }
+        if e.summary.trim().is_empty() {
+            return Err(Error::bad("summary required"));
+        }
+        if e.end.is_some_and(|end| end < e.start) {
+            return Err(Error::bad("end must not be before start"));
+        }
         let data = patch_event(&o.data, e);
-        let (o, _) = self.put_dav_object(&c, &o.uri, &data, Some(&o.etag), false).await?;
-        Ok(view_of(&o, &c))
+        let target = match e.calendar.as_deref() {
+            Some(uri) if uri != c.uri => Some(self.calendar_for(user_id, Some(uri)).await?),
+            _ => None,
+        };
+        match target {
+            Some(to) => {
+                if !to.components.split(',').any(|x| x == "VEVENT") {
+                    return Err(Error::bad("that calendar does not hold events"));
+                }
+                let (moved, _) = self.put_dav_object(&to, &o.uri, &data, None, true).await?;
+                self.delete_dav_object(&c, &o.uri, Some(&o.etag)).await?;
+                Ok(view_of(&moved, &to))
+            }
+            None => {
+                let (o, _) = self.put_dav_object(&c, &o.uri, &data, Some(&o.etag), false).await?;
+                Ok(view_of(&o, &c))
+            }
+        }
     }
 
     pub async fn delete_event(&self, user_id: &str, id: &str) -> Result<()> {
         let (c, o) = self.object_by_id(user_id, id).await?;
+        if c.kind != KIND_CALENDAR {
+            return Err(Error::NotFound);
+        }
         self.delete_dav_object(&c, &o.uri, None).await
     }
 
@@ -798,28 +922,34 @@ impl Core {
         if input.name.trim().is_empty() {
             return Err(Error::bad("name required"));
         }
-        let c = self
-            .dav_collections(user_id, KIND_ADDRESSBOOK)
-            .await?
-            .into_iter()
-            .next()
-            .ok_or(Error::NotFound)?;
+        let books = self.dav_collections(user_id, KIND_ADDRESSBOOK).await?;
+        let c = match input.addressbook.as_deref() {
+            Some(uri) => books.into_iter().find(|b| b.uri == uri).ok_or(Error::NotFound)?,
+            None => books.into_iter().next().ok_or(Error::NotFound)?,
+        };
         let uid = format!("{}@ferrite", new_id());
         let (o, _) = self.put_dav_object(&c, &format!("{uid}.vcf"), &build_contact(&uid, input), None, true).await?;
-        let p = parse_object(&o.data)?;
-        Ok(ContactView {
-            id: o.id,
-            uid: o.uid,
-            name: p.summary,
-            emails: p.emails,
-            phones: p.phones,
-            org: p.org,
-            note: p.description,
-        })
+        contact_view(o)
+    }
+
+    /// Edits a contact's name, emails, phones, organisation and note, keeping its other fields.
+    pub async fn update_contact(&self, user_id: &str, id: &str, input: &ContactInput) -> Result<ContactView> {
+        if input.name.trim().is_empty() {
+            return Err(Error::bad("name required"));
+        }
+        let (c, o) = self.object_by_id(user_id, id).await?;
+        if c.kind != KIND_ADDRESSBOOK {
+            return Err(Error::NotFound);
+        }
+        let (o, _) = self.put_dav_object(&c, &o.uri, &patch_contact(&o.data, input), Some(&o.etag), false).await?;
+        contact_view(o)
     }
 
     pub async fn delete_contact(&self, user_id: &str, id: &str) -> Result<()> {
         let (c, o) = self.object_by_id(user_id, id).await?;
+        if c.kind != KIND_ADDRESSBOOK {
+            return Err(Error::NotFound);
+        }
         self.delete_dav_object(&c, &o.uri, None).await
     }
 }
@@ -838,8 +968,10 @@ mod tests {
         assert_eq!(p.summary, "Planning, Q4");
         assert!(p.description.ends_with("seventy five octets"));
         assert!(p.recurring);
-        assert_eq!(p.starts_at.unwrap().to_rfc3339(), "2026-11-05T09:00:00+00:00");
-        assert_eq!(p.ends_at.unwrap().to_rfc3339(), "2026-11-05T10:30:00+00:00");
+        // 09:00 in Berlin in November is CET (UTC+1).
+        assert_eq!(p.starts_at.unwrap().to_rfc3339(), "2026-11-05T08:00:00+00:00");
+        assert_eq!(p.ends_at.unwrap().to_rfc3339(), "2026-11-05T09:30:00+00:00");
+        assert_eq!(p.tzid.as_deref(), Some("Europe/Berlin"));
         let day = parse_object("BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:d\nDTSTART;VALUE=DATE:20261224\nSUMMARY:Eve\nEND:VEVENT\nEND:VCALENDAR\n").unwrap();
         assert!(day.all_day);
         assert_eq!(day.ends_at.unwrap().to_rfc3339(), "2026-12-25T00:00:00+00:00");
@@ -895,5 +1027,40 @@ mod tests {
         );
         assert_eq!(parse_object(&card).unwrap().emails, vec!["grace@navy.mil"]);
         assert_eq!(parse_duration("P1DT2H").unwrap(), 93600);
+    }
+
+    #[test]
+    fn patching_keeps_the_event_time_zone() {
+        // Move the Berlin series to 10:00 local (09:00Z in November): stays a TZID time.
+        let start = "2026-11-05T09:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let e = EventInput {
+            summary: "Planning".into(),
+            start,
+            end: Some(start + chrono::Duration::hours(1)),
+            ..Default::default()
+        };
+        let patched = patch_event(EVENT, &e);
+        assert!(patched.contains("DTSTART;TZID=Europe/Berlin:20261105T100000"), "{patched}");
+        assert!(patched.contains("RRULE:FREQ=WEEKLY") && patched.contains("TRIGGER:-PT15M"));
+        assert_eq!(parse_object(&patched).unwrap().starts_at, Some(start));
+    }
+
+    #[test]
+    fn patching_contacts_keeps_other_fields() {
+        let card = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:u1\r\nFN:Ada\r\nEMAIL:old@example.org\r\nBDAY:1815-12-10\r\nPHOTO;VALUE=URI:https://example.org/ada.png\r\nEND:VCARD\r\n";
+        let c = ContactInput {
+            name: "Ada Lovelace".into(),
+            emails: vec!["ada@example.org".into()],
+            org: Some("Engines".into()),
+            ..Default::default()
+        };
+        let out = patch_contact(card, &c);
+        let p = parse_object(&out).unwrap();
+        assert_eq!(
+            (p.summary.as_str(), p.emails.clone(), p.org.as_str(), p.uid.as_str()),
+            ("Ada Lovelace", vec!["ada@example.org".to_string()], "Engines", "u1")
+        );
+        assert!(out.contains("BDAY:1815-12-10") && out.contains("PHOTO;VALUE=URI:https://example.org/ada.png"));
+        assert!(!out.contains("old@example.org"));
     }
 }

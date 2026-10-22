@@ -16,6 +16,7 @@ pub mod events;
 pub mod files;
 pub mod groupware;
 pub mod notify;
+pub mod recur;
 pub mod search;
 pub mod shares;
 pub mod talk;

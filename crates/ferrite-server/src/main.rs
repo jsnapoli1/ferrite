@@ -41,7 +41,7 @@ enum Command {
         username: String,
         #[arg(long, default_value = "cli")]
         name: String,
-        /// Comma separated scopes (files,talk,boards,docs,craft,ai,mcp,admin or *).
+        /// Comma separated scopes (files,talk,boards,docs,groupware,craft,ai,mcp,admin or *).
         #[arg(long, default_value = "*")]
         scopes: String,
     },

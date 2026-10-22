@@ -214,6 +214,15 @@ fn definitions() -> &'static Vec<Tool> {
                 ("phones", "string[]", "Phone numbers", false),
                 ("org", "string", "Organization", false),
                 ("note", "string", "Note", false),
+                ("addressbook", "string", "Address book uri (default: your first)", false),
+            ]),
+            Tool::new("contacts_update", "Update contact", "Replace a contact's name, emails, phones, organization and note (other vCard fields are kept).", &[
+                ("contact_id", "string", "Contact id from contacts_search", true),
+                ("name", "string", "Full name", true),
+                ("emails", "string[]", "Email addresses (replaces the existing ones)", false),
+                ("phones", "string[]", "Phone numbers (replaces the existing ones)", false),
+                ("org", "string", "Organization", false),
+                ("note", "string", "Note", false),
             ]),
             // Everything else
             Tool::new("search", "Search", "Search everything you can access: files, messages, cards.", &[("query", "string", "Words to search for", true), ("kinds", "string[]", "Limit to file, message and/or card", false)]).read_only(),
@@ -994,8 +1003,20 @@ impl FerriteTools {
                     phones: strings(a, "phones"),
                     org: opt(a, "org").map(String::from),
                     note: opt(a, "note").map(String::from),
+                    addressbook: opt(a, "addressbook").map(String::from),
                 };
                 Ok(ToolResult::json(json!({"contact": core.create_contact(uid, &c).await?})))
+            }
+            "contacts_update" => {
+                let c = ferrite_core::groupware::ContactInput {
+                    name: s(a, "name")?.to_string(),
+                    emails: strings(a, "emails"),
+                    phones: strings(a, "phones"),
+                    org: opt(a, "org").map(String::from),
+                    note: opt(a, "note").map(String::from),
+                    addressbook: None,
+                };
+                Ok(ToolResult::json(json!({"contact": core.update_contact(uid, s(a, "contact_id")?, &c).await?})))
             }
             "search" => {
                 let kinds = strings(a, "kinds");

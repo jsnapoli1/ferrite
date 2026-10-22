@@ -4,7 +4,7 @@ use crate::AppState;
 use crate::auth::Auth;
 use crate::error::ApiResult;
 use axum::extract::{Path, Query, State};
-use axum::routing::{delete, get, patch};
+use axum::routing::{get, patch};
 use axum::{Json, Router};
 use chrono::{DateTime, Duration, Utc};
 use ferrite_core::groupware::{ContactInput, EventInput, KIND_ADDRESSBOOK, KIND_CALENDAR};
@@ -18,7 +18,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/calendar/events", get(events).post(create_event))
         .route("/api/calendar/events/{id}", patch(update_event).delete(delete_event))
         .route("/api/contacts", get(contacts).post(create_contact))
-        .route("/api/contacts/{id}", delete(delete_contact))
+        .route("/api/contacts/{id}", patch(update_contact).delete(delete_contact))
 }
 
 fn ok() -> Json<Value> {
@@ -72,12 +72,14 @@ struct CalendarUpdate {
 }
 
 async fn update_calendar(State(s): State<AppState>, auth: Auth, Path(uri): Path<String>, Json(b): Json<CalendarUpdate>) -> ApiResult<Json<Value>> {
+    auth.require_scope("groupware")?;
     let c = s.core.dav_collection(&auth.user.id, KIND_CALENDAR, &uri).await?;
     s.core.update_dav_collection(&c, b.name.as_deref(), b.color.as_deref()).await?;
     Ok(ok())
 }
 
 async fn delete_calendar(State(s): State<AppState>, auth: Auth, Path(uri): Path<String>) -> ApiResult<Json<Value>> {
+    auth.require_scope("groupware")?;
     let c = s.core.dav_collection(&auth.user.id, KIND_CALENDAR, &uri).await?;
     s.core.delete_dav_collection(&c).await?;
     Ok(ok())
@@ -102,10 +104,12 @@ async fn create_event(State(s): State<AppState>, auth: Auth, Json(e): Json<Event
 }
 
 async fn update_event(State(s): State<AppState>, auth: Auth, Path(id): Path<String>, Json(e): Json<EventInput>) -> ApiResult<Json<Value>> {
+    auth.require_scope("groupware")?;
     Ok(Json(json!({"event": s.core.update_event(&auth.user.id, &id, &e).await?})))
 }
 
 async fn delete_event(State(s): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    auth.require_scope("groupware")?;
     s.core.delete_event(&auth.user.id, &id).await?;
     Ok(ok())
 }
@@ -125,7 +129,13 @@ async fn create_contact(State(s): State<AppState>, auth: Auth, Json(c): Json<Con
     Ok(Json(json!({"contact": s.core.create_contact(&auth.user.id, &c).await?})))
 }
 
+async fn update_contact(State(s): State<AppState>, auth: Auth, Path(id): Path<String>, Json(c): Json<ContactInput>) -> ApiResult<Json<Value>> {
+    auth.require_scope("groupware")?;
+    Ok(Json(json!({"contact": s.core.update_contact(&auth.user.id, &id, &c).await?})))
+}
+
 async fn delete_contact(State(s): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    auth.require_scope("groupware")?;
     s.core.delete_contact(&auth.user.id, &id).await?;
     Ok(ok())
 }
