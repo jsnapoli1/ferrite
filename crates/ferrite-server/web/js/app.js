@@ -16,6 +16,8 @@ const ROUTES = [
   ['/talk/:token', 'talk'],
   ['/boards', 'boards'],
   ['/boards/:id', 'boards'],
+  ['/calendar', 'calendar'],
+  ['/contacts', 'contacts'],
   ['/edit/:id', 'editor'],
   ['/assistant', 'assistant'],
   ['/search', 'search'],
@@ -32,6 +34,8 @@ const NAV = [
   ['/files', 'Files', 'files', 'files'],
   ['/talk', 'Talk', 'talk', 'talk'],
   ['/boards', 'Boards', 'boards', 'boards'],
+  ['/calendar', 'Calendar', 'calendar', 'calendar'],
+  ['/contacts', 'Contacts', 'contacts', 'contacts'],
   ['/assistant', 'Assistant', 'assistant', 'assistant'],
 ];
 

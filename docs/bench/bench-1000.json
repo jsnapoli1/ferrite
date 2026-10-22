@@ -1,0 +1,32 @@
+{
+  "connect_seconds": 1.46,
+  "connections": 1000,
+  "fanout": {
+    "deliveries_expected": 200000,
+    "deliveries_per_second": 29884.0,
+    "deliveries_received": 200000,
+    "latency_ms_max": 26.12,
+    "latency_ms_p50": 9.89,
+    "latency_ms_p95": 14.91,
+    "latency_ms_p99": 19.66
+  },
+  "http_messages_page": {
+    "concurrency": 32,
+    "errors": 0,
+    "requests_per_second": 1144.0
+  },
+  "messages": 200,
+  "rss_kib_per_connection": 14.0,
+  "rss_mib_after_fanout": 34.3,
+  "rss_mib_after_setup": 18.7,
+  "rss_mib_end": 42.4,
+  "rss_mib_start": 16.6,
+  "rss_mib_with_connections": 32.3,
+  "total_seconds": 14.4,
+  "users": 50,
+  "webdav_64mib": {
+    "download_mib_s": 522.0,
+    "duplicate_upload_mib_s": 271.0,
+    "upload_mib_s": 269.0
+  }
+}

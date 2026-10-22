@@ -55,7 +55,12 @@ async fn ws_actor(s: &AppState, headers: &HeaderMap, q: &WsQuery) -> ApiResult<(
 
 pub async fn events(State(s): State<AppState>, headers: HeaderMap, Query(q): Query<WsQuery>, ws: WebSocketUpgrade) -> ApiResult<Response> {
     let (actor, _) = ws_actor(&s, &headers, &q).await?;
-    Ok(ws.max_message_size(256 * 1024).on_upgrade(move |socket| event_loop(s, actor, socket)))
+    // Event frames are small; a 4 KiB read buffer (tungstenite defaults to 128 KiB per socket)
+    // is what keeps thousands of idle connections cheap.
+    Ok(ws
+        .max_message_size(256 * 1024)
+        .read_buffer_size(4 * 1024)
+        .on_upgrade(move |socket| event_loop(s, actor, socket)))
 }
 
 async fn event_loop(s: AppState, actor: Actor, mut socket: WebSocket) {
@@ -183,6 +188,7 @@ pub async fn collab(
     let (conn, initial) = s.core.collab_open(&user_id, &id).await?;
     Ok(ws
         .max_message_size(16 * 1024 * 1024)
+        .read_buffer_size(16 * 1024)
         .on_upgrade(move |socket| collab_loop(s, conn, initial, socket)))
 }
 

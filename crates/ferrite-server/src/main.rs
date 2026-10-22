@@ -54,6 +54,7 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tune_allocator();
     let cli = Cli::parse();
     let command = cli.command.unwrap_or(Command::Serve);
     // Logs go to stderr so `ferrite mcp` keeps stdout clean for the protocol.
@@ -146,3 +147,17 @@ async fn shutdown_signal() {
         _ = term => {}
     }
 }
+
+/// glibc raises its mmap threshold after large blocks are freed, so the 19 MiB working
+/// buffer of every argon2 password hash would then stay on the heap for good. A fixed
+/// threshold keeps large, short-lived buffers in mmap, returning them to the OS on free.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn tune_allocator() {
+    // SAFETY: mallopt only adjusts allocator parameters; it is safe to call at any time.
+    unsafe {
+        libc::mallopt(libc::M_MMAP_THRESHOLD, 256 * 1024);
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn tune_allocator() {}

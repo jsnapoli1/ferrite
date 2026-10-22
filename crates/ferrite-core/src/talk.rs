@@ -12,7 +12,7 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::types::Json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 pub const BOT_ACTOR_ID: &str = "assistant";
@@ -841,26 +841,25 @@ impl Core {
 
     async fn notify_mentions(&self, room: &Room, actor: &Actor, msg: &Message) -> Result<()> {
         let names = mention_names(&msg.body);
-        let parts = self.participants(&room.id).await?;
+        let parts: Vec<(String, String, String)> =
+            sqlx::query_as("SELECT p.user_id, u.username, p.notify FROM participants p JOIN users u ON u.id = p.user_id WHERE p.room_id = ?")
+                .bind(&room.id)
+                .fetch_all(&self.db)
+                .await?;
         let everyone = names.iter().any(|n| n == "all");
         let room_name = room.name.clone();
-        for p in &parts {
-            if p.user_id == actor.id {
+        for (user_id, username, notify) in &parts {
+            if *user_id == actor.id {
                 continue;
             }
-            let notify: String = sqlx::query_scalar("SELECT notify FROM participants WHERE room_id = ? AND user_id = ?")
-                .bind(&room.id)
-                .bind(&p.user_id)
-                .fetch_one(&self.db)
-                .await?;
-            let mentioned = everyone || names.iter().any(|n| n.eq_ignore_ascii_case(&p.username));
+            let mentioned = everyone || names.iter().any(|n| n.eq_ignore_ascii_case(username));
             let wants = match notify.as_str() {
                 "all" => true,
                 "mentions" => mentioned || room.kind == "one_to_one",
                 _ => false,
             };
             // Online users see the message live; only notify those who aren't connected.
-            if wants && !self.hub.is_online(&p.user_id) {
+            if wants && !self.hub.is_online(user_id) {
                 let title = if room.kind == "one_to_one" {
                     format!("{} sent you a message", actor.name)
                 } else if mentioned {
@@ -869,31 +868,63 @@ impl Core {
                     format!("New message in “{room_name}”")
                 };
                 let preview: String = msg.body.chars().take(140).collect();
-                self.notify(&p.user_id, "talk", &title, &preview, &format!("/talk/{}", room.token)).await?;
+                self.notify(user_id, "talk", &title, &preview, &format!("/talk/{}", room.token)).await?;
             }
         }
         Ok(())
     }
 
     pub async fn message_view(&self, message: Message) -> Result<MessageView> {
-        let rows: Vec<(String, String)> = sqlx::query_as("SELECT emoji, actor_id FROM reactions WHERE message_id = ? ORDER BY created_at")
-            .bind(message.id)
+        let mut views = self.message_views(vec![message]).await?;
+        Ok(views.pop().expect("one view per message"))
+    }
+
+    /// Views for a page of messages with two queries in total (reactions, reply parents)
+    /// rather than two per message.
+    pub async fn message_views(&self, messages: Vec<Message>) -> Result<Vec<MessageView>> {
+        if messages.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids = json_ids(messages.iter().map(|m| m.id));
+        let rows: Vec<(i64, String, String)> =
+            sqlx::query_as("SELECT message_id, emoji, actor_id FROM reactions WHERE message_id IN (SELECT value FROM json_each(?)) ORDER BY created_at")
+                .bind(&ids)
+                .fetch_all(&self.db)
+                .await?;
+        let mut reactions: HashMap<i64, BTreeMap<String, Vec<String>>> = HashMap::new();
+        for (mid, emoji, actor) in rows {
+            reactions.entry(mid).or_default().entry(emoji).or_default().push(actor);
+        }
+        let parent_ids: Vec<i64> = messages.iter().filter_map(|m| m.reply_to).collect();
+        let mut parents: HashMap<i64, ParentPreview> = HashMap::new();
+        if !parent_ids.is_empty() {
+            let pids = json_ids(parent_ids.iter().copied());
+            let rows: Vec<Message> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                "SELECT {MSG_COLS} FROM messages WHERE id IN (SELECT value FROM json_each(?))"
+            )))
+            .bind(&pids)
             .fetch_all(&self.db)
             .await?;
-        let mut reactions: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for (emoji, actor) in rows {
-            reactions.entry(emoji).or_default().push(actor);
+            for p in rows {
+                parents.insert(
+                    p.id,
+                    ParentPreview {
+                        id: p.id,
+                        actor_name: p.actor_name,
+                        body: if p.deleted { String::new() } else { p.body.chars().take(200).collect() },
+                        deleted: p.deleted,
+                    },
+                );
+            }
         }
-        let parent = match message.reply_to {
-            Some(pid) => self.message(pid).await.ok().map(|p| ParentPreview {
-                id: p.id,
-                actor_name: p.actor_name,
-                body: if p.deleted { String::new() } else { p.body.chars().take(200).collect() },
-                deleted: p.deleted,
-            }),
-            None => None,
-        };
-        Ok(MessageView { message, reactions, parent })
+        Ok(messages
+            .into_iter()
+            .map(|message| {
+                let parent = message.reply_to.and_then(|pid| parents.get(&pid).cloned());
+                let reactions = reactions.remove(&message.id).unwrap_or_default();
+                MessageView { message, reactions, parent }
+            })
+            .collect())
     }
 
     /// Messages in a room, newest last. `before`/`after` page by message id.
@@ -901,7 +932,7 @@ impl Core {
         let room = self.room_by_token(token).await?;
         self.actor_in_room(actor, &room).await?;
         let limit = limit.clamp(1, 200);
-        let mut msgs: Vec<Message> = if let Some(a) = after {
+        let msgs: Vec<Message> = if let Some(a) = after {
             sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 "SELECT {MSG_COLS} FROM messages WHERE room_id = ? AND id > ? ORDER BY id ASC LIMIT ?"
             )))
@@ -922,11 +953,7 @@ impl Core {
             v.reverse();
             v
         };
-        let mut out = Vec::with_capacity(msgs.len());
-        for m in msgs.drain(..) {
-            out.push(self.message_view(m).await?);
-        }
-        Ok(out)
+        self.message_views(msgs).await
     }
 
     pub async fn edit_message(&self, actor: &Actor, id: i64, body: &str) -> Result<MessageView> {
@@ -1326,4 +1353,9 @@ mod mention_tests {
         assert!(mentions("@bob.smith hi", "bob.smith"));
         assert!(!mentions("@bob.smith hi", "bob"));
     }
+}
+
+/// A JSON array of ids, for `IN (SELECT value FROM json_each(?))` with a single bind.
+fn json_ids(ids: impl Iterator<Item = i64>) -> String {
+    format!("[{}]", ids.map(|i| i.to_string()).collect::<Vec<_>>().join(","))
 }

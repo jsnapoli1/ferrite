@@ -1,0 +1,65 @@
+/* contacts view: searchable list and detail pane */
+
+.ct-page { display: grid; grid-template-columns: 340px minmax(0, 1fr); height: 100%; min-height: 0; }
+
+/* ---------- list ---------- */
+.ct-side { display: flex; flex-direction: column; min-height: 0; background: var(--surface); border-right: 1px solid var(--border); }
+.ct-side-head { display: flex; align-items: center; gap: 8px; padding: 16px 16px 10px; }
+.ct-side-head h1 { margin: 0; font-size: 20px; }
+.ct-side-head .ct-new { margin-left: auto; }
+.ct-count:not(:empty) { padding: 0 7px; border-radius: 9px; background: var(--surface-2); line-height: 18px; }
+.ct-search { position: relative; margin: 0 16px 8px; }
+.ct-search .icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-3); pointer-events: none; }
+.ct-search input { padding-left: 32px; }
+.ct-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 12px; }
+.ct-letter { position: sticky; top: 0; z-index: 1; padding: 8px 10px 4px; background: var(--surface); font-size: 11.5px; font-weight: 700; letter-spacing: .06em; color: var(--text-3); }
+.ct-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 7px 10px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.ct-row:hover { background: var(--surface-2); }
+.ct-row.selected { background: var(--accent-soft); }
+.ct-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ct-row-text { display: flex; flex-direction: column; min-width: 0; }
+.ct-row-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-row.selected .ct-row-name { color: var(--accent); }
+.ct-row-sub { font-size: 12px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-empty { padding: 20px 10px; text-align: center; }
+.ct-side-foot { padding: 8px 10px; border-top: 1px solid var(--border); }
+
+/* ---------- detail ---------- */
+.ct-detail { min-width: 0; min-height: 0; overflow-y: auto; padding: 22px 28px 40px; }
+.ct-detail > .empty { margin-top: 8vh; }
+.ct-card { max-width: 640px; }
+.ct-card-top { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.ct-back { display: none; }
+.ct-hero { display: flex; align-items: center; gap: 18px; padding-bottom: 20px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+.ct-hero .avatar.lg { width: 72px; height: 72px; font-size: 26px; }
+.ct-hero h2 { margin: 0; font-size: 24px; overflow-wrap: anywhere; outline: none; }
+.ct-org { color: var(--text-2); margin-top: 2px; overflow-wrap: anywhere; }
+.ct-section { padding: 14px 0 4px; }
+.ct-section h3 { display: flex; align-items: center; gap: 7px; margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); }
+.ct-values { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.ct-value { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ct-value > a, .ct-value > span { overflow-wrap: anywhere; min-width: 0; font-size: 15px; }
+.ct-value .btn { opacity: .5; }
+.ct-value:hover .btn, .ct-value .btn:focus-visible { opacity: 1; }
+@media (hover: none) { .ct-value .btn { opacity: 1; } }
+.ct-note { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px 12px; background: var(--surface-2); border-radius: var(--radius-sm); }
+.ct-edit-hint { margin-top: 22px; }
+
+/* ---------- create dialog ---------- */
+.ct-form .field { margin-bottom: 6px; }
+.ct-multi { display: flex; flex-direction: column; gap: 6px; }
+.ct-add { margin-top: 4px; color: var(--text-2); }
+
+/* ---------- narrow screens: list, or the selected contact ---------- */
+@media (max-width: 760px) {
+  .ct-page { grid-template-columns: minmax(0, 1fr); }
+  .ct-page.has-selection .ct-side { display: none; }
+  .ct-page:not(.has-selection) .ct-detail { display: none; }
+  .ct-side { border-right: 0; }
+  .ct-side-head { padding: 14px 12px 8px; }
+  .ct-search { margin: 0 12px 8px; }
+  .ct-detail { padding: 12px 16px 32px; }
+  .ct-back { display: inline-flex; margin-left: -8px; }
+  .ct-hero .avatar.lg { width: 56px; height: 56px; font-size: 20px; }
+  .ct-hero h2 { font-size: 20px; }
+}
