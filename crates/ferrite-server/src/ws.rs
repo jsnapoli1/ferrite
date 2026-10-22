@@ -123,7 +123,7 @@ async fn handle_client_event(s: &AppState, actor: &Actor, conn: u64, v: Value) -
             }
             "call.join" => {
                 let (session, members, room) = s.core.join_call(actor, &str_of("room"), conn, v["audio"].as_bool().unwrap_or(true), v["video"].as_bool().unwrap_or(false)).await?;
-                Ok(Some(json!({"type": "call.self", "room_id": room.id, "room": room.token, "session": session, "members": members, "ice_servers": s.core.config.ice_servers})))
+                Ok(Some(json!({"type": "call.self", "room_id": room.id, "room": room.token, "session": session, "members": members, "ice_servers": s.core.config.ice_servers, "sfu": s.sfu.is_some()})))
             }
             "call.leave" => {
                 let (room_id, session) = (str_of("room_id"), str_of("session"));

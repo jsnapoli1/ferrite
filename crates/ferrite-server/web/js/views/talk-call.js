@@ -1,13 +1,15 @@
-// Talk calls. The server only relays signaling over the event socket; media is sent peer to
-// peer (a WebRTC mesh), so calls cost the server almost nothing.
+// Talk calls. Media goes through one of two transports, chosen by the server per call:
+//  - SfuTransport (when the server runs its built-in SFU): one RTCPeerConnection to the
+//    server, which forwards each participant's media to the others. Upload cost stays
+//    constant as the call grows.
+//  - MeshTransport (fallback): one RTCPeerConnection per other participant; the server only
+//    relays signaling over the event socket.
 //
 // Structure:
-//  - MeshTransport owns the RTCPeerConnections: it handles call.signal / call.joined /
-//    call.left, negotiates with the "perfect negotiation" pattern and reports remote media
-//    per call session. Any other transport (e.g. an SFU) can replace it if it offers the
-//    same surface: start(localStream, members), replaceTrack(kind, track), stop(), and the
-//    callbacks onRemoteStream(session, stream), onPeerClosed(session),
-//    onConnectionState(session, state).
+//  - A transport owns the RTCPeerConnections and reports remote media per call session. Both
+//    offer the same surface: start(localStream, members), replaceTrack(kind, track), stop(),
+//    `peers` (session -> {pc, stream}), and the callbacks onRemoteStream(session, stream),
+//    onPeerClosed(session), onConnectionState(session, state).
 //  - Call owns local media, call membership/state and the stage UI (tiles keyed by the
 //    remote call session id) and talks to a transport through that surface only.
 
@@ -165,9 +167,141 @@ export class MeshTransport {
   }
 }
 
-/** Picks the media transport. Only the mesh exists today; an SFU can be selected here. */
-export function createTransport(config, opts) {
-  return new MeshTransport(opts);
+/**
+ * Sends local media to the server's SFU over one peer connection and receives everyone
+ * else's media on it. The first offer/answer goes over the event socket (sfu.offer →
+ * sfu.answer); later renegotiations, which the server starts whenever someone's tracks
+ * appear or go away, travel as JSON session descriptions over the "sfu" data channel.
+ * The server labels each forwarded track's stream with the sender's call session.
+ */
+export class SfuTransport {
+  /** @param {{roomId: string, session: string, iceServers: RTCIceServer[]}} opts */
+  constructor({ roomId, session, iceServers }) {
+    this.roomId = roomId;
+    this.session = session;
+    this.iceServers = iceServers || [];
+    this.pc = null;
+    this.channel = null;
+    /** remote session -> {session, pc, stream}; every entry shares the one connection. */
+    this.peers = new Map();
+    this.senders = { audio: null, video: null };
+    this.offs = [];
+    this.stopped = false;
+    this.chain = Promise.resolve();
+    this.onRemoteStream = () => {};
+    this.onPeerClosed = () => {};
+    this.onConnectionState = () => {};
+  }
+
+  start(localStream, _members = []) {
+    const pc = new RTCPeerConnection({ iceServers: this.iceServers, bundlePolicy: 'max-bundle' });
+    this.pc = pc;
+    // Created before the first offer so the data channel is part of the initial session.
+    this.channel = pc.createDataChannel('sfu', { ordered: true });
+    this.channel.onmessage = (e) => this.onChannelMessage(e.data);
+    // Always offer one audio and one video sender, even without local devices, so turning
+    // the camera on later or screen sharing is just replaceTrack().
+    for (const kind of KINDS) {
+      const track = (kind === 'audio' ? localStream.getAudioTracks() : localStream.getVideoTracks())[0];
+      this.senders[kind] = pc.addTransceiver(track || kind, { direction: 'sendonly' }).sender;
+    }
+    pc.ontrack = ({ track, streams }) => this.onTrack(track, streams[0]);
+    pc.onconnectionstatechange = () => {
+      for (const s of this.peers.keys()) this.onConnectionState(s, pc.connectionState);
+    };
+    this.offs.push(
+      live.on('call.left', (ev) => {
+        if (ev.room_id === this.roomId && ev.session !== this.session) this.closePeer(ev.session);
+      }),
+    );
+    this.chain = this.offer().catch((e) => {
+      if (!this.stopped) errorToast(e);
+    });
+  }
+
+  replaceTrack(kind, track) {
+    const sender = this.senders[kind];
+    if (sender) sender.replaceTrack(track || null).catch((e) => console.warn('replaceTrack', e));
+  }
+
+  stop() {
+    this.stopped = true;
+    this.offs.forEach((off) => off());
+    this.offs = [];
+    for (const s of [...this.peers.keys()]) this.closePeer(s, false);
+    this.pc?.close();
+  }
+
+  // ---- internals ------------------------------------------------------------------
+
+  async offer() {
+    const { pc } = this;
+    await pc.setLocalDescription(await pc.createOffer());
+    // The SFU is ICE-lite and gathers no trickled candidates: send the offer once our host
+    // candidates are in it (bounded, so a slow STUN server cannot stall the call).
+    await waitForIce(pc, 1500);
+    const res = await live.request({ type: 'sfu.offer', room_id: this.roomId, session: this.session, sdp: pc.localDescription.toJSON() }, 'sfu.answer', 10000);
+    if (this.stopped) return;
+    await pc.setRemoteDescription(res.sdp);
+  }
+
+  onChannelMessage(data) {
+    let desc;
+    try {
+      desc = JSON.parse(data);
+    } catch (_) {
+      return;
+    }
+    // Strictly in order: an offer must not overlap the previous negotiation.
+    this.chain = this.chain.then(async () => {
+      if (this.stopped || !desc || !desc.type) return;
+      await this.pc.setRemoteDescription(desc);
+      if (desc.type === 'offer') {
+        await this.pc.setLocalDescription(await this.pc.createAnswer());
+        this.channel.send(JSON.stringify(this.pc.localDescription.toJSON()));
+      }
+    }).catch((e) => console.warn('SFU renegotiation failed', e));
+  }
+
+  onTrack(track, stream) {
+    const session = stream && stream.id;
+    if (!session || session === this.session) return;
+    let p = this.peers.get(session);
+    if (!p) {
+      p = { session, pc: this.pc, stream: new MediaStream() };
+      this.peers.set(session, p);
+    }
+    if (!p.stream.getTracks().includes(track)) p.stream.addTrack(track);
+    // The server stops a forwarded track when its sender disconnects; membership itself is
+    // driven by call.left.
+    track.addEventListener('ended', () => p.stream.removeTrack(track));
+    this.onRemoteStream(session, p.stream);
+    this.onConnectionState(session, this.pc.connectionState);
+  }
+
+  closePeer(session, notify = true) {
+    if (!this.peers.delete(session)) return;
+    if (notify) this.onPeerClosed(session);
+  }
+}
+
+/** Resolves when ICE gathering completes or after `ms`, whichever comes first. */
+function waitForIce(pc, ms) {
+  if (pc.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => { pc.removeEventListener('icegatheringstatechange', check); clearTimeout(t); resolve(); };
+    const check = () => { if (pc.iceGatheringState === 'complete') done(); };
+    const t = setTimeout(done, ms);
+    pc.addEventListener('icegatheringstatechange', check);
+  });
+}
+
+/**
+ * Picks the media transport: the server's SFU when it runs one (the server says so in
+ * call.self, so every participant of a call agrees), else the peer-to-peer mesh.
+ */
+export function createTransport(opts) {
+  return opts.sfu ? new SfuTransport(opts) : new MeshTransport(opts);
 }
 
 /**
@@ -256,7 +390,7 @@ export class Call {
     this.roomId = res.room_id;
     this.session = res.session;
     const iceServers = (res.ice_servers && res.ice_servers.length ? res.ice_servers : this.config.ice_servers) || [];
-    this.transport = createTransport(this.config, { roomId: this.roomId, session: this.session, iceServers });
+    this.transport = createTransport({ roomId: this.roomId, session: this.session, iceServers, sfu: !!res.sfu });
     this.transport.onRemoteStream = (s, st) => this.attachRemote(s, st);
     this.transport.onPeerClosed = (s) => this.removeMember(s);
     this.transport.onConnectionState = (s, st) => {
