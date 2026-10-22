@@ -202,6 +202,9 @@ try {
   await anon.screenshot({ path: `${shots}/public-locked.png` });
   await anon.getByRole('button', { name: 'Open' }).click();
   await anon.getByText('plan.md').waitFor({ timeout: T });
+  // The owner watches the folder: the visitor's upload must appear live, without a reload.
+  await page.goto(projectsUrl);
+  await rowOf(page, 'plan.md').waitFor({ timeout: T });
   await anon.locator('input[type=file]').setInputFiles([{ name: 'dropped.txt', mimeType: 'text/plain', buffer: Buffer.from('from a visitor') }]);
   await anon.locator('.pub-row', { hasText: 'dropped.txt' }).waitFor({ timeout: T });
   await anon.screenshot({ path: `${shots}/public-folder.png` });
@@ -212,9 +215,13 @@ try {
   await anon.getByRole('heading', { name: 'This link doesn’t work anymore' }).waitFor({ timeout: T });
   await anon.screenshot({ path: `${shots}/public-404-dark.png` });
 
-  // The visitor's upload shows up for the owner.
-  await page.goto(projectsUrl);
+  step('files: live refresh shows the visitor upload');
   await rowOf(page, 'dropped.txt').waitFor({ timeout: T });
+
+  step('bob: notification link /files?node=');
+  await bob.goto(`${base}/files?node=${projectsUrl.split('/').pop()}`);
+  await bob.waitForURL(projectsUrl, { timeout: T });
+  await rowOf(bob, 'dropped.txt').waitFor({ timeout: T });
 
   // ---- trash ----------------------------------------------------------------------------
   step('trash: delete and restore');
@@ -282,6 +289,10 @@ try {
   await page.emulateMedia({ colorScheme: 'light' });
 
   step('settings: other tabs');
+  await page.goto(`${base}/settings/profile`);
+  await page.getByRole('radio', { name: 'Dark' }).click();
+  if (await page.evaluate(() => document.documentElement.dataset.theme) !== 'dark') throw new Error('theme toggle did not apply');
+  await page.getByRole('radio', { name: 'System' }).click();
   for (const [tab, text] of [['profile', 'Change password'], ['mcp', 'Connect a server'], ['craft', 'GridCraft'], ['admin', 'Saved by deduplication'], ['about', 'WebDAV']]) {
     await page.goto(`${base}/settings/${tab}`);
     await page.getByText(text).first().waitFor({ timeout: T });
@@ -333,7 +344,7 @@ try {
   step('mobile layouts');
   await page.setViewportSize({ width: 390, height: 780 });
   await page.emulateMedia({ colorScheme: 'light' });
-  for (const [path, name] of [['/assistant', 'assistant'], ['/settings/tokens', 'settings-tokens'], ['/settings/admin', 'settings-admin'], ['/files?view=trash', 'files-trash']]) {
+  for (const [path, name] of [['/files', 'files'], ['/assistant', 'assistant'], ['/settings/tokens', 'settings-tokens'], ['/settings/admin', 'settings-admin'], ['/files?view=trash', 'files-trash']]) {
     await page.goto(`${base}${path}`);
     await page.waitForTimeout(600);
     const overflow = await page.evaluate(() => { const m = document.querySelector('.main') || document.scrollingElement; return m.scrollWidth - m.clientWidth; });

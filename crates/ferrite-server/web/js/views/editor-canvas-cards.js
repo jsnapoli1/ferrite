@@ -6,6 +6,9 @@ import { api } from '../api.js';
 import { live } from '../ws.js';
 import { markdown } from '../markdown.js';
 import { h, icon, fileIcon } from '../ui.js';
+import { withVars } from './editor-common.js';
+
+const BRANCH_COLORS = ['#e11d48', '#ea580c', '#ca8a04', '#16a34a', '#0891b2', '#2563eb', '#7c3aed', '#db2777'];
 
 export const NOTE_COLORS = ['#fde68a', '#fecaca', '#bbf7d0', '#bfdbfe', '#ddd6fe', '#fbcfe8', '#fed7aa', '#e5e7eb'];
 
@@ -33,7 +36,8 @@ class Store {
       rec.error = e;
     }
     rec.loading = false;
-    for (const fn of this.subs.get(key) || []) fn();
+    // Copy: subscribers re-subscribe while being notified.
+    for (const fn of [...(this.subs.get(key) || [])]) fn();
   }
   refresh(key) {
     const rec = this.data.get(key);
@@ -118,7 +122,7 @@ export function renderContent(item, sources, subscribe) {
       h('div.cv-card-head', icon('mindmap', 'sm'), h('span.ellipsis', v?.title || item.text || 'Mind map')),
       rec?.error ? h('div.small.cv-error', 'Not available')
         : !v ? h('div.small.muted', 'Loading…')
-          : v.branches.length ? h('ul.cv-branches', v.branches.slice(0, 8).map((b, i) => h('li', { style: { '--branch': b.color || ['#e11d48', '#ea580c', '#ca8a04', '#16a34a', '#0891b2', '#2563eb', '#7c3aed', '#db2777'][i % 8] } }, h('span.ellipsis', b.text), b.count ? h('span.small.muted', String(b.count)) : null)),
+          : v.branches.length ? h('ul.cv-branches', v.branches.slice(0, 8).map((b, i) => withVars(h('li', h('span.ellipsis', b.text), b.count ? h('span.small.muted', String(b.count)) : null), { '--branch': b.color || BRANCH_COLORS[i % BRANCH_COLORS.length] })),
             v.branches.length > 8 && h('li.muted.small', `+${v.branches.length - 8} more`))
             : h('div.small.muted', 'No branches yet'));
   }
@@ -126,11 +130,11 @@ export function renderContent(item, sources, subscribe) {
     const rec = item.ref ? sources.boards.get(item.ref) : null;
     if (item.ref) subscribe(sources.boards, item.ref);
     const b = rec && rec.value;
-    return h('div.cv-card-body.cv-board-body', { style: b ? { '--board-color': b.color } : null },
+    return withVars(h('div.cv-card-body.cv-board-body',
       h('div.cv-card-head', icon('boards', 'sm'), h('span.ellipsis', b?.title || item.text || 'Board')),
       rec?.error ? h('div.small.cv-error', 'Not available')
         : !b ? h('div.small.muted', 'Loading…')
-          : h('div.cv-board-cols', b.stacks.slice(0, 6).map((s) => h('div.cv-board-col', h('span.ellipsis', s.title), h('strong', String(s.cards.length))))));
+          : h('div.cv-board-cols', b.stacks.slice(0, 6).map((s) => h('div.cv-board-col', h('span.ellipsis', s.title), h('strong', String(s.cards.length)))))), { '--board-color': b?.color });
   }
   return h('div.cv-card-body', h('div.cv-card-head', icon('file', 'sm'), h('span.ellipsis', item.text || t || 'Item')));
 }

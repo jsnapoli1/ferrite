@@ -102,3 +102,30 @@ mod tests {
         assert_eq!(short_token(10).len(), 10);
     }
 }
+
+/// Serde helper for patch fields: an absent field stays `None` (leave unchanged), while an
+/// explicit `null` becomes `Some(None)` (clear). Use with `#[serde(default, deserialize_with = ...)]`.
+pub fn double_option<'de, T, D>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: serde::Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    serde::Deserialize::deserialize(d).map(Some)
+}
+
+#[cfg(test)]
+mod double_option_tests {
+    #[derive(serde::Deserialize)]
+    struct Patch {
+        #[serde(default, deserialize_with = "super::double_option")]
+        quota: Option<Option<i64>>,
+    }
+
+    #[test]
+    fn absent_null_and_value_differ() {
+        let p = |s: &str| serde_json::from_str::<Patch>(s).unwrap().quota;
+        assert_eq!(p("{}"), None);
+        assert_eq!(p(r#"{"quota": null}"#), Some(None));
+        assert_eq!(p(r#"{"quota": 5}"#), Some(Some(5)));
+    }
+}

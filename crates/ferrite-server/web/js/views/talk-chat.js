@@ -396,15 +396,15 @@ export function createRoomPane(opts) {
     const isImage = (meta.mime || '').startsWith('image/');
     const openHref = live ? `/edit/${id}` : `/api/files/${id}/download?inline=true`;
     const nameEl = guest
-      ? h('span.file-name.ellipsis', meta.name)
-      : h('a.file-name.ellipsis', live ? { href: openHref, dataset: { route: '1' } } : { href: openHref, target: '_blank', rel: 'noopener' }, meta.name);
+      ? h('span.tk-file-name.ellipsis', meta.name)
+      : h('a.tk-file-name.ellipsis', live ? { href: openHref, dataset: { route: '1' } } : { href: openHref, target: '_blank', rel: 'noopener' }, meta.name);
     const caption = m.body && m.body !== meta.name ? markdown(m.body, { me: self.username }) : '';
     return h('div.file-msg', caption,
       h('div.file-card',
         isImage && !guest ? h('a.file-thumb', { href: openHref, target: '_blank', rel: 'noopener', 'aria-label': `Open ${meta.name}` },
           h('img', { src: `/api/files/${id}/download?inline=true`, alt: meta.name, loading: 'lazy' })) : '',
-        h('div.file-row',
-          h('span.file-icon', icon(metaIcon(meta))),
+        h('div.tk-file-row',
+          h('span.tk-file-icon', icon(metaIcon(meta))),
           h('div.grow', nameEl, h('div.small.muted', [bytes(meta.size), live ? 'Live document' : (meta.mime || '')].filter(Boolean).join(' · '))),
           guest ? '' : h('a.btn.ghost.icon.sm', { href: `/api/files/${id}/download`, download: meta.name, 'aria-label': `Download ${meta.name}`, title: 'Download' }, icon('download', 'sm')))),
       guest ? h('div.small.muted', 'Sign in to open shared files.') : '');

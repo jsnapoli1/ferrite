@@ -34,9 +34,10 @@ export default async function render(root, ctx) {
   const main = h('main.pub-main', spinner());
   root.appendChild(h('div.pub',
     h('header.pub-bar',
-      h('a.pub-brand', { href: ctx.me ? '/' : base, 'data-route': ctx.me ? '' : null }, h('span.brand-mark', 'Fe'), 'Ferrite'),
+      // Full page loads (no router) when leaving: the public page boots without the live socket.
+      h('a.pub-brand', { href: ctx.me ? '/' : base }, h('span.brand-mark', 'Fe'), 'Ferrite'),
       h('div.spacer'),
-      ctx.me ? h('a.btn.sm', { href: '/files', 'data-route': '' }, icon('files', 'sm'), 'Your files') : null),
+      ctx.me ? h('a.btn.sm', { href: '/files' }, icon('files', 'sm'), 'Your files') : null),
     main,
     h('footer.pub-foot.small.muted', 'Shared with Ferrite, a self-hosted collaboration server.')));
 
@@ -49,7 +50,7 @@ export default async function render(root, ctx) {
       h('div.pub-404-code', '404'),
       h('h1', 'This link doesn’t work anymore'),
       h('p.muted', 'The share may have expired, been removed, or the address is mistyped. Ask the person who sent it for a new link.'),
-      ctx.me ? h('a.btn.primary', { href: '/files', 'data-route': '' }, 'Go to your files') : null));
+      ctx.me ? h('a.btn.primary', { href: '/files' }, 'Go to your files') : null));
   }
 
   function passwordForm(share) {

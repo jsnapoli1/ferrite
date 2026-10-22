@@ -177,7 +177,7 @@ try {
   ]);
   await bob.locator('.file-card', { hasText: 'pixel.png' }).waitFor({ timeout: T });
   await bob.locator('.file-card', { hasText: 'meeting-notes.md' }).waitFor({ timeout: T });
-  const editHref = await bob.locator('.file-card', { hasText: 'meeting-notes.md' }).locator('a.file-name').getAttribute('href');
+  const editHref = await bob.locator('.file-card', { hasText: 'meeting-notes.md' }).locator('a.tk-file-name').getAttribute('href');
   if (!/^\/edit\//.test(editHref)) throw new Error(`live doc link is ${editHref}`);
   await waitFor(bob, () => { const i = document.querySelector('.file-thumb img'); return i && i.complete && i.naturalWidth > 0; });
   const talkFolder = await (await A.ctx.request.get(`${base}/api/me`)).json();

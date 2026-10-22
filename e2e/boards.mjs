@@ -174,6 +174,16 @@ try {
   await bob.locator('.card-modal .comment', { hasText: 'ready' }).waitFor();
   await bob.locator('.card-modal .card-desc-view strong', { hasText: 'API' }).waitFor();
   await bob.keyboard.press('Escape');
+  // Read-only members see everything without edit affordances.
+  await alice.api('POST', `/api/boards/${boardId}/members`, { username: 'bob', can_edit: false });
+  await bob.goto(`${base}/boards/${boardId}?card=${card.id}`);
+  await bob.locator('.card-modal .card-title-text', { hasText: 'Write spec' }).waitFor();
+  await bob.locator('.card-modal .label-chip', { hasText: 'Urgent' }).waitFor();
+  assert(await bob.locator('.card-modal .card-title-input').isHidden(), 'title not editable');
+  assert(await bob.locator('.add-card, .kcard[draggable="true"], .label-toggle').count() === 0, 'no edit affordances');
+  await bob.locator('.kanban-head .pill', { hasText: 'Read only' }).waitFor();
+  await bob.keyboard.press('Escape');
+  await alice.api('POST', `/api/boards/${boardId}/members`, { username: 'bob', can_edit: true });
   log('boards ok');
 
   // ---- text: concurrent typing converges ----
@@ -364,6 +374,9 @@ try {
   await shot(alice, 'boards-list');
 } catch (e) {
   failed = e;
+  // Leave a picture of every page for debugging.
+  let i = 0;
+  for (const c of browser.contexts()) for (const p of c.pages()) await p.screenshot({ path: `${shots}/failure-${i++}.png` }).catch(() => {});
 }
 
 await browser.close();

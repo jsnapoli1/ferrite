@@ -6,6 +6,12 @@ import { api } from '../api.js';
 import { Y } from '../collab.js';
 import { h, clear, icon, fileIcon, modal, spinner, emptyState } from '../ui.js';
 
+/** Sets CSS custom properties on an element (style objects can't) and returns it. */
+export function withVars(el, vars) {
+  for (const [k, v] of Object.entries(vars)) if (v) el.style.setProperty(k, v);
+  return el;
+}
+
 // ---- CRDT access -----------------------------------------------------------------------
 
 /** Reads `field` of the entry `id` in `map`, whether the entry is a nested Y.Map or a plain object. */

@@ -159,13 +159,11 @@
 .cv-thumb { flex: 1; min-height: 0; background: var(--surface-2); display: grid; place-items: center; overflow: hidden; border-bottom: 1px solid var(--border); }
 .cv-thumb img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; pointer-events: none; }
 .cv-error { color: var(--danger); }
-.type-mindmap { border-top: 4px solid #7c3aed; }
+.cv-map-body { border-top: 4px solid #7c3aed; }
 .cv-branches { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; overflow: hidden; font-size: 13px; }
 .cv-branches li { display: flex; align-items: center; gap: 8px; padding: 3px 8px; border-radius: 6px; background: color-mix(in srgb, var(--branch, var(--accent)) 12%, transparent); border-left: 3px solid var(--branch, var(--accent)); min-width: 0; }
 .cv-branches li .ellipsis { flex: 1; }
-.type-board { border-top: 4px solid var(--board-color, var(--info)); }
-.cv-board-body { --board-color: var(--info); }
-.type-board:has(.cv-board-body) { border-top-color: var(--board-color, var(--info)); }
+.cv-board-body { border-top: 4px solid var(--board-color, var(--info)); }
 .cv-board-cols { display: flex; gap: 6px; overflow: hidden; flex: 1; min-height: 0; }
 .cv-board-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; background: var(--surface-2); border-radius: 6px; font-size: 12px; color: var(--text-2); }
 .cv-board-col strong { font-size: 18px; color: var(--text); }

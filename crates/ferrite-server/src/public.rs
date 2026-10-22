@@ -40,6 +40,9 @@ async fn unlocked_share(s: &AppState, token: &str, headers: &HeaderMap) -> ApiRe
 struct PathQ {
     #[serde(default)]
     path: String,
+    /// `?download=1` asks for an attachment instead of inline display.
+    #[serde(default)]
+    download: Option<String>,
 }
 
 async fn info(State(s): State<AppState>, Path(token): Path<String>, Query(q): Query<PathQ>, headers: HeaderMap) -> ApiResult<Json<Value>> {
@@ -104,7 +107,8 @@ async fn download(State(s): State<AppState>, Path(token): Path<String>, Query(q)
     let share = unlocked_share(&s, &token, req.headers()).await?;
     let node = s.core.link_node(&share, &q.path).await?;
     let hash = node.blob_hash.clone().ok_or(ApiError(Error::bad("folders cannot be downloaded directly")))?;
-    crate::api::files::serve_blob(s.core.blobs.path(&hash), &node.name, &node.mime, &node.etag, true, req).await
+    let inline = q.download.is_none();
+    crate::api::files::serve_blob(s.core.blobs.path(&hash), &node.name, &node.mime, &node.etag, inline, req).await
 }
 
 #[derive(Deserialize)]

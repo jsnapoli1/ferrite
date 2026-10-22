@@ -240,6 +240,7 @@ export function openCardModal({ cardId, board, me, ctx, refresh, deleteCard, onC
     const labelBox = h('div.side-labels');
     for (const l of board.labels) {
       const on = card.labels.includes(l.id);
+      if (!edit && !on) continue;
       labelBox.appendChild(edit
         ? h('button.label-toggle', {
           type: 'button', 'aria-pressed': String(on), title: on ? `Remove “${l.title}”` : `Add “${l.title}”`,
@@ -247,9 +248,9 @@ export function openCardModal({ cardId, board, me, ctx, refresh, deleteCard, onC
             try { if (on) await api.del(`/api/cards/${cardId}/labels/${l.id}`); else await api.post(`/api/cards/${cardId}/labels/${l.id}`); await refresh(); } catch (e) { errorToast(e); }
           },
         }, labelChip(l), on && icon('check', 'sm'))
-        : on && labelChip(l));
+        : labelChip(l));
     }
-    if (!board.labels.length) labelBox.appendChild(h('span.small.muted', 'No labels on this board.'));
+    if (!labelBox.childNodes.length) labelBox.appendChild(h('span.small.muted', edit ? 'No labels on this board.' : 'No labels.'));
     let labelForm = null;
     if (edit) {
       labelForm = newLabelForm(board.id, async (label) => {

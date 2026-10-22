@@ -5,6 +5,7 @@ import { api, q } from '../api.js';
 import { live } from '../ws.js';
 import { h, clear, icon, modal, errorToast, debounce, emptyState } from '../ui.js';
 import { BOARD_COLORS, colorSwatches } from './boards-dialogs.js';
+import { withVars } from './editor-common.js';
 
 export default async function render(root, ctx) {
   if (ctx.params.id) {
@@ -39,8 +40,8 @@ async function renderList(root, ctx) {
     boards.sort((a, b) => (a.archived - b.archived) || a.title.localeCompare(b.title));
     for (const b of boards) {
       const href = `/boards/${b.id}`;
-      grid.appendChild(h('a.board-tile', {
-        href, style: { '--board-color': b.color }, dataset: { id: b.id }, class: b.archived ? 'archived' : '',
+      grid.appendChild(withVars(h('a.board-tile', {
+        href, dataset: { id: b.id }, class: b.archived ? 'archived' : '',
         onclick: (e) => { if (e.metaKey || e.ctrlKey) return; e.preventDefault(); ctx.navigate(href); },
       },
       h('span.board-tile-stripe'),
@@ -48,7 +49,7 @@ async function renderList(root, ctx) {
         h('span.board-tile-title', b.title),
         h('span.board-tile-meta',
           b.owner_id === ctx.me.user.id ? h('span.small.muted', 'Owned by you') : h('span.pill', icon('users', 'sm'), 'Shared with you'),
-          b.archived && h('span.pill.warn', 'Archived')))));
+          b.archived && h('span.pill.warn', 'Archived')))), { '--board-color': b.color }));
     }
     grid.appendChild(h('button.board-tile.board-tile-new', { type: 'button', onclick: create }, icon('plus'), 'New board'));
   }

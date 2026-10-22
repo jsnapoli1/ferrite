@@ -116,10 +116,10 @@
 .file-card { max-width: 380px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-top: 2px; }
 .file-thumb { display: block; background: var(--surface-2); border-bottom: 1px solid var(--border); }
 .file-thumb img { display: block; width: auto; min-width: 48px; max-width: 100%; max-height: 260px; margin: 0 auto; object-fit: contain; }
-.file-row { display: flex; align-items: center; gap: 10px; padding: 9px 10px 9px 12px; min-width: 0; }
-.file-icon { width: 36px; height: 36px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; flex: none; }
-.file-name { display: block; font-weight: 600; color: var(--text); }
-a.file-name:hover { color: var(--accent); }
+.tk-file-row { display: flex; align-items: center; gap: 10px; padding: 9px 10px 9px 12px; min-width: 0; }
+.tk-file-icon { width: 36px; height: 36px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; flex: none; }
+.tk-file-name { display: block; font-weight: 600; color: var(--text); }
+a.tk-file-name:hover { color: var(--accent); }
 
 /* polls */
 .poll { max-width: 460px; margin-top: 2px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }

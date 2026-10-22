@@ -1,6 +1,7 @@
 // Board dialogs: color swatches, members, labels and the conversation picker.
 
 import { api } from '../api.js';
+import { withVars } from './editor-common.js';
 import { h, clear, icon, avatar, modal, errorToast, confirmDialog, spinner, emptyState } from '../ui.js';
 
 export const BOARD_COLORS = ['#3b82f6', '#0f766e', '#7c3aed', '#be185d', '#c2410c', '#15803d', '#b45309', '#475569', '#0e7490', '#dc2626'];
@@ -25,7 +26,7 @@ export function colorSwatches(current, onPick, colors = BOARD_COLORS) {
 
 /** Label chip in the board label's color. */
 export function labelChip(label, { small = false } = {}) {
-  return h(`span.label-chip${small ? '.sm' : ''}`, { style: { '--label-color': label.color }, title: label.title }, label.title);
+  return withVars(h(`span.label-chip${small ? '.sm' : ''}`, { title: label.title }, label.title), { '--label-color': label.color });
 }
 
 export async function colorDialog(board) {

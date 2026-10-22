@@ -66,6 +66,7 @@ pub struct ShareUpdate {
     pub permissions: Option<i64>,
     /// `Some("")` removes the password.
     pub password: Option<String>,
+    #[serde(default, deserialize_with = "crate::util::double_option")]
     pub expires_at: Option<Option<DateTime<Utc>>>,
     pub label: Option<String>,
 }

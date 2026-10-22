@@ -64,6 +64,7 @@ pub struct UserUpdate {
     pub email: Option<String>,
     pub password: Option<String>,
     pub is_admin: Option<bool>,
+    #[serde(default, deserialize_with = "crate::util::double_option")]
     pub quota_bytes: Option<Option<i64>>,
     pub ai_consent: Option<bool>,
     pub disabled: Option<bool>,

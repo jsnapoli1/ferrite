@@ -110,6 +110,7 @@ pub struct BoardView {
 pub struct CardUpdate {
     pub title: Option<String>,
     pub description: Option<String>,
+    #[serde(default, deserialize_with = "crate::util::double_option")]
     pub due_at: Option<Option<DateTime<Utc>>>,
     pub done: Option<bool>,
     pub archived: Option<bool>,

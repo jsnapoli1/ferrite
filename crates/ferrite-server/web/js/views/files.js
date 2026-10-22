@@ -310,13 +310,13 @@ export default async function render(root, ctx) {
   function folderToolbar() {
     const writable = canCreate();
     const newBtn = h('button.btn', {
-      type: 'button', 'aria-haspopup': 'menu', disabled: !writable,
+      type: 'button', 'aria-haspopup': 'menu', 'aria-label': 'New document', disabled: !writable,
       onclick: () => menu(newBtn, DOC_KINDS.map(([kind, label, ic, ph]) => ({ label, icon: ic, run: () => newDocument(kind, label, ph) }))),
     }, icon('doc', 'sm'), h('span.fl-hide-sm', 'New document'), icon('chevron-down', 'sm'));
     return h('div.files-toolbar',
       crumbsNav(),
       h('div.actions',
-        h('button.btn', { type: 'button', onclick: newFolder, disabled: !writable }, icon('folder', 'sm'), h('span.fl-hide-sm', 'New folder')),
+        h('button.btn', { type: 'button', onclick: newFolder, disabled: !writable, 'aria-label': 'New folder' }, icon('folder', 'sm'), h('span.fl-hide-sm', 'New folder')),
         newBtn,
         h('button.btn.primary', { type: 'button', onclick: () => picker.click(), disabled: !writable }, icon('upload', 'sm'), 'Upload')));
   }
