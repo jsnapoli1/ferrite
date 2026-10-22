@@ -31,7 +31,9 @@ const VAPID_KV: &str = "vapid_pkcs8";
 
 pub struct PushService {
     core: Core,
-    http: reqwest::Client,
+    /// Built on the first push: servers whose users never enable push don't pay for a TLS
+    /// client and its root store.
+    http: std::sync::OnceLock<reqwest::Client>,
     vapid: OnceCell<Arc<crypto::Vapid>>,
     slots: Arc<Semaphore>,
 }
@@ -48,19 +50,9 @@ pub enum Outcome {
 impl PushService {
     /// Creates the sender and starts draining the core's push queue (once per core).
     pub fn start(core: Core) -> Arc<Self> {
-        let allow_insecure = core.config.push.allow_insecure_endpoints;
-        let mut builder = reqwest::Client::builder()
-            .timeout(REQUEST_TIMEOUT)
-            .connect_timeout(Duration::from_secs(5))
-            .redirect(reqwest::redirect::Policy::none())
-            .user_agent(concat!("Ferrite/", env!("CARGO_PKG_VERSION")));
-        if !allow_insecure {
-            builder = builder.dns_resolver(Arc::new(PublicOnlyResolver)).https_only(true);
-        }
-        let http = builder.build().unwrap_or_default();
         let service = Arc::new(PushService {
             core: core.clone(),
-            http,
+            http: std::sync::OnceLock::new(),
             vapid: OnceCell::new(),
             slots: Arc::new(Semaphore::new(CONCURRENCY)),
         });
@@ -69,6 +61,20 @@ impl PushService {
             tokio::spawn(async move { s.run(rx).await });
         }
         service
+    }
+
+    fn http(&self) -> &reqwest::Client {
+        self.http.get_or_init(|| {
+            let mut builder = reqwest::Client::builder()
+                .timeout(REQUEST_TIMEOUT)
+                .connect_timeout(Duration::from_secs(5))
+                .redirect(reqwest::redirect::Policy::none())
+                .user_agent(concat!("Ferrite/", env!("CARGO_PKG_VERSION")));
+            if !self.core.config.push.allow_insecure_endpoints {
+                builder = builder.dns_resolver(Arc::new(PublicOnlyResolver)).https_only(true);
+            }
+            builder.build().unwrap_or_default()
+        })
     }
 
     /// The VAPID key, generated and stored on first use (the sender loads it at startup).
@@ -148,7 +154,7 @@ impl PushService {
         loop {
             attempt += 1;
             let mut req = self
-                .http
+                .http()
                 .post(url.clone())
                 .header("TTL", msg.ttl.to_string())
                 .header("Urgency", msg.urgency.as_str())

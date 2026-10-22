@@ -83,22 +83,12 @@ struct Cached {
 }
 
 /// Discovery and key cache plus the HTTP client used to talk to providers.
+#[derive(Default)]
 pub struct Oidc {
-    http: reqwest::Client,
+    /// Built on the first sign-in: a TLS client (with its root store) costs memory that
+    /// servers without single sign-on shouldn't pay.
+    http: std::sync::OnceLock<reqwest::Client>,
     cache: DashMap<String, Arc<Cached>>,
-}
-
-impl Default for Oidc {
-    fn default() -> Self {
-        Oidc {
-            http: reqwest::Client::builder()
-                .timeout(Duration::from_secs(15))
-                .user_agent(concat!("Ferrite/", env!("CARGO_PKG_VERSION")))
-                .build()
-                .unwrap_or_default(),
-            cache: DashMap::new(),
-        }
-    }
 }
 
 /// Why an ID token was refused. `UnknownKey` makes the caller refresh the key set once.
@@ -279,9 +269,19 @@ fn form(s: &str) -> String {
 }
 
 impl Oidc {
+    fn http(&self) -> &reqwest::Client {
+        self.http.get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(15))
+                .user_agent(concat!("Ferrite/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .unwrap_or_default()
+        })
+    }
+
     async fn fetch_json<T: serde::de::DeserializeOwned>(&self, url: &str, what: &str) -> Result<T, Error> {
         let resp = self
-            .http
+            .http()
             .get(url)
             .send()
             .await
@@ -333,7 +333,7 @@ impl Oidc {
         // client_secret_basic is the default (and what an empty list means); RFC 6749 §2.3.1
         // form-encodes both parts before Basic encoding.
         let use_post = !methods.is_empty() && !methods.iter().any(|m| m == "client_secret_basic") && methods.iter().any(|m| m == "client_secret_post");
-        let mut req = self.http.post(&d.token_endpoint).header(header::ACCEPT, "application/json");
+        let mut req = self.http().post(&d.token_endpoint).header(header::ACCEPT, "application/json");
         if use_post {
             body.push_str(&format!("&client_id={}&client_secret={}", form(&p.client_id), form(&p.client_secret)));
         } else {

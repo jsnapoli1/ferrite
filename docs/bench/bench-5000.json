@@ -1,32 +1,32 @@
 {
-  "connect_seconds": 6.15,
+  "connect_seconds": 5.67,
   "connections": 5000,
   "fanout": {
     "deliveries_expected": 500000,
-    "deliveries_per_second": 35354.0,
+    "deliveries_per_second": 39888.0,
     "deliveries_received": 500000,
-    "latency_ms_max": 91.18,
-    "latency_ms_p50": 38.29,
-    "latency_ms_p95": 60.8,
-    "latency_ms_p99": 70.85
+    "latency_ms_max": 101.17,
+    "latency_ms_p50": 33.11,
+    "latency_ms_p95": 54.3,
+    "latency_ms_p99": 63.34
   },
   "http_messages_page": {
     "concurrency": 32,
     "errors": 0,
-    "requests_per_second": 1153.0
+    "requests_per_second": 1167.0
   },
   "messages": 100,
-  "rss_kib_per_connection": 13.5,
-  "rss_mib_after_fanout": 94.6,
-  "rss_mib_after_setup": 21.0,
-  "rss_mib_end": 100.7,
-  "rss_mib_start": 18.9,
-  "rss_mib_with_connections": 87.0,
-  "total_seconds": 24.5,
+  "rss_kib_per_connection": 14.4,
+  "rss_mib_after_fanout": 106.1,
+  "rss_mib_after_setup": 28.0,
+  "rss_mib_end": 111.3,
+  "rss_mib_start": 26.1,
+  "rss_mib_with_connections": 98.3,
+  "total_seconds": 22.4,
   "users": 100,
   "webdav_64mib": {
-    "download_mib_s": 519.0,
-    "duplicate_upload_mib_s": 302.0,
-    "upload_mib_s": 268.0
+    "download_mib_s": 507.0,
+    "duplicate_upload_mib_s": 351.0,
+    "upload_mib_s": 316.0
   }
 }
