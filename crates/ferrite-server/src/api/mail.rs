@@ -6,7 +6,7 @@ use crate::AppState;
 use crate::auth::Auth;
 use crate::error::{ApiError, ApiResult};
 use axum::body::{Body, Bytes};
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, header};
 use axum::response::Response;
 use axum::routing::{delete, get, patch, post};
@@ -39,7 +39,11 @@ pub fn router() -> Router<AppState> {
         .route("/api/mail/actions", post(actions))
         .route("/api/mail/search", get(search))
         .route("/api/mail/recipients", get(recipients))
-        .route("/api/mail/uploads", post(upload))
+        // Uploads are buffered: cap them a little above the attachment limit.
+        .route(
+            "/api/mail/uploads",
+            post(upload).layer(DefaultBodyLimit::max(ferrite_core::mail::compose::MAX_ATTACHMENTS_BYTES + 64 * 1024)),
+        )
         .route("/api/mail/uploads/{id}", delete(discard_upload))
 }
 
