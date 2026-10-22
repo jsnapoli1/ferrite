@@ -1,0 +1,93 @@
+/* Talk moderation and breakout rooms: lobby (banner, waiting screen, waiting list), the
+   moderation dialog, call-stage moderation (raised-hands queue, tile menus) and breakout rooms
+   (banner and panel). Tokens only; the call stage keeps its dark look in both themes. */
+
+/* ---------- banners under the room header ---------- */
+.talk-lobby-banner, .talk-breakout-banner { display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: 13px; min-width: 0; }
+.talk-lobby-banner { background: var(--warn-soft); }
+.talk-lobby-banner > .icon { color: var(--warn); flex: none; }
+.talk-breakout-banner { background: var(--info-soft); }
+.talk-breakout-banner .bo-dot { color: var(--info); display: inline-flex; flex: none; }
+.talk-breakout-banner .btn { flex: none; }
+.talk-lobby-count { border: 0; background: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.bo-timer { font-variant-numeric: tabular-nums; font-weight: 600; }
+.bo-help { margin-left: 8px; vertical-align: middle; }
+.bo-choices { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ---------- lobby waiting screen ---------- */
+.talk-lobby { flex: 1; display: flex; min-height: 0; overflow-y: auto; }
+.lobby-wait { margin: auto; max-width: 420px; padding: 32px 20px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.lobby-icon { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); margin-bottom: 8px; }
+.lobby-icon .icon { width: 30px; height: 30px; stroke-width: 1.6; }
+.lobby-wait h2 { margin: 0 0 4px; font-size: 20px; }
+.lobby-wait p { margin: 4px 0; }
+.lobby-when { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border); font-weight: 500; }
+.lobby-desc { color: var(--text-2); white-space: pre-wrap; }
+.lobby-dots { display: flex; align-items: center; gap: 8px; margin-top: 14px; color: var(--text-3); }
+
+/* ---------- participants panel: lobby list ---------- */
+.talk-side-lobby { border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-bottom: 4px; }
+.talk-side-sub { display: flex; align-items: center; gap: 6px; padding: 6px 16px 2px; font-size: 12px; font-weight: 600; color: var(--warn); text-transform: uppercase; letter-spacing: .02em; }
+.talk-side-empty { padding: 4px 16px 6px; }
+.talk-person.waiting { border-bottom: 0; }
+
+/* ---------- moderation dialog ---------- */
+.mod-dialog { display: flex; flex-direction: column; gap: 4px; }
+.mod-section { padding: 4px 0 12px; border-bottom: 1px solid var(--border); }
+.mod-section:last-child { border-bottom: 0; padding-bottom: 0; }
+.mod-section h3 { display: flex; align-items: center; gap: 6px; margin: 4px 0 2px; font-size: 14px; }
+.mod-section h3 .icon { color: var(--accent); }
+.mod-section p { margin: 0 0 6px; }
+.mod-indent { padding-left: 26px; }
+.mod-indent .check { margin-top: 0; }
+.mod-indent input:disabled { opacity: .55; }
+
+/* ---------- call stage ---------- */
+.call-hands { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 28px; color: #fff; font-size: 12px; }
+.call-hands-title { display: inline-flex; align-items: center; gap: 4px; color: #fbbf24; font-weight: 600; margin-right: 2px; }
+.call-hand { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; height: 26px; padding: 0 4px 0 3px; border-radius: 13px; background: #2a2f3a; }
+.call-hand-n { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; background: #fbbf24; color: #1a1205; font-weight: 700; font-size: 11px; flex: none; }
+.call-hand button { width: 20px; height: 20px; border: 0; border-radius: 50%; display: grid; place-items: center; background: transparent; color: #cbd2dc; cursor: pointer; flex: none; }
+.call-hand button:hover { background: #363c4a; color: #fff; }
+.call-hand:not(:has(button)) { padding-right: 9px; }
+.tile-mod { position: absolute; top: 8px; right: 8px; width: 30px; height: 30px; border: 0; border-radius: 8px; display: grid; place-items: center; background: rgba(0, 0, 0, .55); color: #fff; cursor: pointer; opacity: 0; transition: opacity .12s; z-index: 2; }
+.call-tile:hover .tile-mod, .tile-mod:focus-visible, .call-tile:focus-within .tile-mod { opacity: 1; }
+.tile-mod:hover { background: rgba(0, 0, 0, .75); }
+.tile-mod:focus-visible { outline: 2px solid #fb923c; outline-offset: 1px; }
+@media (hover: none) { .tile-mod { opacity: 1; } }
+
+/* ---------- breakout rooms panel ---------- */
+.bo-panel { padding: 0 12px 16px 16px; display: flex; flex-direction: column; gap: 10px; }
+.bo-panel > p { margin: 0 0 4px; }
+.bo-status { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); }
+.bo-status.on { color: var(--info); }
+.bo-status.on strong { color: var(--info); }
+.bo-setup { display: flex; flex-direction: column; gap: 4px; }
+.bo-setup-row { display: flex; gap: 10px; align-items: flex-end; }
+.bo-setup-row input { width: 80px; }
+.bo-setup-row label { margin-top: 4px; }
+.bo-setup p { margin: 2px 0 6px; }
+.bo-setup .btn { align-self: flex-start; }
+.bo-broadcast { display: flex; flex-direction: column; gap: 6px; }
+.bo-broadcast textarea { min-height: 0; resize: none; }
+.bo-broadcast .btn { align-self: flex-end; }
+.bo-room { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.bo-room.help { border-color: var(--warn); box-shadow: 0 0 0 2px var(--warn-soft); }
+.bo-room-head { display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 10px; background: var(--surface-2); border-bottom: 1px solid var(--border); min-width: 0; }
+.bo-unassigned .bo-room-head { background: transparent; }
+.bo-call { color: var(--ok); display: inline-flex; }
+.bo-help-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 6px 4px 10px; background: var(--warn-soft); color: var(--warn); }
+.bo-member { display: flex; align-items: center; gap: 8px; padding: 5px 8px 5px 10px; min-width: 0; font-size: 13px; }
+.bo-member + .bo-member { border-top: 1px solid var(--border); }
+select.bo-move { width: auto; max-width: 118px; height: 28px; padding: 0 6px; font-size: 12px; flex: none; }
+.bo-empty { padding: 8px 10px; }
+.bo-actions { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.bo-start label { margin-top: 0; }
+.bo-start input { width: 120px; }
+.bo-more summary { cursor: pointer; color: var(--text-2); padding: 4px 0; }
+.bo-more .bo-setup { margin: 6px 0 10px; }
+
+@media (max-width: 760px) {
+  .talk-lobby-banner, .talk-breakout-banner { padding: 8px 10px; flex-wrap: wrap; }
+  .talk-lobby-banner > .grow, .talk-breakout-banner > .grow { flex-basis: calc(100% - 30px); white-space: normal; }
+}

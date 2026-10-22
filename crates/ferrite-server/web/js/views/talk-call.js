@@ -441,6 +441,8 @@ export class Call {
     this.ended = false;
     this.levels = new Map();
     this.audioCtx = null;
+    /** Called after a tile is painted: (session or null for local, tile record, state). */
+    this.onTilePaint = () => {};
     this.buildUI();
   }
 
@@ -813,6 +815,7 @@ export class Call {
     if (st.screen) f.push(h('span.tile-flag', { title: 'Sharing screen', dataset: { flag: 'screen' } }, icon('screen', 'sm')));
     if (st.hand) f.push(h('span.tile-flag.hand', { title: 'Hand raised', dataset: { flag: 'hand' } }, icon('hand', 'sm')));
     t.flags.replaceChildren(...f);
+    this.onTilePaint(session, t, st);
   }
 
   attachRemote(session, stream) {

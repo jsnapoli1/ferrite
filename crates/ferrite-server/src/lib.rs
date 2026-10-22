@@ -76,6 +76,17 @@ impl AppState {
     pub fn start_background(&self) {
         self.ai.spawn_talk_bot();
         self.tools.semantic.spawn_indexer();
+        // Calls also end on the server (moderators removing people, lobbies, breakout rooms
+        // stopping): a recording whose call has ended is saved within a few seconds.
+        let state = self.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(5));
+            loop {
+                tick.tick().await;
+                recording::after_leave(&state).await;
+            }
+        });
+        api::talk::moderation::spawn_background(self);
         let core = self.core.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(3600));

@@ -10,6 +10,8 @@ use ferrite_core::talk::{Actor, NewMessage};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+pub mod moderation;
+
 pub const GUEST_HEADER: &str = "x-guest-token";
 
 pub fn router() -> Router<AppState> {
@@ -34,6 +36,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/talk/messages/{id}/vote", post(vote))
         .route("/api/talk/messages/{id}/close", post(close_poll))
         .route("/api/talk/guest/{token}", post(guest_join).get(guest_room))
+        .merge(moderation::router())
 }
 
 /// A signed-in user, or a guest of a public room (`X-Guest-Token`).
@@ -142,9 +145,20 @@ async fn delete_room(State(s): State<AppState>, a: TalkActor, Path(token): Path<
     Ok(ok())
 }
 
-async fn join(State(s): State<AppState>, a: TalkActor, Path(token): Path<String>) -> ApiResult<Json<Value>> {
+#[derive(Deserialize, Default)]
+struct JoinBody {
+    password: Option<String>,
+}
+
+async fn join(State(s): State<AppState>, a: TalkActor, Path(token): Path<String>, body: axum::body::Bytes) -> ApiResult<Json<Value>> {
     let uid = &a.user()?.user.id;
-    s.core.join_public(uid, &token).await?;
+    // The body is optional: only password-protected rooms need one.
+    let b: JoinBody = if body.is_empty() {
+        JoinBody::default()
+    } else {
+        serde_json::from_slice(&body).map_err(Error::from)?
+    };
+    moderation::with_password_throttle(&s, &token, s.core.join_public(uid, &token, b.password.as_deref())).await?;
     Ok(Json(json!({"room": s.core.room_view(uid, &token).await?})))
 }
 
@@ -267,7 +281,7 @@ async fn call_members(State(s): State<AppState>, a: TalkActor, Path(token): Path
     let room = s.core.room_by_token(&token).await?;
     s.core.actor_in_room(&a.actor, &room).await?;
     Ok(Json(
-        json!({"members": s.core.call_members(&room.id), "ice_servers": s.core.config.ice_servers}),
+        json!({"members": s.core.call_members(&room.id), "hands": s.core.raised_hands(&room.id), "ice_servers": s.core.config.ice_servers}),
     ))
 }
 
@@ -316,22 +330,29 @@ async fn close_poll(State(s): State<AppState>, a: TalkActor, Path(id): Path<i64>
 #[derive(Deserialize)]
 struct GuestBody {
     name: String,
+    password: Option<String>,
 }
 
 /// Joins a public room as a guest; the returned secret goes in `X-Guest-Token`.
 async fn guest_join(State(s): State<AppState>, Path(token): Path<String>, Json(b): Json<GuestBody>) -> ApiResult<Json<Value>> {
-    let (actor, room, secret) = s.core.create_guest(&token, &b.name).await?;
+    let (actor, room, secret) = moderation::with_password_throttle(&s, &token, s.core.create_guest(&token, &b.name, b.password.as_deref())).await?;
     let info = guest_room_info(&s, &room).await?;
     Ok(Json(json!({"guest": actor, "secret": secret, "room": info})))
 }
 
 /// Public information about a public room (for the guest join page).
-async fn guest_room(State(s): State<AppState>, Path(token): Path<String>) -> ApiResult<Json<Value>> {
+/// With `X-Guest-Token`, also says whether that guest identity still belongs to the room.
+async fn guest_room(State(s): State<AppState>, headers: axum::http::HeaderMap, Path(token): Path<String>) -> ApiResult<Json<Value>> {
     let room = s.core.room_by_token(&token).await?;
     if room.kind != "public" {
         return Err(ApiError(Error::NotFound));
     }
-    Ok(Json(json!({"room": guest_room_info(&s, &room).await?})))
+    let mut out = json!({"room": guest_room_info(&s, &room).await?});
+    if let Some(secret) = headers.get(GUEST_HEADER).and_then(|v| v.to_str().ok()) {
+        let valid = matches!(s.core.resolve_guest(secret).await, Ok((_, r)) if r.id == room.id);
+        out["guest_valid"] = json!(valid);
+    }
+    Ok(Json(out))
 }
 
 /// What a guest may know about a public room: enough to filter live events and show its state.
@@ -349,5 +370,11 @@ async fn guest_room_info(s: &AppState, room: &ferrite_core::talk::Room) -> ApiRe
         "read_only": room.read_only,
         "ai_enabled": room.ai_enabled,
         "participant_count": participants,
+        "lobby": room.lobby_active(),
+        "lobby_timer": room.lobby_timer,
+        "has_password": room.has_password,
+        "call_permission": room.call_permission,
+        "breakout_mode": room.breakout_mode,
+        "breakout_status": room.breakout_status,
     }))
 }
