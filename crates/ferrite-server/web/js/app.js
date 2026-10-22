@@ -7,6 +7,7 @@
 import { api, ApiError } from './api.js';
 import { live } from './ws.js';
 import { h, clear, icon, avatar, toast, errorToast, menu, relTime, spinner } from './ui.js';
+import { showSecondStep } from './twofactor.js';
 
 const ROUTES = [
   ['/', 'home'],
@@ -115,19 +116,38 @@ function authScreen(title, subtitle, fields, submitLabel, onSubmit, footer) {
   setTimeout(() => form.querySelector('input')?.focus(), 0);
 }
 
+/** After a password step: a session, or the two-factor step first. */
+async function afterPassword(res, back) {
+  if (res.challenge) return showSecondStep(res, { onDone: start, onCancel: back });
+  return start();
+}
+
 async function showLogin(status) {
   setTitle('Sign in');
-  let footer = null;
+  const footer = [];
+  // Single sign-on: one button per provider; errors come back as ?sso_error=….
+  const params = new URLSearchParams(location.search);
+  const ssoError = params.get('sso_error');
+  if (ssoError) {
+    params.delete('sso_error');
+    history.replaceState({}, '', location.pathname + (params.toString() ? `?${params}` : ''));
+  }
+  const returnTo = location.pathname + location.search;
+  if (status.sso?.length) {
+    footer.push(h('div.auth-or', 'or'), h('div.auth-sso', status.sso.map((p) => h('a.btn.auth-sso-btn', {
+      href: `/api/auth/oidc/${encodeURIComponent(p.id)}/start?return_to=${encodeURIComponent(returnTo)}`,
+    }, icon('key', 'sm'), `Continue with ${p.name}`))));
+  }
   if (status.open_registration) {
-    footer = h('p.small.muted', { style: { marginTop: '14px' } }, 'No account? ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); showRegister(); } }, 'Create one'));
+    footer.push(h('p.small.muted', { style: { marginTop: '14px' } }, 'No account? ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); showRegister(); } }, 'Create one')));
   }
   authScreen('Ferrite', 'Sign in to your workspace.', [
     ['username', 'Username', 'text', 'username'],
     ['password', 'Password', 'password', 'current-password'],
   ], 'Sign in', async (v) => {
-    await api.post('/api/auth/login', v);
-    await start();
+    await afterPassword(await api.post('/api/auth/login', v), () => showLogin(status));
   }, footer);
+  if (ssoError) document.querySelector('.auth form')?.before(h('div.auth-alert', { role: 'alert' }, icon('lock', 'sm'), h('span', ssoError)));
 }
 
 async function showRegister() {
@@ -137,8 +157,7 @@ async function showRegister() {
     ['display_name', 'Your name', 'text', 'name'],
     ['password', 'Password (8+ characters)', 'password', 'new-password'],
   ], 'Create account', async (v) => {
-    await api.post('/api/auth/register', v);
-    await start();
+    await afterPassword(await api.post('/api/auth/register', v), async () => showLogin(await api.get('/api/status')));
   });
 }
 
@@ -149,8 +168,7 @@ async function showSetup() {
     ['display_name', 'Your name', 'text', 'name'],
     ['password', 'Password (8+ characters)', 'password', 'new-password'],
   ], 'Create administrator', async (v) => {
-    await api.post('/api/setup', v);
-    await start();
+    await afterPassword(await api.post('/api/setup', v), async () => showLogin(await api.get('/api/status')));
   });
 }
 
@@ -366,6 +384,8 @@ async function boot() {
   }
   if (status.setup_needed) return showSetup();
   api.onUnauthorized = () => { if (state.me) location.reload(); };
+  // Signed out: straight to the sign-in form, without a failing /api/me first.
+  if (!status.signed_in) return showLogin(status);
   try {
     await start();
   } catch (e) {
