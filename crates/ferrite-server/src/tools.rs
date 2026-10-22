@@ -191,22 +191,39 @@ fn definitions() -> &'static Vec<Tool> {
                 ("from", "string", "Start (RFC 3339 or YYYY-MM-DD); default now", false),
                 ("to", "string", "End (RFC 3339 or YYYY-MM-DD); default from + 7 days", false),
             ]).read_only(),
-            Tool::new("calendar_create_event", "Create event", "Add an event to your calendar (it syncs to phones over CalDAV).", &[
+            Tool::new("calendar_create_event", "Create event", "Add an event to your calendar (it syncs to phones over CalDAV). With attendees, you are the organizer and Ferrite invites them: people with a Ferrite account get it in their calendar, others by email.", &[
                 ("summary", "string", "Title", true),
                 ("start", "string", "Start (RFC 3339, e.g. 2026-11-05T14:00:00Z, or YYYY-MM-DD for all-day)", true),
                 ("end", "string", "End (default: 1 hour later, or the next day for all-day)", false),
                 ("description", "string", "Notes", false),
                 ("location", "string", "Location", false),
                 ("calendar", "string", "Calendar name (default: the first calendar)", false),
+                ("attendees", "string[]", "Email addresses to invite, e.g. ada@example.org or \"Ada Lovelace <ada@example.org>\"", false),
             ]),
-            Tool::new("calendar_update_event", "Update event", "Change an event's title, time, description or location; other details (alarms, attendees, recurrence) are kept.", &[
+            Tool::new("calendar_update_event", "Update event", "Change an event's title, time, description, location or attendees; other details (alarms, recurrence) are kept. Attendees are told about changes to the time, title or location; removed attendees get a cancellation.", &[
                 ("event_id", "string", "Event id from calendar_events", true),
                 ("summary", "string", "New title", false),
                 ("start", "string", "New start", false),
                 ("end", "string", "New end", false),
                 ("description", "string", "New notes", false),
                 ("location", "string", "New location", false),
+                ("attendees", "string[]", "The complete new list of attendees' email addresses (omit to keep the current ones)", false),
             ]),
+            Tool::new("calendar_respond", "Answer invitation", "Accept, tentatively accept or decline an event you were invited to (for a recurring event, the whole series). The organizer is told.", &[
+                ("event_id", "string", "Event id from calendar_events", true),
+                ("response", "string", "accept, tentative or decline", true),
+            ]),
+            Tool::new("calendar_share", "Share calendar", "Share one of your calendars with a user or a group, read-only or with permission to add and edit events. Sharing again changes the permission.", &[
+                ("calendar", "string", "Calendar name or uri", true),
+                ("with", "string", "Username, or group name when kind is group", true),
+                ("kind", "string", "user (default) or group", false),
+                ("permission", "string", "read (default) or write", false),
+            ]),
+            Tool::new("calendar_unshare", "Stop sharing calendar", "Stop sharing one of your calendars with a user or a group.", &[
+                ("calendar", "string", "Calendar name or uri", true),
+                ("with", "string", "Username, or group name when kind is group", true),
+                ("kind", "string", "user (default) or group", false),
+            ]).destructive(),
             Tool::new("calendar_delete_event", "Delete event", "Delete an event or task.", &[("event_id", "string", "Event id", true)]).destructive(),
             Tool::new("contacts_search", "Search contacts", "Find contacts by name, email, phone or organization.", &[("query", "string", "Search text (empty for all)", false)]).read_only(),
             Tool::new("contacts_create", "Create contact", "Add a contact to your address book (syncs over CardDAV).", &[
@@ -957,18 +974,13 @@ impl FerriteTools {
                     description: opt(a, "description").map(String::from),
                     location: opt(a, "location").map(String::from),
                     calendar: opt(a, "calendar").map(String::from),
+                    attendees: a.get("attendees").map(|_| strings(a, "attendees")),
                 };
                 Ok(ToolResult::json(json!({"event": core.create_event(uid, &e).await?})))
             }
             "calendar_update_event" => {
                 let id = s(a, "event_id")?;
-                let far = Utc::now() + chrono::Duration::days(365 * 50);
-                let current = core
-                    .events_between(uid, chrono::DateTime::<Utc>::MIN_UTC, far)
-                    .await?
-                    .into_iter()
-                    .find(|e| e.id == id)
-                    .ok_or(Error::NotFound)?;
+                let current = core.event_view(uid, id).await?;
                 let (start, all_day) = match opt(a, "start") {
                     Some(t) => parse_when(t)?,
                     None => (current.starts_at.ok_or_else(|| Error::bad("event has no start"))?, current.all_day),
@@ -989,8 +1001,34 @@ impl FerriteTools {
                     description: Some(opt(a, "description").map(String::from).unwrap_or(current.description)),
                     location: Some(opt(a, "location").map(String::from).unwrap_or(current.location)),
                     calendar: None,
+                    attendees: a.get("attendees").map(|_| strings(a, "attendees")),
                 };
                 Ok(ToolResult::json(json!({"event": core.update_event(uid, id, &e).await?})))
+            }
+            "calendar_respond" => {
+                let id = s(a, "event_id")?;
+                let partstat = ferrite_core::scheduling::parse_response(s(a, "response")?)?;
+                core.respond_to_event(uid, id, partstat).await?;
+                Ok(ToolResult::json(json!({"event": core.event_view(uid, id).await?})))
+            }
+            "calendar_share" | "calendar_unshare" => {
+                let cal = core.writable_calendar(uid, Some(s(a, "calendar")?)).await?;
+                if !cal.is_owner() {
+                    return Err(Error::bad("only the calendar's owner can change who it is shared with"));
+                }
+                let kind = opt(a, "kind").unwrap_or("user");
+                let with = s(a, "with")?;
+                if name == "calendar_unshare" {
+                    core.unshare_calendar_target(uid, &cal.collection.uri, kind, with).await?;
+                    return Ok(ToolResult::text(format!("“{}” is no longer shared with {with}.", cal.collection.name)));
+                }
+                let writable = match opt(a, "permission").unwrap_or("read") {
+                    "read" => false,
+                    "write" | "edit" => true,
+                    _ => return Err(Error::bad("permission is read or write")),
+                };
+                let share = core.share_calendar(&ctx.user, &cal.collection.uri, kind, with, writable).await?;
+                Ok(ToolResult::json(json!({"calendar": cal.collection.name, "share": share})))
             }
             "calendar_delete_event" => {
                 core.delete_event(uid, s(a, "event_id")?).await?;

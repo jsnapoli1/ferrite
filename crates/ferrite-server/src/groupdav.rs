@@ -7,6 +7,12 @@
 //! time-range and component filters), calendar-multiget, addressbook-query,
 //! addressbook-multiget, sync-collection (full sync; stale tokens get `valid-sync-token`),
 //! MKCALENDAR, extended MKCOL for address books, GET/PUT/DELETE with ETags.
+//!
+//! Scheduling (RFC 6638, `calendar-auto-schedule`): writes go through
+//! `ferrite_core::scheduling`, which sends invitations, updates, cancellations and replies;
+//! the principal has a scheduling inbox (always empty: invitations land in calendars) and
+//! an outbox that answers free/busy requests. Calendars shared with the caller appear in
+//! their calendar home as `<uri>_shared_by_<owner>` with the privileges of the share.
 
 use crate::AppState;
 use crate::auth::{Auth, authenticate};
@@ -15,7 +21,9 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, NaiveDateTime, Utc};
+use ferrite_core::calendar_sharing::{CalAccess, CalendarRef};
 use ferrite_core::groupware::{Collection, DavObject, KIND_ADDRESSBOOK, KIND_CALENDAR};
+use ferrite_core::itip::{self, Component, Prop};
 use ferrite_core::{Error, Result};
 use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, utf8_percent_encode};
 
@@ -155,6 +163,9 @@ enum Target {
     Root,
     Principal,
     Home(&'static str),
+    /// The scheduling inbox and outbox (RFC 6638 §2.1, §2.2).
+    Inbox,
+    Outbox,
     Collection(&'static str, String),
     Object(&'static str, String, String),
 }
@@ -172,6 +183,8 @@ fn target(path: &str, username: &str) -> Option<Target> {
         [] => Some(Target::Root),
         ["principals", "users", u] if user_ok(u) => Some(Target::Principal),
         ["calendars", u] if user_ok(u) => Some(Target::Home(KIND_CALENDAR)),
+        ["calendars", u, "inbox"] if user_ok(u) => Some(Target::Inbox),
+        ["calendars", u, "outbox"] if user_ok(u) => Some(Target::Outbox),
         ["calendars", u, c] if user_ok(u) => Some(Target::Collection(KIND_CALENDAR, c.to_string())),
         ["calendars", u, c, o] if user_ok(u) => Some(Target::Object(KIND_CALENDAR, c.to_string(), o.to_string())),
         ["addressbooks", "users", u] if user_ok(u) => Some(Target::Home(KIND_ADDRESSBOOK)),
@@ -212,7 +225,34 @@ fn propstat(href: &str, props: &str) -> String {
     )
 }
 
-const PRIVILEGES: &str = "<d:current-user-privilege-set><d:privilege><d:all/></d:privilege><d:privilege><d:read/></d:privilege><d:privilege><d:write/></d:privilege><d:privilege><d:write-properties/></d:privilege><d:privilege><d:write-content/></d:privilege><d:privilege><d:bind/></d:privilege><d:privilege><d:unbind/></d:privilege><cal:read-free-busy/></d:current-user-privilege-set>";
+/// The current-user-privilege-set for a collection the caller reaches with `access`.
+fn privileges(access: CalAccess) -> String {
+    let list: &[&str] = match access {
+        CalAccess::Owner => &[
+            "<d:all/>",
+            "<d:read/>",
+            "<d:write/>",
+            "<d:write-properties/>",
+            "<d:write-content/>",
+            "<d:bind/>",
+            "<d:unbind/>",
+            "<cal:read-free-busy/>",
+        ],
+        // Sharees can write events, and set their own name and colour for the calendar.
+        CalAccess::ReadWrite => &[
+            "<d:read/>",
+            "<d:write/>",
+            "<d:write-properties/>",
+            "<d:write-content/>",
+            "<d:bind/>",
+            "<d:unbind/>",
+            "<cal:read-free-busy/>",
+        ],
+        CalAccess::Read => &["<d:read/>", "<cal:read-free-busy/>"],
+    };
+    let inner: String = list.iter().map(|p| format!("<d:privilege>{p}</d:privilege>")).collect();
+    format!("<d:current-user-privilege-set>{inner}</d:current-user-privilege-set>")
+}
 
 fn principal_props(auth: &Auth) -> String {
     let u = &auth.user.username;
@@ -228,6 +268,9 @@ fn principal_props(auth: &Auth) -> String {
          <cal:calendar-home-set><d:href>{1}</d:href></cal:calendar-home-set>\
          <card:addressbook-home-set><d:href>{2}</d:href></card:addressbook-home-set>\
          <cal:calendar-user-address-set>{email}<d:href>{BASE}/principals/users/{0}/</d:href></cal:calendar-user-address-set>\
+         <cal:schedule-inbox-URL><d:href>{1}inbox/</d:href></cal:schedule-inbox-URL>\
+         <cal:schedule-outbox-URL><d:href>{1}outbox/</d:href></cal:schedule-outbox-URL>\
+         <cal:calendar-user-type>INDIVIDUAL</cal:calendar-user-type>\
          <d:displayname>{3}</d:displayname>",
         enc(u),
         home_href(KIND_CALENDAR, u),
@@ -236,14 +279,16 @@ fn principal_props(auth: &Auth) -> String {
     )
 }
 
-fn collection_props(c: &Collection, auth: &Auth) -> String {
-    let owner = format!("<d:owner><d:href>{BASE}/principals/users/{}/</d:href></d:owner>", enc(&auth.user.username));
+/// Properties of a collection as the caller sees it (`owner`: the owner's username).
+fn collection_props(c: &Collection, owner: &str, access: CalAccess) -> String {
+    let owner = format!("<d:owner><d:href>{BASE}/principals/users/{}/</d:href></d:owner>", enc(owner));
+    let privs = privileges(access);
     if c.kind == KIND_CALENDAR {
         let comps: String = c.components.split(',').map(|x| format!("<cal:comp name=\"{}\"/>", esc(x))).collect();
         format!(
             "<d:resourcetype><d:collection/><cal:calendar/></d:resourcetype><d:displayname>{}</d:displayname>\
              <x1:calendar-color>{}</x1:calendar-color><cs:getctag>{}</cs:getctag><d:sync-token>{}</d:sync-token>\
-             <cal:supported-calendar-component-set>{comps}</cal:supported-calendar-component-set>{PRIVILEGES}{owner}",
+             <cal:supported-calendar-component-set>{comps}</cal:supported-calendar-component-set>{privs}{owner}",
             esc(&c.name),
             esc(&c.color),
             esc(&c.ctag),
@@ -253,11 +298,33 @@ fn collection_props(c: &Collection, auth: &Auth) -> String {
         format!(
             "<d:resourcetype><d:collection/><card:addressbook/></d:resourcetype><d:displayname>{}</d:displayname>\
              <cs:getctag>{}</cs:getctag><d:sync-token>{}</d:sync-token>\
-             <card:supported-address-data><card:address-data-type content-type=\"text/vcard\" version=\"3.0\"/></card:supported-address-data>{PRIVILEGES}{owner}",
+             <card:supported-address-data><card:address-data-type content-type=\"text/vcard\" version=\"3.0\"/></card:supported-address-data>{privs}{owner}",
             esc(&c.name),
             esc(&c.ctag),
             sync_token(c)
         )
+    }
+}
+
+fn mailbox_props(inbox: bool, default_calendar: Option<&str>) -> String {
+    if inbox {
+        let default = default_calendar
+            .map(|h| {
+                format!(
+                    "<cal:schedule-default-calendar-URL><d:href>{}</d:href></cal:schedule-default-calendar-URL>",
+                    esc(h)
+                )
+            })
+            .unwrap_or_default();
+        format!(
+            "<d:resourcetype><d:collection/><cal:schedule-inbox/></d:resourcetype><d:displayname>Inbox</d:displayname>\
+             <cs:getctag>inbox</cs:getctag><d:sync-token>http://ferrite/sync/inbox</d:sync-token>{default}\
+             <d:current-user-privilege-set><d:privilege><d:read/></d:privilege><d:privilege><cal:schedule-deliver/></d:privilege></d:current-user-privilege-set>"
+        )
+    } else {
+        "<d:resourcetype><d:collection/><cal:schedule-outbox/></d:resourcetype><d:displayname>Outbox</d:displayname>\
+         <d:current-user-privilege-set><d:privilege><d:read/></d:privilege><d:privilege><cal:schedule-send/></d:privilege></d:current-user-privilege-set>"
+            .to_string()
     }
 }
 
@@ -309,13 +376,15 @@ pub async fn well_known() -> Response {
 fn options() -> Response {
     let mut r = StatusCode::OK.into_response();
     let h = r.headers_mut();
+    // calendar-auto-schedule: the server sends invitations and replies (RFC 6638), so clients
+    // must not send their own (see ferrite_core::scheduling).
     h.insert(
         "DAV",
-        HeaderValue::from_static("1, 2, 3, access-control, calendar-access, addressbook, extended-mkcol"),
+        HeaderValue::from_static("1, 2, 3, access-control, calendar-access, calendar-auto-schedule, addressbook, extended-mkcol"),
     );
     h.insert(
         header::ALLOW,
-        HeaderValue::from_static("OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL"),
+        HeaderValue::from_static("OPTIONS, GET, HEAD, POST, PUT, DELETE, PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL"),
     );
     r
 }
@@ -348,9 +417,36 @@ pub async fn handle(State(s): State<AppState>, req: Request) -> Response {
         "PUT" => put(&s, &auth, t, &headers, &body).await,
         "DELETE" => delete(&s, &auth, t, &headers).await,
         "MKCALENDAR" | "MKCOL" => mkcol(&s, &auth, t, &body, method == "MKCALENDAR").await,
+        "POST" => match t {
+            Target::Outbox => free_busy(&s, &auth, &body).await,
+            _ => Ok(StatusCode::METHOD_NOT_ALLOWED.into_response()),
+        },
         _ => Ok(StatusCode::METHOD_NOT_ALLOWED.into_response()),
     };
     result.unwrap_or_else(|e| error_response(&e))
+}
+
+/// A collection the caller can reach: an address book of theirs, or a calendar of theirs or
+/// shared with them (under the uri they see it by).
+async fn collection(s: &AppState, auth: &Auth, kind: &str, uri: &str) -> Result<CalendarRef> {
+    if kind == KIND_CALENDAR {
+        s.core.calendar_ref(&auth.user.id, uri).await
+    } else {
+        Ok(CalendarRef::owned(s.core.dav_collection(&auth.user.id, kind, uri).await?))
+    }
+}
+
+fn owner_name<'a>(cal: &'a CalendarRef, auth: &'a Auth) -> &'a str {
+    cal.shared_by.as_ref().map(|o| o.username.as_str()).unwrap_or(&auth.user.username)
+}
+
+async fn default_calendar_href(s: &AppState, auth: &Auth) -> Result<Option<String>> {
+    Ok(s.core
+        .dav_collections(&auth.user.id, KIND_CALENDAR)
+        .await?
+        .iter()
+        .find(|c| c.components.split(',').any(|x| x == "VEVENT"))
+        .map(|c| col_href(c, &auth.user.username)))
 }
 
 async fn propfind(s: &AppState, auth: &Auth, t: Target, headers: &HeaderMap) -> Result<Response> {
@@ -374,27 +470,49 @@ async fn propfind(s: &AppState, auth: &Auth, t: Target, headers: &HeaderMap) -> 
         Target::Home(kind) => {
             out.push_str(&propstat(
                 &home_href(kind, &user),
-                &format!("<d:resourcetype><d:collection/></d:resourcetype>{}{}", principal_props(auth), PRIVILEGES),
+                &format!(
+                    "<d:resourcetype><d:collection/></d:resourcetype>{}{}",
+                    principal_props(auth),
+                    privileges(CalAccess::Owner)
+                ),
             ));
             if depth1 {
-                for c in core.dav_collections(&auth.user.id, kind).await? {
-                    out.push_str(&propstat(&col_href(&c, &user), &collection_props(&c, auth)));
+                if kind == KIND_CALENDAR {
+                    for cal in core.user_calendars(&auth.user.id).await? {
+                        let props = collection_props(&cal.collection, owner_name(&cal, auth), cal.access);
+                        out.push_str(&propstat(&col_href(&cal.collection, &user), &props));
+                    }
+                    let default = default_calendar_href(s, auth).await?;
+                    let home = home_href(KIND_CALENDAR, &user);
+                    out.push_str(&propstat(&format!("{home}inbox/"), &mailbox_props(true, default.as_deref())));
+                    out.push_str(&propstat(&format!("{home}outbox/"), &mailbox_props(false, None)));
+                } else {
+                    for c in core.dav_collections(&auth.user.id, kind).await? {
+                        out.push_str(&propstat(&col_href(&c, &user), &collection_props(&c, &user, CalAccess::Owner)));
+                    }
                 }
             }
         }
+        Target::Inbox | Target::Outbox => {
+            let inbox = matches!(t, Target::Inbox);
+            let default = default_calendar_href(s, auth).await?;
+            let href = format!("{}{}/", home_href(KIND_CALENDAR, &user), if inbox { "inbox" } else { "outbox" });
+            out.push_str(&propstat(&href, &mailbox_props(inbox, default.as_deref())));
+        }
         Target::Collection(kind, uri) => {
-            let c = core.dav_collection(&auth.user.id, kind, &uri).await?;
-            out.push_str(&propstat(&col_href(&c, &user), &collection_props(&c, auth)));
+            let cal = collection(s, auth, kind, &uri).await?;
+            let c = &cal.collection;
+            out.push_str(&propstat(&col_href(c, &user), &collection_props(c, owner_name(&cal, auth), cal.access)));
             if depth1 {
-                for o in core.dav_objects(&c).await? {
-                    out.push_str(&propstat(&obj_href(&c, &user, &o), &object_props(&o, false)));
+                for o in core.dav_objects(c).await? {
+                    out.push_str(&propstat(&obj_href(c, &user, &o), &object_props(&o, false)));
                 }
             }
         }
         Target::Object(kind, col, uri) => {
-            let c = core.dav_collection(&auth.user.id, kind, &col).await?;
-            let o = core.dav_object(&c, &uri).await?;
-            out.push_str(&propstat(&obj_href(&c, &user, &o), &object_props(&o, false)));
+            let cal = collection(s, auth, kind, &col).await?;
+            let o = core.dav_object(&cal.collection, &uri).await?;
+            out.push_str(&propstat(&obj_href(&cal.collection, &user, &o), &object_props(&o, false)));
         }
     }
     Ok(multistatus(out))
@@ -403,8 +521,17 @@ async fn propfind(s: &AppState, auth: &Auth, t: Target, headers: &HeaderMap) -> 
 async fn proppatch(s: &AppState, auth: &Auth, t: Target, path: &str, body: &str) -> Result<Response> {
     let b = parse_body(body);
     if let Target::Collection(kind, uri) = t {
-        let c = s.core.dav_collection(&auth.user.id, kind, &uri).await?;
-        s.core.update_dav_collection(&c, b.displayname.as_deref(), b.color.as_deref()).await?;
+        let cal = collection(s, auth, kind, &uri).await?;
+        if cal.is_owner() {
+            s.core
+                .update_dav_collection(&cal.collection, b.displayname.as_deref(), b.color.as_deref())
+                .await?;
+        } else {
+            // A sharee renames or recolours the calendar for themselves only.
+            s.core
+                .set_shared_calendar_prefs(&auth.user.id, &cal, b.displayname.as_deref(), b.color.as_deref())
+                .await?;
+        }
     }
     Ok(multistatus(format!(
         "<d:response><d:href>{}</d:href><d:propstat><d:prop><d:displayname/><x1:calendar-color/></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>",
@@ -417,17 +544,27 @@ async fn report(s: &AppState, auth: &Auth, t: Target, body: &str) -> Result<Resp
     let user = auth.user.username.clone();
     let (kind, uri) = match t {
         Target::Collection(k, u) => (k, u),
+        // The inbox stays empty: invitations are delivered straight into calendars.
+        Target::Inbox => {
+            let token = if b.root == "sync-collection" {
+                "<d:sync-token>http://ferrite/sync/inbox</d:sync-token>"
+            } else {
+                ""
+            };
+            return Ok(multistatus(token.to_string()));
+        }
         _ => return Err(Error::bad("REPORT is supported on calendars and address books")),
     };
-    let c = s.core.dav_collection(&auth.user.id, kind, &uri).await?;
+    let cal = collection(s, auth, kind, &uri).await?;
+    let c = &cal.collection;
     let mut out = String::new();
     match b.root.as_str() {
         "calendar-multiget" | "addressbook-multiget" => {
             for href in &b.hrefs {
                 let name = href.trim_end_matches('/').rsplit('/').next().unwrap_or("");
                 let name = percent_decode_str(name).decode_utf8_lossy();
-                match s.core.dav_object(&c, &name).await {
-                    Ok(o) => out.push_str(&propstat(&obj_href(&c, &user, &o), &object_props(&o, true))),
+                match s.core.dav_object(c, &name).await {
+                    Ok(o) => out.push_str(&propstat(&obj_href(c, &user, &o), &object_props(&o, true))),
                     Err(_) => out.push_str(&format!(
                         "<d:response><d:href>{}</d:href><d:status>HTTP/1.1 404 Not Found</d:status></d:response>",
                         esc(href)
@@ -437,19 +574,19 @@ async fn report(s: &AppState, auth: &Auth, t: Target, body: &str) -> Result<Resp
         }
         "calendar-query" | "addressbook-query" => {
             let wanted: Vec<&String> = b.comp_filters.iter().filter(|c| c.as_str() != "VCALENDAR").collect();
-            for o in s.core.dav_objects_in_range(&c, b.time_start, b.time_end).await? {
+            for o in s.core.dav_objects_in_range(c, b.time_start, b.time_end).await? {
                 if !wanted.is_empty() && !wanted.iter().any(|w| **w == o.component) {
                     continue;
                 }
-                out.push_str(&propstat(&obj_href(&c, &user, &o), &object_props(&o, true)));
+                out.push_str(&propstat(&obj_href(c, &user, &o), &object_props(&o, true)));
             }
         }
         "sync-collection" => {
-            let current = sync_token(&c);
+            let current = sync_token(c);
             match b.sync_token.as_deref() {
                 None | Some("") => {
-                    for o in s.core.dav_objects(&c).await? {
-                        out.push_str(&propstat(&obj_href(&c, &user, &o), &object_props(&o, false)));
+                    for o in s.core.dav_objects(c).await? {
+                        out.push_str(&propstat(&obj_href(c, &user, &o), &object_props(&o, false)));
                     }
                 }
                 Some(tok) if tok == current => {}
@@ -473,8 +610,8 @@ async fn get(s: &AppState, auth: &Auth, t: Target) -> Result<Response> {
     let Target::Object(kind, col, uri) = t else {
         return Ok((StatusCode::OK, "Ferrite CalDAV/CardDAV").into_response());
     };
-    let c = s.core.dav_collection(&auth.user.id, kind, &col).await?;
-    let o = s.core.dav_object(&c, &uri).await?;
+    let cal = collection(s, auth, kind, &col).await?;
+    let o = s.core.dav_object(&cal.collection, &uri).await?;
     let mut r = (StatusCode::OK, o.data.clone()).into_response();
     let h = r.headers_mut();
     h.insert(
@@ -488,33 +625,71 @@ async fn get(s: &AppState, auth: &Auth, t: Target) -> Result<Response> {
     Ok(r)
 }
 
+/// A 403 with the DAV:need-privileges precondition (RFC 3744 §7.1.1).
+fn need_privilege(href: &str, privilege: &str) -> Response {
+    let xml = format!(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<d:error {NS}><d:need-privileges><d:resource><d:href>{}</d:href><d:privilege><d:{privilege}/></d:privilege></d:resource></d:need-privileges></d:error>",
+        esc(href)
+    );
+    let mut r = (StatusCode::FORBIDDEN, xml).into_response();
+    r.headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/xml; charset=utf-8"));
+    r
+}
+
 async fn put(s: &AppState, auth: &Auth, t: Target, headers: &HeaderMap, body: &str) -> Result<Response> {
     let Target::Object(kind, col, uri) = t else {
         return Err(Error::bad("PUT targets an object inside a calendar or address book"));
     };
-    let c = s.core.dav_collection(&auth.user.id, kind, &col).await?;
+    let cal = collection(s, auth, kind, &col).await?;
+    if !cal.writable {
+        return Ok(need_privilege(&col_href(&cal.collection, &auth.user.username), "bind"));
+    }
     let if_match = headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok());
     let if_none = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) == Some("*");
-    let (o, created) = s.core.put_dav_object(&c, &uri, body, if_match, if_none).await?;
+    let (o, created, rewritten) = if kind == KIND_CALENDAR {
+        let saved = s.core.save_calendar_object(&auth.user, &cal, &uri, body, if_match, if_none).await?;
+        (saved.object, saved.created, saved.rewritten)
+    } else {
+        let (o, created) = s.core.put_dav_object(&cal.collection, &uri, body, if_match, if_none).await?;
+        (o, created, false)
+    };
     let mut r = if created { StatusCode::CREATED } else { StatusCode::NO_CONTENT }.into_response();
-    r.headers_mut().insert(
-        header::ETAG,
-        HeaderValue::from_str(&format!("\"{}\"", o.etag)).unwrap_or_else(|_| HeaderValue::from_static("\"\"")),
-    );
+    // When scheduling changed the stored data (status parameters, sequence), the client must
+    // fetch it again, so no ETag is returned (RFC 4791 §5.3.4).
+    if !rewritten {
+        r.headers_mut().insert(
+            header::ETAG,
+            HeaderValue::from_str(&format!("\"{}\"", o.etag)).unwrap_or_else(|_| HeaderValue::from_static("\"\"")),
+        );
+    }
     Ok(r)
 }
 
 async fn delete(s: &AppState, auth: &Auth, t: Target, headers: &HeaderMap) -> Result<Response> {
     match t {
         Target::Object(kind, col, uri) => {
-            let c = s.core.dav_collection(&auth.user.id, kind, &col).await?;
-            s.core
-                .delete_dav_object(&c, &uri, headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok()))
-                .await?;
+            let cal = collection(s, auth, kind, &col).await?;
+            if !cal.writable {
+                return Ok(need_privilege(&col_href(&cal.collection, &auth.user.username), "unbind"));
+            }
+            let if_match = headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok());
+            if kind == KIND_CALENDAR {
+                // Schedule-Reply: F asks the server not to decline on the attendee's behalf.
+                let reply = headers.get("schedule-reply").and_then(|v| v.to_str().ok()).map(str::trim) != Some("F");
+                s.core.delete_calendar_object(&auth.user, &cal, &uri, if_match, reply).await?;
+            } else {
+                s.core.delete_dav_object(&cal.collection, &uri, if_match).await?;
+            }
         }
         Target::Collection(kind, uri) => {
-            let c = s.core.dav_collection(&auth.user.id, kind, &uri).await?;
-            s.core.delete_dav_collection(&c).await?;
+            let cal = collection(s, auth, kind, &uri).await?;
+            if cal.is_owner() {
+                s.core.delete_dav_collection(&cal.collection).await?;
+            } else {
+                // Deleting a shared calendar removes it from the sharee's list only.
+                s.core.leave_shared_calendar(&auth.user.id, &cal).await?;
+            }
         }
         _ => return Ok(StatusCode::FORBIDDEN.into_response()),
     }
@@ -559,6 +734,83 @@ async fn mkcol(s: &AppState, auth: &Auth, t: Target, body: &str, is_calendar: bo
         )
         .await?;
     Ok(StatusCode::CREATED.into_response())
+}
+
+/// Free/busy lookup through the scheduling outbox (RFC 6638 §5): a VFREEBUSY request from
+/// the caller, answered for each attendee who has a Ferrite account.
+async fn free_busy(s: &AppState, auth: &Auth, body: &str) -> Result<Response> {
+    let cal = Component::parse(body)?;
+    if !cal.value("METHOD").is_some_and(|m| m.trim().eq_ignore_ascii_case("REQUEST")) {
+        return Err(Error::bad("POST a METHOD:REQUEST VFREEBUSY to the outbox"));
+    }
+    let fb = cal
+        .subs
+        .iter()
+        .find(|c| c.name == "VFREEBUSY")
+        .ok_or_else(|| Error::bad("only free/busy requests are accepted"))?;
+    let my_email = auth.user.email.as_deref().map(itip::normalize_address);
+    let organizer = fb.get("ORGANIZER").map(|p| p.address());
+    if organizer.is_none() || organizer != my_email {
+        return Err(Error::Forbidden);
+    }
+    let time = |name: &str| {
+        fb.get(name).and_then(|p| {
+            let params: Vec<(String, String)> = p.params.iter().map(|(k, _)| (k.clone(), p.param(k).unwrap_or("").to_string())).collect();
+            ferrite_core::recur::parse_time(&p.value, &params).map(|t| t.utc())
+        })
+    };
+    let (Some(from), Some(to)) = (time("DTSTART"), time("DTEND")) else {
+        return Err(Error::bad("the request needs DTSTART and DTEND"));
+    };
+    if to <= from || to - from > chrono::Duration::days(366) {
+        return Err(Error::bad("ask for at most a year of free/busy time"));
+    }
+    let stamp = |t: DateTime<Utc>| t.format("%Y%m%dT%H%M%SZ").to_string();
+    let mut out = String::new();
+    for a in fb.all("ATTENDEE") {
+        let email = a.address();
+        let recipient = format!("<cal:recipient><d:href>mailto:{}</d:href></cal:recipient>", esc(&email));
+        let Some(user) = s.core.user_by_email(&email).await? else {
+            out.push_str(&format!(
+                "<cal:response>{recipient}<cal:request-status>3.7;Invalid calendar user</cal:request-status></cal:response>"
+            ));
+            continue;
+        };
+        let busy = s.core.busy_periods(&user, from, to).await?;
+        let mut reply = Component::new("VCALENDAR");
+        reply.props.push(Prop::new("VERSION", "2.0"));
+        reply.props.push(Prop::new("PRODID", "-//Ferrite//Ferrite//EN"));
+        reply.props.push(Prop::new("METHOD", "REPLY"));
+        let mut v = Component::new("VFREEBUSY");
+        if let Some(uid) = fb.get("UID") {
+            v.props.push(uid.clone());
+        }
+        v.props.push(Prop::new("DTSTAMP", stamp(Utc::now())));
+        v.props.push(Prop::new("DTSTART", stamp(from)));
+        v.props.push(Prop::new("DTEND", stamp(to)));
+        if let Some(o) = fb.get("ORGANIZER") {
+            v.props.push(o.clone());
+        }
+        v.props.push(a.clone());
+        if !busy.is_empty() {
+            let mut p = Prop::new(
+                "FREEBUSY",
+                busy.iter().map(|(a, b)| format!("{}/{}", stamp(*a), stamp(*b))).collect::<Vec<_>>().join(","),
+            );
+            p.set_param("FBTYPE", "BUSY");
+            v.props.push(p);
+        }
+        reply.subs.push(v);
+        out.push_str(&format!(
+            "<cal:response>{recipient}<cal:request-status>2.0;Success</cal:request-status><cal:calendar-data>{}</cal:calendar-data></cal:response>",
+            esc(&reply.to_ics())
+        ));
+    }
+    let xml = format!("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<cal:schedule-response {NS}>{out}</cal:schedule-response>");
+    let mut r = (StatusCode::OK, xml).into_response();
+    r.headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/xml; charset=utf-8"));
+    Ok(r)
 }
 
 #[cfg(test)]

@@ -7,6 +7,7 @@ pub mod craft_bridge;
 pub mod error;
 pub mod external;
 pub mod groupdav;
+pub mod invitations;
 pub mod mcp_http;
 pub mod public;
 pub mod semantic;
@@ -86,6 +87,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(api::router())
         .merge(public::router())
+        .merge(invitations::router())
         .route("/api/ws", get(ws::events))
         .route("/api/collab/{id}", get(ws::collab))
         .route("/mcp", post(mcp_http::post).get(mcp_http::other).delete(mcp_http::other))
