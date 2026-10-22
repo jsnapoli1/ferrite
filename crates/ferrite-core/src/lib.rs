@@ -17,6 +17,7 @@ pub mod events;
 pub mod files;
 pub mod groupware;
 pub mod itip;
+pub mod mail;
 pub mod mailer;
 pub mod notify;
 pub mod push;
@@ -51,6 +52,8 @@ pub struct Inner {
     pub smtp_transport: tokio::sync::OnceCell<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
     /// Pushes waiting for the server's Web Push sender.
     pub push: push::PushQueue,
+    /// Webmail connection pools and IDLE watchers.
+    pub mail: mail::MailState,
 }
 
 #[derive(Clone)]
@@ -91,6 +94,7 @@ impl Core {
             secret,
             smtp_transport: tokio::sync::OnceCell::new(),
             push: push::PushQueue::default(),
+            mail: mail::MailState::default(),
         })))
     }
 

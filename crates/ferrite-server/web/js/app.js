@@ -20,6 +20,7 @@ const ROUTES = [
   ['/boards/:id', 'boards'],
   ['/calendar', 'calendar'],
   ['/contacts', 'contacts'],
+  ['/mail', 'mail'],
   ['/edit/:id', 'editor'],
   ['/assistant', 'assistant'],
   ['/search', 'search'],
@@ -39,6 +40,7 @@ const NAV = [
   ['/boards', 'Boards', 'boards', 'boards'],
   ['/calendar', 'Calendar', 'calendar', 'calendar'],
   ['/contacts', 'Contacts', 'contacts', 'contacts'],
+  ['/mail', 'Mail', 'mail', 'mail'],
   ['/assistant', 'Assistant', 'assistant', 'assistant'],
 ];
 

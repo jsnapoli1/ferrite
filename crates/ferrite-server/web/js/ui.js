@@ -112,6 +112,8 @@ const ICONS = {
   clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2',
   pin: 'M12 21s-7-6.1-7-11a7 7 0 0 1 14 0c0 4.9-7 11-7 11zM12 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z',
   mail: 'M3 5h18v14H3zM3 6l9 7 9-7',
+  archive: 'M3 4h18v4H3zM5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4',
+  junk: 'M8 3h8l5 5v8l-5 5H8l-5-5V8zM12 8v5M12 16h.01',
   tag: 'M3 12V4h8l10 10-8 8zM7.5 7.5h.01',
   comment: 'M4 5h16v11H8l-4 4z',
   activity: 'M22 12h-4l-3 9L9 3l-3 9H2',

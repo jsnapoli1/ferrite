@@ -4,6 +4,7 @@ pub mod boards;
 pub mod calendar_sharing;
 pub mod files;
 pub mod groupware;
+pub mod mail;
 pub mod push;
 pub mod security;
 pub mod talk;
@@ -66,6 +67,7 @@ pub fn router() -> Router<AppState> {
         .merge(security::router())
         .merge(push::router())
         .merge(calendar_sharing::router())
+        .merge(mail::router())
         .route("/api/{*rest}", get(not_found).post(not_found).put(not_found).patch(not_found).delete(not_found))
 }
 
@@ -232,7 +234,7 @@ async fn create_token(State(s): State<AppState>, auth: Auth, Json(t): Json<NewTo
         // Tokens mint tokens only from an interactive session.
         return Err(ApiError(Error::Forbidden));
     }
-    const KNOWN: &[&str] = &["*", "files", "talk", "boards", "docs", "groupware", "craft", "ai", "mcp", "admin"];
+    const KNOWN: &[&str] = &["*", "files", "talk", "boards", "docs", "groupware", "mail", "craft", "ai", "mcp", "admin"];
     if let Some(bad) = t.scopes.iter().find(|x| !KNOWN.contains(&x.as_str())) {
         return Err(ApiError(Error::bad(format!("unknown scope {bad}"))));
     }

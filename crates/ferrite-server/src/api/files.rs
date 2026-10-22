@@ -141,7 +141,7 @@ async fn upload(State(s): State<AppState>, auth: Auth, Path(id): Path<String>, Q
     Ok(Json(json!({"node": node})))
 }
 
-fn content_disposition(name: &str, inline: bool) -> HeaderValue {
+pub(crate) fn content_disposition(name: &str, inline: bool) -> HeaderValue {
     let ascii: String = name
         .chars()
         .map(|c| if c.is_ascii_graphic() && c != '"' && c != '\\' || c == ' ' { c } else { '_' })
@@ -153,7 +153,7 @@ fn content_disposition(name: &str, inline: bool) -> HeaderValue {
 
 /// Types safe to render inline from our origin; everything else downloads (prevents stored XSS
 /// through uploaded HTML/SVG).
-fn inline_safe(mime: &str) -> bool {
+pub(crate) fn inline_safe(mime: &str) -> bool {
     matches!(
         mime,
         "image/png"

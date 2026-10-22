@@ -67,6 +67,7 @@ fn scope_of(tool: &str) -> &'static str {
         "docs" | "sheet" | "mindmap" | "canvas" => "docs",
         "craft" => "craft",
         "calendar" | "contacts" => "groupware",
+        "mail" => "mail",
         _ => "read",
     }
 }
@@ -260,7 +261,7 @@ fn definitions() -> &'static Vec<Tool> {
                 ("note", "string", "Note", false),
             ]),
             // Everything else
-            Tool::new("search", "Search", "Search everything you can access: files, chat messages, cards, calendar events and contacts. Matches words, and also meaning when the server has an embedding model (so a paraphrase finds the original).", &[("query", "string", "Words or a description of what you are looking for", true), ("kinds", "string[]", "Limit to file, message, card, event and/or contact", false)]).read_only(),
+            Tool::new("search", "Search", "Search everything you can access: files, chat messages, cards, calendar events, contacts and mail. Matches words, and also meaning when the server has an embedding model (so a paraphrase finds the original).", &[("query", "string", "Words or a description of what you are looking for", true), ("kinds", "string[]", "Limit to file, message, card, event, contact and/or mail", false)]).read_only(),
             Tool::new("notifications", "Notifications", "Your unread notifications.", &[]).read_only(),
             Tool::new("activity", "Activity", "Recent activity in your account.", &[]).read_only(),
             Tool::new("users_search", "Find people", "Find users by name (for sharing, mentions and assignments).", &[("query", "string", "Name or username", true)]).read_only(),
@@ -277,13 +278,14 @@ impl FerriteTools {
     pub fn list(&self, ctx: &UserCtx) -> Vec<Tool> {
         definitions()
             .iter()
+            .chain(crate::mail_tools::definitions())
             .filter(|t| ctx.allows(scope_of(&t.name)) || scope_of(&t.name) == "read")
             .cloned()
             .collect()
     }
 
     pub async fn call(&self, ctx: &UserCtx, name: &str, args: Value) -> Result<ToolResult, RpcError> {
-        if !definitions().iter().any(|t| t.name == name) {
+        if !definitions().iter().chain(crate::mail_tools::definitions()).any(|t| t.name == name) {
             return Err(RpcError::invalid_params(format!("Unknown tool: {name}")));
         }
         let scope = scope_of(name);
@@ -1162,6 +1164,7 @@ impl FerriteTools {
                 Ok(ToolResult::json(json!({"users": users})))
             }
 
+            n if n.starts_with("mail_") => crate::mail_tools::dispatch(core, ctx, n, a).await,
             "craft_apps" => Ok(ToolResult::json(json!({"apps": self.craft.availability()}))),
             "craft_open" => {
                 let n = self.node(ctx, s(a, "path")?).await?;
@@ -1268,7 +1271,7 @@ impl Handler for McpHandler {
 
     fn instructions(&self) -> Option<String> {
         Some(
-            "Ferrite is a self-hosted collaboration server: files and sharing, Talk (chat and calls), kanban boards, calendars and contacts, \
+            "Ferrite is a self-hosted collaboration server: files and sharing, Talk (chat and calls), kanban boards, calendars and contacts, webmail, \
              live documents (Markdown text, CSV sheets, mind maps, canvases that arrange files and mind maps), and the \
              ArtCraft Crafting Apps for Office/Adobe-style documents. Paths are relative to the user's home. \
              Prefer docs_* tools for live documents so people editing see changes instantly."

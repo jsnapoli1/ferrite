@@ -8,6 +8,7 @@ pub mod error;
 pub mod external;
 pub mod groupdav;
 pub mod invitations;
+pub mod mail_tools;
 pub mod mcp_http;
 pub mod oidc;
 pub mod public;
@@ -87,6 +88,7 @@ impl AppState {
             }
         });
         api::talk::moderation::spawn_background(self);
+        self.core.spawn_mail_background();
         let core = self.core.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(3600));
