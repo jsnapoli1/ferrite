@@ -203,6 +203,8 @@ pub struct Fetched {
     pub header: Vec<u8>,
     pub text_prefix: Vec<u8>,
     pub body: Option<Vec<u8>>,
+    /// Keywords (non-system flags such as `$Phishing` or `$label1`).
+    pub keywords: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -790,6 +792,13 @@ fn owned_fetch(f: &Fetch) -> Option<Fetched> {
         header: f.header().map(<[u8]>::to_vec).unwrap_or_default(),
         text_prefix: f.text().map(<[u8]>::to_vec).unwrap_or_default(),
         body: f.body().map(<[u8]>::to_vec),
+        keywords: f
+            .flags()
+            .filter_map(|flag| match flag {
+                Flag::Custom(k) => Some(k.to_string()),
+                _ => None,
+            })
+            .collect(),
     })
 }
 

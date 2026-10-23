@@ -136,7 +136,7 @@ pub fn parse_envelope(header: &[u8], text_prefix: &[u8]) -> Envelope {
         cc: addrs(m.cc()),
         reply_to: addrs(m.reply_to()),
         date: m.date().and_then(to_utc),
-        has_attachments: multipart_mixed || m.attachments().any(|p| !is_inline_image(p)),
+        has_attachments: multipart_mixed || m.attachments().any(|p| !is_inline_image(p) && !is_smime_signature(p)),
         preview: preview_of(&m),
     }
 }
@@ -275,6 +275,16 @@ fn decode_entities(s: &str) -> String {
     out
 }
 
+/// A detached S/MIME signature (`smime.p7s`): not an attachment for the user.
+fn is_smime_signature(p: &MessagePart) -> bool {
+    p.content_type().is_some_and(|ct| {
+        ct.ctype().eq_ignore_ascii_case("application")
+            && ct
+                .subtype()
+                .is_some_and(|s| s.eq_ignore_ascii_case("pkcs7-signature") || s.eq_ignore_ascii_case("x-pkcs7-signature"))
+    })
+}
+
 fn is_inline_image(p: &MessagePart) -> bool {
     p.content_id().is_some() && p.content_type().is_some_and(|ct| ct.ctype().eq_ignore_ascii_case("image"))
 }
@@ -377,7 +387,7 @@ fn parse_envelope_full(m: &mail_parser::Message) -> Envelope {
         cc: addrs(m.cc()),
         reply_to: addrs(m.reply_to()),
         date: m.date().and_then(to_utc),
-        has_attachments: m.attachments().any(|p| !is_inline_image(p)),
+        has_attachments: m.attachments().any(|p| !is_inline_image(p) && !is_smime_signature(p)),
         preview: preview_of(m),
     }
 }
@@ -564,9 +574,44 @@ fn is_remote(url: &str) -> bool {
     u.starts_with("http:") || u.starts_with("https:") || u.starts_with("//")
 }
 
+/// Rewrites a remote URL (to an image proxy URL), or refuses it.
+pub type ProxyFn = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
+/// What happens to remote images and CSS resources.
+#[derive(Clone)]
+pub enum RemotePolicy {
+    /// Removed (and reported in `remote_blocked`).
+    Block,
+    /// Kept as written. Only for callers that do not serve the result to a browser.
+    Allow,
+    /// Rewritten through the function (an image proxy URL); `None` removes the reference.
+    Proxy(ProxyFn),
+}
+
+impl RemotePolicy {
+    /// The replacement for remote `url` (already known to be remote), or None to drop it.
+    fn rewrite(&self, url: &str) -> Option<String> {
+        let u = url.trim();
+        match self {
+            RemotePolicy::Block => None,
+            RemotePolicy::Allow => (!u.contains(['"', '\'', '\\'])).then(|| u.to_string()),
+            RemotePolicy::Proxy(f) => {
+                // Protocol-relative URLs load over https.
+                let absolute = if u.starts_with("//") { format!("https:{u}") } else { u.to_string() };
+                f(&absolute)
+            }
+        }
+    }
+
+    fn blocks(&self) -> bool {
+        matches!(self, RemotePolicy::Block)
+    }
+}
+
 /// Removes CSS that could load something or run code: `@import`, `url()` (except `data:`
-/// and, when allowed, remote http(s)), `expression()`, bindings and behaviors.
-fn sanitize_css(css: &str, allow_remote: bool, remote_found: &AtomicBool) -> String {
+/// and, when allowed, remote http(s), possibly rewritten), `expression()`, bindings and
+/// behaviors.
+fn sanitize_css(css: &str, policy: &RemotePolicy, remote_found: &AtomicBool) -> String {
     let mut out = String::with_capacity(css.len());
     let lower = css.to_ascii_lowercase();
     let mut i = 0;
@@ -574,7 +619,7 @@ fn sanitize_css(css: &str, allow_remote: bool, remote_found: &AtomicBool) -> Str
         let rest = &lower[i..];
         if rest.starts_with("@import") {
             // Never followed; only reported while remote content is blocked.
-            if !allow_remote {
+            if policy.blocks() {
                 remote_found.store(true, Ordering::Relaxed);
             }
             // Skip to the end of the rule.
@@ -585,14 +630,23 @@ fn sanitize_css(css: &str, allow_remote: bool, remote_found: &AtomicBool) -> Str
         if rest.starts_with("url(") {
             let close = rest.find(')').map(|e| i + e + 1).unwrap_or(css.len());
             let inner = css[i + 4..close.saturating_sub(1).max(i + 4)].trim().trim_matches(['"', '\'']);
-            let keep = inner.to_ascii_lowercase().starts_with("data:image/") || (allow_remote && is_remote(inner) && !inner.contains(['"', '\'', '\\']));
-            if keep {
-                out.push_str(&css[i..close]);
-            } else {
-                if is_remote(inner) {
+            let rewritten = if inner.to_ascii_lowercase().starts_with("data:image/") && !inner.contains(['"', '\'', '\\', ')']) {
+                Some(inner.to_string())
+            } else if is_remote(inner) {
+                if policy.blocks() {
                     remote_found.store(true, Ordering::Relaxed);
                 }
-                out.push_str("none");
+                policy.rewrite(inner).filter(|u| !u.contains(['"', '\\', '\n', '\r']))
+            } else {
+                None
+            };
+            match rewritten {
+                Some(u) => {
+                    out.push_str("url(\"");
+                    out.push_str(&u);
+                    out.push_str("\")");
+                }
+                None => out.push_str("none"),
             }
             i = close;
             continue;
@@ -640,9 +694,15 @@ fn extract_styles(html: &str) -> (String, String) {
 /// links open in a new tab without a referrer; `cid:` images point at `cid_url(cid)`; remote
 /// images and CSS resources are removed unless `allow_remote`.
 pub fn sanitize_html(html: &str, allow_remote: bool, cid_url: impl Fn(&str) -> String + Send + Sync + 'static) -> Sanitized {
+    sanitize_html_with(html, if allow_remote { RemotePolicy::Allow } else { RemotePolicy::Block }, cid_url)
+}
+
+/// [`sanitize_html`] with a [`RemotePolicy`]: the reader proxies remote images through the
+/// server (`RemotePolicy::Proxy`), so the sender never sees the reader's address.
+pub fn sanitize_html_with(html: &str, policy: RemotePolicy, cid_url: impl Fn(&str) -> String + Send + Sync + 'static) -> Sanitized {
     let remote_found = Arc::new(AtomicBool::new(false));
     let (raw_css, body) = extract_styles(html);
-    let css = sanitize_css(&raw_css, allow_remote, &remote_found);
+    let css = sanitize_css(&raw_css, &policy, &remote_found);
     let found = remote_found.clone();
     let mut b = ammonia::Builder::default();
     b.add_tags(["font", "center"])
@@ -664,12 +724,10 @@ pub fn sanitize_html(html: &str, allow_remote: bool, cid_url: impl Fn(&str) -> S
                 } else if lower.starts_with("data:image/") {
                     Some(value.into())
                 } else if is_remote(v) {
-                    if allow_remote {
-                        Some(value.into())
-                    } else {
+                    if policy.blocks() {
                         found.store(true, Ordering::Relaxed);
-                        None
                     }
+                    policy.rewrite(v).map(Into::into)
                 } else {
                     None
                 }
@@ -678,7 +736,7 @@ pub fn sanitize_html(html: &str, allow_remote: bool, cid_url: impl Fn(&str) -> S
             (_, "style") => {
                 let lower = value.to_ascii_lowercase();
                 if lower.contains("url(") || lower.contains("expression(") {
-                    Some(sanitize_css(value, allow_remote, &found).into())
+                    Some(sanitize_css(value, &policy, &found).into())
                 } else {
                     Some(value.into())
                 }
@@ -828,6 +886,41 @@ JVBERi0xLjQK\r\n\
 
         let clean = sanitize_html("<p>plain</p>", false, |c| c.to_string());
         assert!(!clean.remote_blocked && clean.css.is_empty());
+    }
+
+    #[test]
+    fn sanitizer_rewrites_remote_content_through_a_proxy() {
+        let html = r#"<style>body{background:url('https://t.example/bg.png')} @import url(https://evil.example/x.css);</style>
+<p style="background:url(//cdn.example/p.png)">Hi</p><img src="https://img.example/a.png?x=1&amp;y=2"><img src="http://plain.example/b.gif">
+<img src="ftp://files.example/c.png"><img src="https://img.example/&quot;onerror=&quot;x"><img src="cid:logo@x"><img src="data:image/png;base64,AAAA">"#;
+        let proxy = RemotePolicy::Proxy(Arc::new(|u: &str| Some(format!("/proxy?u={}", u.len()))));
+        let s = sanitize_html_with(html, proxy, |cid| format!("/cid/{cid}"));
+        assert!(!s.remote_blocked);
+        // Every remote reference now points at the proxy; nothing remote is left.
+        for host in ["t.example", "cdn.example", "img.example", "plain.example", "evil.example", "files.example"] {
+            assert!(!s.html.contains(host) && !s.css.contains(host), "{host} leaked: {} {}", s.html, s.css);
+        }
+        assert_eq!(s.html.matches("src=\"/proxy?u=").count(), 3, "{}", s.html);
+        assert!(s.html.contains("url(&quot;/proxy?u=") || s.html.contains("url(\"/proxy?u="), "{}", s.html);
+        assert!(s.css.contains("url(\"/proxy?u=") && !s.css.contains("@import"), "{}", s.css);
+        assert!(s.html.contains(r#"src="/cid/logo@x""#) && s.html.contains("data:image/png;base64,AAAA"));
+        // The proxy may refuse a URL: then it is dropped, not kept.
+        let refuse = RemotePolicy::Proxy(Arc::new(|_: &str| None));
+        let s = sanitize_html_with(
+            r#"<img src="https://x.example/a.png"><p style="background:url(https://x.example/b)">t</p>"#,
+            refuse,
+            |c| c.to_string(),
+        );
+        assert!(!s.html.contains("x.example"), "{}", s.html);
+        // Protocol-relative URLs are handed to the proxy as https.
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let rec = RemotePolicy::Proxy(Arc::new(move |u: &str| {
+            log.lock().unwrap().push(u.to_string());
+            Some("/p".into())
+        }));
+        sanitize_html_with(r#"<img src="//cdn.example/i.png">"#, rec, |c| c.to_string());
+        assert_eq!(seen.lock().unwrap().as_slice(), ["https://cdn.example/i.png"]);
     }
 
     #[test]

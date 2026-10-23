@@ -40,6 +40,8 @@ pub struct Config {
     pub oidc: Vec<crate::sso::OidcProvider>,
     /// Web Push (browser and installed-app notifications).
     pub push: crate::push::PushConfig,
+    /// Webmail security: DNS for DKIM, the S/MIME trust store (`[mail_security]`).
+    pub mail_security: crate::mail::security::MailSecurityConfig,
 }
 
 /// Settings of the built-in Selective Forwarding Unit (calls beyond a handful of people).
@@ -149,6 +151,7 @@ impl Default for Config {
             require_two_factor: false,
             oidc: Vec::new(),
             push: crate::push::PushConfig::default(),
+            mail_security: crate::mail::security::MailSecurityConfig::default(),
         }
     }
 }
@@ -186,6 +189,15 @@ impl Config {
         }
         if let Ok(v) = std::env::var("FERRITE_PUSH_ALLOW_INSECURE") {
             cfg.push.allow_insecure_endpoints = v == "1" || v.eq_ignore_ascii_case("true");
+        }
+        if let Ok(v) = std::env::var("FERRITE_MAIL_DNS") {
+            cfg.mail_security.dns_server = Some(v).filter(|v| !v.is_empty());
+        }
+        if let Ok(v) = std::env::var("FERRITE_SMIME_TRUST_STORE") {
+            cfg.mail_security.smime_trust_store = Some(v.into());
+        }
+        if let Ok(v) = std::env::var("FERRITE_MAIL_PROXY_ALLOW_PRIVATE") {
+            cfg.mail_security.proxy_allow_private = v == "1" || v.eq_ignore_ascii_case("true");
         }
         if let Ok(v) = std::env::var("FERRITE_CALL_RESOLUTION") {
             cfg.calls.max_resolution = v;

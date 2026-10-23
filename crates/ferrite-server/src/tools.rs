@@ -1510,4 +1510,29 @@ mod tests {
         assert_eq!(parse_a1("A0"), None);
         assert_eq!(parse_a1("1A"), None);
     }
+
+    /// The README's tool table and count must follow the tools the server really offers.
+    #[test]
+    fn readme_lists_every_tool() {
+        let names: Vec<&str> = super::definitions()
+            .iter()
+            .chain(crate::mail_tools::definitions())
+            .chain(crate::mail_integration_tools::definitions())
+            .map(|t| t.name.as_str())
+            .collect();
+        let mut unique = names.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), names.len(), "duplicate tool names");
+        let readme = include_str!("../../../README.md");
+        let count: usize = readme
+            .split("**Tools (")
+            .nth(1)
+            .and_then(|s| s.split(')').next())
+            .and_then(|s| s.parse().ok())
+            .expect("README states **Tools (N)**");
+        assert_eq!(count, names.len(), "README says {count} tools, the server has {}", names.len());
+        let missing: Vec<&&str> = names.iter().filter(|n| !readme.contains(&format!("`{n}`"))).collect();
+        assert!(missing.is_empty(), "README's tool table misses {missing:?}");
+    }
 }

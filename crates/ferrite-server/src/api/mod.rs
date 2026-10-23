@@ -8,6 +8,7 @@ pub mod mail;
 pub mod mail_accounts;
 pub mod mail_admin;
 pub mod mail_integrations;
+pub mod mail_security;
 pub mod push;
 pub mod security;
 pub mod talk;
@@ -71,6 +72,7 @@ pub fn router() -> Router<AppState> {
         .merge(push::router())
         .merge(calendar_sharing::router())
         .merge(mail::router())
+        .merge(mail_security::router())
         .merge(mail_accounts::router())
         .merge(mail_admin::router())
         .merge(mail_integrations::router())

@@ -1,0 +1,22 @@
+From: Bob <bob@example.test>
+To: Alice <alice@example.test>
+Subject: Encrypted AES
+Date: Mon, 19 Oct 2026 09:00:00 +0000
+Message-ID: <encrypted-aes@example.test>
+MIME-Version: 1.0
+Content-Disposition: attachment; filename="smime.p7m"
+Content-Type: application/pkcs7-mime; smime-type=enveloped-data; name="smime.p7m"
+Content-Transfer-Encoding: base64
+
+MIICBwYJKoZIhvcNAQcDoIIB+DCCAfQCAQAxggFOMIIBSgIBADAyMBoxGDAWBgNV
+BAMMD0ZlcnJpdGUgVGVzdCBDQQIUKtB/6g3zcLBrbwDX631vOyd8K30wDQYJKoZI
+hvcNAQEBBQAEggEAQz5B/w2v9Na+KRgmxST/t59aLHzrdqaBLhmij/KQOp91pOOf
+q5I7WQKyMkjuU5Zr6g4rdo32d8CpxFy/LrGBWEzpyJOQEqmYtzU20WJ4mVAF9tPQ
+FpmWRCts3tiT8BH/YGOIBQwpkHXdkQz4owRs0eFbREhGM7RUsuw25wdDdbE8dJ9e
+GlNLLYqXw/aQAi5fhVVc9j3tk2gTgx0vPwLbGnSAMp5440wJnGMC083HulgJbkrj
+UEUJ0skzIfxRrTMpY7THp09mly2cGbcdgazsKBTxdTn8lTSKL13XFFWVE+4ZHh43
+/atKIChwAnXNv+e/MBgYRBg5ZrfSmFx3daKJ/zCBnAYJKoZIhvcNAQcBMB0GCWCG
+SAFlAwQBKgQQF7In2MBYLMVAfeJhaNc4VoBwIPmiqYNpSgwNFsAj8WjCCxKNh2xh
+BlD54xg+UhPNBWssx2nsGKpuSIqka32WKxeTj10LmHehJjIAMhGFwbZCqMh3914j
+1A0dxOKk2+psJI04iRKPNr7oQp2PPHQeqlJHBEI4OjWRDp+rH4co3cwDkw==
+

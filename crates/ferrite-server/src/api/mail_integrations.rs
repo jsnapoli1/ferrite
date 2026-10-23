@@ -152,11 +152,22 @@ async fn user_absence(State(s): State<AppState>, _auth: Auth, Path(username): Pa
 /// options, importable calendar files and who the sender is.
 async fn message_integrations(State(s): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     mail(&auth)?;
+    // The reader asks for these while a message is open; when it is moved or deleted in the
+    // meantime (or never was the user's), there is simply nothing to show.
+    match integrations_of(&s, &auth, &id).await {
+        Err(ferrite_core::Error::NotFound) => Ok(Json(
+            json!({"imip": null, "itineraries": [], "unsubscribe": null, "ics_attachments": [], "sender": null}),
+        )),
+        r => Ok(Json(r?)),
+    }
+}
+
+async fn integrations_of(s: &AppState, auth: &Auth, id: &str) -> ferrite_core::Result<Value> {
     let uid = &auth.user.id;
-    let (_, m) = s.core.message_row(uid, &id).await?;
-    let (_, raw) = s.core.mail_raw(uid, &id).await?;
+    let (_, m) = s.core.message_row(uid, id).await?;
+    let (_, raw) = s.core.mail_raw(uid, id).await?;
     let imip = if auth.token.allows("groupware") {
-        s.core.mail_imip(uid, &id).await?
+        s.core.mail_imip(uid, id).await?
     } else {
         None
     };
@@ -167,13 +178,13 @@ async fn message_integrations(State(s): State<AppState>, auth: Auth, Path(id): P
     } else {
         Some(s.core.mail_contact_info(uid, &m.from_addr).await?)
     };
-    Ok(Json(json!({
+    Ok(json!({
         "imip": imip,
         "itineraries": itineraries,
         "unsubscribe": ferrite_core::mail::unsubscribe::from_raw(&raw),
         "ics_attachments": ferrite_core::mail::imip::ics_attachments(&raw),
         "sender": sender,
-    })))
+    }))
 }
 
 #[derive(Deserialize)]

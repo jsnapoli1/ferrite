@@ -26,6 +26,8 @@
 //!   meeting invitations. * `itinerary`: travel reservations. * `unsubscribe`:
 //!   List-Unsubscribe. * `people`: contacts for senders and recipients. * `agenda`:
 //!   events and tasks from a message. * `integrations`: their per-account settings.
+//! * `security`, `trust`, `phishing`, `dkim`, `smime`, `smime_store`: what the reader shows
+//!   about a message's trustworthiness, S/MIME and PGP.
 
 pub mod abuse;
 pub mod agenda;
@@ -35,6 +37,7 @@ pub mod background;
 pub mod compose;
 pub mod crypto;
 pub mod delegation;
+pub mod dkim;
 pub mod dns;
 pub mod filters;
 pub mod imap;
@@ -45,11 +48,16 @@ pub mod managesieve;
 pub mod oauth;
 pub mod parse;
 pub mod people;
+pub mod phishing;
 pub mod provisioning;
+pub mod security;
 pub mod settings;
 pub mod sieve;
+pub mod smime;
+pub mod smime_store;
 pub mod store;
 pub mod sync;
+pub mod trust;
 pub mod unsubscribe;
 
 pub use delegation::{MailRight, MailRole};
@@ -239,6 +247,8 @@ pub struct MailState {
     folder_locks: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
     /// When a folder list or folder was last synced (debounces background refreshes).
     last_sync: DashMap<String, Instant>,
+    /// DKIM verifier (see `security`).
+    pub security: security::SecurityState,
     /// Delegates per account (who else receives the account's live events).
     delegates: DashMap<String, Vec<String>>,
     /// The admin settings, loaded on first use.

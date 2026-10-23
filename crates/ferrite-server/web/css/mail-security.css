@@ -1,0 +1,93 @@
+/* Mail security and privacy: reader banners and chips, the blocked-content banner, sender
+   pictures, view source, the "Privacy and security" settings and the composer's security
+   controls. Tokens only, both themes. */
+
+/* ---------- sender pictures ---------- */
+.avatar.has-photo { background: var(--surface-2) !important; overflow: hidden; }
+.avatar.has-photo img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: block; }
+
+/* ---------- reader ---------- */
+.ms-banners { display: flex; flex-direction: column; gap: 8px; }
+.ms-banners:not(:empty) { margin-bottom: 10px; }
+.ms-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ms-chip { max-width: 100%; cursor: default; }
+.ms-chip .icon { width: 13px; height: 13px; flex: none; }
+.ms-more { height: 22px; padding: 0 8px; font-size: 12px; color: var(--text-2); }
+.ms-details-host { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); padding: 8px 10px; }
+.ms-details { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; font-size: 12.5px; }
+.ms-detail { display: contents; }
+.ms-detail > span:last-child { overflow-wrap: anywhere; color: var(--text); }
+.ms-alert { display: flex; align-items: flex-start; gap: 10px; padding: 9px 12px; border-radius: var(--radius-sm); font-size: 13.5px; color: var(--text); border: 1px solid transparent; }
+.ms-alert > .icon { flex: none; margin-top: 2px; }
+.ms-alert strong { display: block; margin-bottom: 2px; }
+.ms-alert p { margin: 2px 0 0; }
+.ms-alert ul { margin: 4px 0 2px; padding-left: 18px; }
+.ms-alert li { margin: 2px 0; overflow-wrap: anywhere; }
+.ms-alert .btn { margin-top: 6px; }
+.ms-alert.warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 25%, transparent); }
+.ms-alert.warn > .icon { color: var(--warn); }
+.ms-alert.info { background: var(--info-soft); border-color: color-mix(in srgb, var(--info) 20%, transparent); }
+.ms-alert.info > .icon { color: var(--info); }
+.ms-links { list-style: none; padding-left: 0 !important; font-size: 12.5px; }
+.ms-links code { font-family: var(--mono); font-size: 12px; color: var(--danger); overflow-wrap: anywhere; }
+.ms-remote { flex-wrap: wrap; row-gap: 6px; }
+.ms-remote > .grow { flex: 1 1 220px; }
+.ms-remote-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ms-mailvelope { width: 100%; height: 460px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); overflow: hidden; }
+.ms-mailvelope iframe { width: 100%; height: 100%; border: 0; }
+.ms-armored { margin-top: 8px; }
+.ms-armored summary { cursor: pointer; color: var(--text-2); font-size: 13px; }
+.ms-armored pre, .ms-source { font-family: var(--mono); font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; margin: 6px 0 0; color: var(--text); }
+.ms-source { max-height: 62vh; overflow: auto; margin: 0; }
+.ms-zip { margin-right: 2px; }
+
+/* ---------- settings ---------- */
+/* The backdrop is a grid that sizes to content: cap the dialog to the viewport so the tab bar scrolls instead of widening it. */
+.modal:has(.ms-settings) { max-width: calc(100vw - 32px); }
+.ms-settings { min-width: 0; }
+.ms-settings .tabs { margin-bottom: 12px; }
+.ms-settings-body { min-height: 300px; }
+.ms-pane > p:first-child { margin-top: 0; }
+.ms-pane h3 { font-size: 14px; margin: 18px 0 8px; }
+.ms-add { display: flex; gap: 8px; margin-bottom: 8px; }
+.ms-add input { flex: 1; min-width: 0; }
+.ms-list { max-height: 300px; overflow-y: auto; }
+.ms-list .empty { padding: 16px; }
+.ms-toggle { margin: 6px 0 12px; }
+.ms-certs { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); max-height: 320px; overflow-y: auto; }
+.ms-certs .empty { padding: 16px; }
+.ms-cert { align-items: flex-start; }
+.ms-cert > .icon { margin-top: 3px; }
+.ms-cert .grow { min-width: 0; }
+.ms-cert-meta { overflow-wrap: anywhere; }
+.ms-cert-name { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; overflow-wrap: anywhere; }
+.ms-import { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
+.ms-import-row { display: flex; flex-direction: column; gap: 3px; }
+.ms-import-row label { margin: 0; color: var(--text-2); }
+.ms-import-row input[type=file] { font-size: 13px; padding: 4px 0; border: 0; background: none; }
+.ms-import-pem { display: flex; flex-direction: column; gap: 8px; }
+.ms-import-pem[hidden] { display: none; }
+.ms-import > .btn.primary { align-self: flex-start; }
+.ms-identity { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.ms-identity:last-child { border-bottom: 0; }
+.ms-identity-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ms-identity-head strong { flex: 1; min-width: 160px; }
+.ms-identity-head select { flex: 1 1 200px; min-width: 0; max-width: 100%; }
+.ms-identity-opts { display: flex; gap: 18px; flex-wrap: wrap; }
+.ms-identity-opts .check { margin: 6px 0 0; font-size: 13px; }
+.ms-mailvelope-status .icon { color: var(--ok); vertical-align: -2px; }
+
+/* ---------- composer ---------- */
+.ml-body-host { display: flex; flex-direction: column; min-width: 0; }
+.ml-body-host .ml-body-input { width: 100%; }
+.ms-compose-tools { display: inline-flex; gap: 4px; }
+.ms-compose-tools:not(:has(.btn:not([hidden]))) { display: none; }
+.ms-editor { height: 340px; margin: 6px 0; }
+
+@media (max-width: 760px) {
+  .ms-mailvelope { height: 380px; }
+  .ms-details { grid-template-columns: minmax(0, 1fr); }
+  .ms-detail > span:first-child { margin-top: 4px; }
+  .ms-remote-actions .btn { flex: 1 1 auto; }
+  .ms-editor { height: 280px; }
+}

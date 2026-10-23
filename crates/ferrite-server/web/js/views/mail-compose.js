@@ -27,6 +27,18 @@ function splitAddresses(text) {
   return out;
 }
 
+/**
+ * Extension points for other mail modules (mail-security.js uses them for the internal-address
+ * check, S/MIME signing/encryption and Mailvelope). Each composer passes them a context `c`:
+ * { accountId(), accountEmail(), recipients(), body (the textarea), bodyHost (its container,
+ * where an editor may take its place), template, opts, attachmentsCount(), markDirty() }.
+ * - tools: (c) => Node | null, shown in the composer's toolbar.
+ * - beforeSend: async (c, payload) => false to stop sending; may change the payload (e.g.
+ *   `payload.security`, or `payload.text` with an encrypted body).
+ * - beforeDraft: async (c, payload) => false to skip saving a draft.
+ */
+export const composerHooks = { tools: [], beforeSend: [], beforeDraft: [] };
+
 const looksValid = (s) => /^[^\s@<>",;]+@[^\s@<>",;]+$/.test((s.match(/<([^>]+)>\s*$/) || [null, s])[1].trim());
 
 /** A recipients field with chips and keyboard autocomplete. */
@@ -167,6 +179,7 @@ export async function openComposer(ctx, opts) {
   const subject = h('input.ml-subject-input', { type: 'text', value: template?.subject || '', placeholder: 'Subject', 'aria-label': 'Subject', oninput: markDirty });
   const signature = !template && account.signature ? `\n\n-- \n${account.signature}` : '';
   const body = h('textarea.ml-body-input', { 'aria-label': 'Message', placeholder: 'Write your message…', oninput: markDirty }, template?.text ?? signature);
+  const bodyHost = h('div.ml-body-host', body);
   const attachList = h('div.ml-compose-files');
   const status = h('span.small.muted.ml-compose-status', { role: 'status' });
 
@@ -212,9 +225,18 @@ export async function openComposer(ctx, opts) {
   }
   const chosenAccount = () => (from ? from.value : account.id);
   const busy = () => attachments.some((a) => a.uploading);
+  const hookCtx = {
+    accountId: chosenAccount,
+    accountEmail: () => (opts.accounts.find((a) => a.id === chosenAccount()) || account).email,
+    recipients: () => [...to.values(), ...cc.values(), ...bcc.values()],
+    body, bodyHost, template, opts,
+    attachmentsCount: () => attachments.length,
+    markDirty,
+  };
 
   async function saveDraft({ quiet = false } = {}) {
     if (busy()) { toast('Wait for the attachments to finish uploading', 'warn'); return false; }
+    for (const hook of composerHooks.beforeDraft) if (await hook(hookCtx, payload()) === false) return false;
     status.textContent = 'Saving draft…';
     try {
       const { id } = await api.post(`/api/mail/accounts/${encodeURIComponent(chosenAccount())}/drafts`, payload());
@@ -237,6 +259,7 @@ export async function openComposer(ctx, opts) {
     const bad = [...p.to, ...p.cc, ...p.bcc].find((v) => !looksValid(v));
     if (bad) { toast(`“${bad}” is not an email address`, 'warn'); return undefined; }
     if (!p.subject.trim() && !await confirmDialog('No subject', 'Send this message without a subject?', { confirm: 'Send anyway' })) return undefined;
+    for (const hook of composerHooks.beforeSend) if (await hook(hookCtx, p) === false) return undefined;
     status.textContent = 'Sending…';
     try {
       await api.post(`/api/mail/accounts/${encodeURIComponent(chosenAccount())}/send`, p);
@@ -260,7 +283,7 @@ export async function openComposer(ctx, opts) {
   from && h('div.ml-field', h('label.ml-field-label', 'From'), from),
   to.el, cc.el, bcc.el,
   h('div.ml-field', subject),
-  body,
+  bodyHost,
   attachList,
   h('div.ml-compose-tools',
     h('button.btn.ghost.sm', { type: 'button', onclick: () => fileInput.click() }, icon('upload', 'sm'), 'Attach file'),
@@ -272,6 +295,7 @@ export async function openComposer(ctx, opts) {
         if (picked?.length) { markDirty(); drawAttachments(); }
       },
     }, icon('files', 'sm'), 'From Files'),
+    composerHooks.tools.map((t) => t(hookCtx)),
     fileInput, h('div.grow'), status));
   drawAttachments();
   const title = { reply: 'Reply', reply_all: 'Reply all', forward: 'Forward', edit: 'Edit draft' }[opts.mode] || 'New message';

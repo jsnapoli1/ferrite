@@ -8,12 +8,13 @@
 
 import { api, q } from '../api.js';
 import { live } from '../ws.js';
-import { h, clear, icon, avatar, menu, toast, errorToast, confirmDialog, bytes, dateTime, spinner, emptyState, debounce } from '../ui.js';
+import { h, clear, icon, menu, toast, errorToast, confirmDialog, bytes, dateTime, spinner, emptyState, debounce } from '../ui.js';
 import { pickFolder } from './files-dialogs.js';
 import { accountDialog } from './mail-setup.js';
 import { shareDialog, quotaBar, startOAuth, PROVIDER_LABEL } from './mail-accounts.js';
 import { openComposer } from './mail-compose.js';
 import { decorateMessage, decorateThread, messageMenuItems, accountMenuItems, navExtras } from './mail-integrations.js';
+import { senderAvatar, messageSecurity, remoteBanner, zipLink, readerMenuItems, openSecuritySettings } from './mail-security.js';
 
 const ROLE_ICONS = { inbox: 'mail', sent: 'send', drafts: 'edit', trash: 'trash', junk: 'junk', archive: 'archive' };
 const PAGE = 50;
@@ -161,7 +162,11 @@ export default async function render(root, ctx) {
     });
     navExtras(tree, ctx, { openMessage, compose });
     nav.appendChild(tree);
-    if (state.canAdd) nav.appendChild(h('div.ml-nav-foot', h('button.btn.ghost.sm', { type: 'button', onclick: addAccount }, icon('plus', 'sm'), 'Add account')));
+    if (state.canAdd || state.accounts.length) {
+      nav.appendChild(h('div.ml-nav-foot',
+        state.canAdd && h('button.btn.ghost.sm', { type: 'button', onclick: addAccount }, icon('plus', 'sm'), 'Add account'),
+        state.accounts.length > 0 && h('button.btn.ghost.sm', { type: 'button', onclick: () => securitySettings() }, icon('lock', 'sm'), 'Privacy and security')));
+    }
   }
 
   async function saveOrder(ids) {
@@ -242,7 +247,7 @@ export default async function render(root, ctx) {
     },
     h('label.ml-check', { title: 'Select', onclick: (e) => e.stopPropagation() },
       h('input', { type: 'checkbox', checked: sel, 'aria-label': `Select message from ${who}`, onclick: (e) => toggleSelect(m.id, e.shiftKey) })),
-    avatar(who, { seed: sent ? (m.to[0]?.address || who) : m.from_addr }),
+    senderAvatar(who, sent ? (m.to[0]?.address || '') : m.from_addr),
     h('div.ml-row-main',
       h('div.ml-row-top',
         h('span.ml-from.ellipsis', who),
@@ -356,6 +361,7 @@ export default async function render(root, ctx) {
             : { label: 'Report spam', icon: 'junk', run: () => act('spam', [current.id]) },
           { label: 'Download (.eml)', icon: 'download', run: () => { location.href = `/api/mail/messages/${encodeURIComponent(current.id)}/raw`; } },
           ...messageMenuItems(current, ctx, { accounts: state.accounts }),
+          ...readerMenuItems(current),
         ]),
       }, icon('more', 'sm'))));
     const cards = h('div.ml-cards');
@@ -379,7 +385,7 @@ export default async function render(root, ctx) {
       onclick: () => toggleCard(),
       onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleCard(); } },
     },
-    avatar(person(m.from_name, m.from_addr), { seed: m.from_addr }),
+    senderAvatar(person(m.from_name, m.from_addr), m.from_addr),
     h('div.ml-card-who',
       h('div.ml-card-from', h('strong', person(m.from_name, m.from_addr)), m.from_name && h('span.small.muted', ` <${m.from_addr}>`)),
       h('div.ml-card-sub.small.muted.ellipsis', expanded ? `to ${addrList(m.to) || '—'}${m.cc.length ? `, cc ${addrList(m.cc)}` : ''}` : m.preview)),
@@ -412,11 +418,21 @@ export default async function render(root, ctx) {
   }
 
   function drawBody(body, message) {
+    // Security banners (phishing, external sender, DKIM, S/MIME, PGP), filled when the
+    // server's report arrives; trusted senders' images load right away.
+    const content = h('div.ml-content');
+    let showRemote = () => {};
+    const security = messageSecurity(message, {
+      onTrusted: () => showRemote(),
+      pgpHost: () => content,
+      onSettings: (tab) => securitySettings(tab),
+    });
+    body.appendChild(security.el);
+    body.appendChild(content);
     if (message.has_html) {
       let remote = false;
-      const banner = message.remote_content && h('div.ml-remote.small',
-        icon('image', 'sm'), h('span.grow', 'Remote images are hidden to protect your privacy.'),
-        h('button.btn.sm', { type: 'button', onclick: () => { remote = true; banner.remove(); frame.src = src(); } }, 'Show images'));
+      showRemote = () => { if (remote) return; remote = true; banner?.remove(); frame.src = src(); };
+      const banner = message.remote_content && remoteBanner(message, () => showRemote());
       const src = () => `/api/mail/messages/${encodeURIComponent(message.id)}/html${remote ? '?remote=true' : ''}`;
       const frame = h('iframe.ml-frame', {
         title: `Message from ${person(message.from_name, message.from_addr)}`,
@@ -437,14 +453,14 @@ export default async function render(root, ctx) {
         observer.observe(doc.body);
         doc.querySelectorAll('img').forEach((img) => img.addEventListener('load', fit));
       });
-      if (banner) body.appendChild(banner);
-      body.appendChild(frame);
+      if (banner) content.appendChild(banner);
+      content.appendChild(frame);
     } else {
-      body.appendChild(textBody(message.text));
+      content.appendChild(textBody(message.text));
     }
     const files = message.attachments.filter((a) => !a.inline);
     if (files.length) {
-      body.appendChild(h('div.ml-attachments', files.map((a) => {
+      body.appendChild(h('div.ml-attachments', zipLink(message, files), files.map((a) => {
         const href = `/api/mail/messages/${encodeURIComponent(message.id)}/attachments/${a.index}`;
         return h('div.ml-attachment',
           icon('paperclip', 'sm'),
@@ -550,6 +566,13 @@ export default async function render(root, ctx) {
   function compose(opts = {}) {
     if (!state.accounts.length) { addAccount(); return; }
     openComposer(ctx, { accounts: state.accounts, accountId: state.accountId, ...opts });
+  }
+
+  function securitySettings(tab) {
+    openSecuritySettings(ctx, { tab, accounts: state.accounts }).then(() => {
+      // Trust changes may show images now: redraw the open conversation.
+      if (state.messageId && state.thread.length) drawThread(state.messageId);
+    });
   }
 
   // ---- accounts -------------------------------------------------------------------------------

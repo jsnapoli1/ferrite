@@ -1,0 +1,23 @@
+From: Bob <bob@example.test>
+To: Alice <alice@example.test>
+Subject: Encrypted BER
+Date: Mon, 19 Oct 2026 09:00:00 +0000
+Message-ID: <encrypted-ber@example.test>
+MIME-Version: 1.0
+Content-Disposition: attachment; filename="smime.p7m"
+Content-Type: application/pkcs7-mime; smime-type=enveloped-data; name="smime.p7m"
+Content-Transfer-Encoding: base64
+
+MIAGCSqGSIb3DQEHA6CAMIACAQAxggFOMIIBSgIBADAyMBoxGDAWBgNVBAMMD0Zl
+cnJpdGUgVGVzdCBDQQIUKtB/6g3zcLBrbwDX631vOyd8K30wDQYJKoZIhvcNAQEB
+BQAEggEAf0NTMC9Zo6GMPtKKyzNbOWxfQG3lN/ZdSODSwcdWoJ+8H/N+xUlpgfka
+YzPsYz0ysFsTRwU+Yi0pn6EuPPVJEVPS8QHYY7ultnL4M9oqI/Tu9nvz4ApZo5nr
+7n+cNTMRvX1l0z5Qo+eZnVCQ0PwaUF3PHj1+bovByWyJK3MmK4r8G4cdR7TNLBMv
+l5fWumqFMKGn2r9mofnH/yUdstOOgVtXTEo1dYStZhAIEXjoJ2wM1KtuX+Vk/Hkl
+Y8S4D6EOYdAJeXFpQSusIQhxyNfV9bQqgQuqmPOh2mnQpYIG4D+G9/A3fGM89wim
+CyoLaytaZhOUcD64t8wID9xNOw/HCjCABgkqhkiG9w0BBwEwHQYJYIZIAWUDBAEq
+BBCepoZkA2L8vMOGxtBVqE3QoIAEYGCT4FIQ46Ra5nRd/Au6c3EIyr2xJsaTgD9n
+IHZK3r3KRH38bl/P3Axnf3vxfZJfKE+8YIGiHsRWSBnWETejK6zZNTqdYMwqMba4
+s9/dusQDfqg4J3ymAZl1zUN+dij+hQQQvenHq99dTnigAlUiIV+wRwAAAAAAAAAA
+AAA=
+
