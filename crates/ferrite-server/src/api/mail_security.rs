@@ -149,18 +149,19 @@ async fn zip(State(s): State<AppState>, auth: Auth, Path(id): Path<String>) -> A
     } else {
         format!("{} - attachments.zip", base.trim())
     };
-    let stream = futures::stream::unfold((ZipWriter::default(), files.into_iter(), false), move |(mut w, mut it, done)| async move {
-        if done {
-            return None;
-        }
-        match it.next() {
-            Some((n, data)) => {
-                let chunk = w.entry(&n, &data, modified);
-                Some((Ok::<_, std::io::Error>(bytes::Bytes::from(chunk)), (w, it, false)))
-            }
-            None => Some((Ok(bytes::Bytes::from(w.finish())), (ZipWriter::default(), it, true))),
-        }
+    // Entries are produced one at a time as the body is read; the iterator stays exhausted
+    // once the central directory went out (the body may be polled again after its end).
+    let mut writer = Some(ZipWriter::default());
+    let mut files = files.into_iter();
+    let chunks = std::iter::from_fn(move || {
+        let w = writer.as_mut()?;
+        let chunk = match files.next() {
+            Some((n, data)) => w.entry(&n, &data, modified),
+            None => writer.take()?.finish(),
+        };
+        Some(Ok::<_, std::io::Error>(bytes::Bytes::from(chunk)))
     });
+    let stream = futures::stream::iter(chunks);
     let mut resp = Response::new(Body::from_stream(stream));
     let h = resp.headers_mut();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/zip"));

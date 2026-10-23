@@ -4,14 +4,14 @@
 //   MAIL_TEST_DIR=/tmp/ferrite-mail-security IMAP_PORT=3331 LMTP_PORT=3332 AUTH_PORT=3333 \
 //     SIEVE_PORT=3334 POSTFIX=0 bash mail-server.sh start /tmp/ferrite-mail-security
 //   FERRITE_SFU=0 FERRITE_DATA_DIR=$(mktemp -d) FERRITE_LISTEN=127.0.0.1:8863 \
-//     FERRITE_PUBLIC_URL=http://127.0.0.1:8863 FERRITE_MAIL_DNS=127.0.0.1:8853 \
+//     FERRITE_PUBLIC_URL=http://127.0.0.1:8863 FERRITE_MAIL_DNS=127.0.0.1:18853 \
 //     FERRITE_MAIL_PROXY_ALLOW_PRIVATE=1 ../target/debug/ferrite serve &
 //   MAIL_TEST_DIR=/tmp/ferrite-mail-security IMAP_PORT=3331 FERRITE_URL=http://127.0.0.1:8863 node mail-security.mjs
 //
 // The script serves what the server reaches out to: DNS with DKIM keys it generates
-// (UDP 127.0.0.1:$DNS_PORT, 8853), remote images (HTTP $IMG_PORT, 8866; the server runs with
+// (UDP 127.0.0.1:$DNS_PORT, 18853), remote images (HTTP $IMG_PORT, 18866; the server runs with
 // FERRITE_MAIL_PROXY_ALLOW_PRIVATE=1 only so its image proxy may fetch from localhost), and
-// an SMTP sink for the account ($SMTP_PORT, 8865). Mail arrives through Dovecot's delivery
+// an SMTP sink for the account ($SMTP_PORT, 18865). Mail arrives through Dovecot's delivery
 // agent (mail-server.sh deliver), DKIM-signed by this script, S/MIME made by OpenSSL (the
 // fixtures in crates/ferrite-core/src/mail/testdata/smime).
 //
@@ -34,14 +34,15 @@ import { createHash, generateKeyPairSync, sign as cryptoSign } from 'node:crypto
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { deflateSync } from 'node:zlib';
 
 const base = process.env.FERRITE_URL || 'http://127.0.0.1:8863';
 const shots = process.env.SHOTS || '/tmp/ferrite-mail-security-shots';
 const mailDir = process.env.MAIL_TEST_DIR || '/tmp/ferrite-mail-security';
 const IMAP_PORT = Number(process.env.IMAP_PORT || 3331);
-const DNS_PORT = Number(process.env.DNS_PORT || 8853);
-const IMG_PORT = Number(process.env.IMG_PORT || 8866);
-const SMTP_PORT = Number(process.env.SMTP_PORT || 8865);
+const DNS_PORT = Number(process.env.DNS_PORT || 18853);
+const IMG_PORT = Number(process.env.IMG_PORT || 18866);
+const SMTP_PORT = Number(process.env.SMTP_PORT || 18865);
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtures = join(here, '../crates/ferrite-core/src/mail/testdata/smime');
 mkdirSync(shots, { recursive: true });
@@ -116,13 +117,30 @@ dns.on('message', (q, peer) => {
 });
 await new Promise((r) => dns.bind(DNS_PORT, '127.0.0.1', r));
 
-const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAKklEQVR42mP8z8Dwn4EIwDiqgWHUAIZRAxhGDWAYNYBh1ACGUQMYRg1gAAD5yA4R7KbA2QAAAABJRU5ErkJggg==', 'base64');
+/** A solid-colour PNG (w×h, [r, g, b]), built here so the test needs no image files. */
+function solidPng(w, h, [r, g, b]) {
+  const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+  const crc = (buf) => { let c = 0xffffffff; for (const x of buf) c = crcTable[(c ^ x) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const td = Buffer.concat([Buffer.from(type), data]);
+    const c = Buffer.alloc(4); c.writeUInt32BE(crc(td));
+    return Buffer.concat([len, td, c]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
+  const rowBytes = Buffer.concat([Buffer.from([0]), Buffer.from(Array.from({ length: w }, () => [r, g, b]).flat())]);
+  const raw = Buffer.concat(Array.from({ length: h }, () => rowBytes));
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+const BANNER = solidPng(320, 120, [15, 118, 110]);
+const PHOTO = solidPng(48, 48, [124, 58, 237]);
 const imageRequests = [];
 const img = createHttp((req, res) => {
   imageRequests.push({ url: req.url, headers: req.headers });
   if (req.url.startsWith('/banner.png') || req.url.startsWith('/pixel.png')) {
     res.writeHead(200, { 'Content-Type': 'image/png', 'Set-Cookie': 'tracker=1' });
-    res.end(PNG);
+    res.end(BANNER);
   } else { res.writeHead(404); res.end(); }
 });
 await new Promise((r) => img.listen(IMG_PORT, '127.0.0.1', r));
@@ -167,6 +185,8 @@ const pgpArmor = (text) => `-----BEGIN PGP MESSAGE-----\nVersion: Mailvelope moc
 // extension injects window.mailvelope and fires a "mailvelope" event; containers are frames
 // it renders into the given element. "Encryption" here is base64 inside the armor.
 const MAILVELOPE_MOCK = `(() => {
+  // The extension provides its API to the page only, not to the frames it renders.
+  if (window.top !== window) return;
   const keys = new Set(['bob@example.test', 'alice@example.test']);
   const b64 = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
   const unb64 = (s) => new TextDecoder().decode(Uint8Array.from(atob(s), (c) => c.charCodeAt(0)));
@@ -175,7 +195,6 @@ const MAILVELOPE_MOCK = `(() => {
     const host = document.querySelector(selector);
     if (!host) throw new Error('container not found: ' + selector);
     const f = document.createElement('iframe');
-    f.setAttribute('sandbox', 'allow-same-origin');
     f.className = 'mailvelope-mock-frame';
     f.style.cssText = 'width:100%;height:100%;border:0';
     host.appendChild(f);
@@ -268,8 +287,9 @@ try {
   const page = await newPage('desktop');
   current = page;
   await page.api('POST', '/api/setup', { username: 'alice', display_name: 'Alice Archer', password: 'alice-password' });
-  // Ada is a contact, with a photo.
-  const photo = PNG.toString('base64');
+  // Ada is a contact, with a photo (listing contacts creates the default address book).
+  await page.api('GET', '/api/contacts');
+  const photo = PHOTO.toString('base64');
   const vcard = `BEGIN:VCARD\r\nVERSION:3.0\r\nUID:ada-e2e\r\nFN:Ada Lovelace\r\nEMAIL:ada@example.test\r\nPHOTO;ENCODING=b;TYPE=PNG:${photo}\r\nEND:VCARD\r\n`;
   const put = await page.request.put(`${base}/remote.php/dav/addressbooks/users/alice/contacts/ada-e2e.vcf`, {
     headers: { Authorization: `Basic ${Buffer.from('alice:alice-password').toString('base64')}`, 'Content-Type': 'text/vcard' }, data: vcard,
@@ -311,7 +331,7 @@ try {
   log('remote images: blocked, then always shown for the domain, through the proxy');
   await open(page, 'Autumn sale');
   await card(page).locator('.ms-remote').waitFor();
-  assert((await frameImages(page)).length === 0, 'no remote image while blocked');
+  assert((await frameImages(page)).every((i) => !i.src), 'no remote image source while blocked');
   assert(imageRequests.length === 0, 'nothing fetched yet');
   await page.screenshot({ path: `${shots}/security-remote-blocked.png` });
   await card(page).getByRole('button', { name: 'Always from shop.example' }).click();

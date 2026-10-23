@@ -240,7 +240,9 @@ export function remoteBanner(message, onShow) {
 /** "Download all" for messages with several attachments. */
 export function zipLink(message, files) {
   if (files.length < 2) return null;
-  return h('a.btn.ghost.sm.ms-zip', { href: `/api/mail/messages/${enc(message.id)}/attachments.zip`, download: '', title: 'Download every attachment as one ZIP file' }, icon('archive', 'sm'), 'Download all');
+  const base = (message.subject || '').replace(/[/\\\0"]/g, '').replace(/[\u0000-\u001f]/g, '').slice(0, 80).trim();
+  const name = base ? `${base} - attachments.zip` : 'attachments.zip';
+  return h('a.btn.ghost.sm.ms-zip', { href: `/api/mail/messages/${enc(message.id)}/attachments.zip`, download: name, title: 'Download every attachment as one ZIP file' }, icon('archive', 'sm'), 'Download all');
 }
 
 /** Entries for the reader's "More" menu. */

@@ -136,7 +136,7 @@ pub fn parse_envelope(header: &[u8], text_prefix: &[u8]) -> Envelope {
         cc: addrs(m.cc()),
         reply_to: addrs(m.reply_to()),
         date: m.date().and_then(to_utc),
-        has_attachments: multipart_mixed || m.attachments().any(|p| !is_inline_image(p)),
+        has_attachments: multipart_mixed || m.attachments().any(|p| !is_inline_image(p) && !is_smime_signature(p)),
         preview: preview_of(&m),
     }
 }
@@ -275,6 +275,14 @@ fn decode_entities(s: &str) -> String {
     out
 }
 
+/// A detached S/MIME signature (`smime.p7s`): not an attachment for the user.
+fn is_smime_signature(p: &MessagePart) -> bool {
+    p.content_type().is_some_and(|ct| {
+        ct.ctype().eq_ignore_ascii_case("application")
+            && ct.subtype().is_some_and(|s| s.eq_ignore_ascii_case("pkcs7-signature") || s.eq_ignore_ascii_case("x-pkcs7-signature"))
+    })
+}
+
 fn is_inline_image(p: &MessagePart) -> bool {
     p.content_id().is_some() && p.content_type().is_some_and(|ct| ct.ctype().eq_ignore_ascii_case("image"))
 }
@@ -377,7 +385,7 @@ fn parse_envelope_full(m: &mail_parser::Message) -> Envelope {
         cc: addrs(m.cc()),
         reply_to: addrs(m.reply_to()),
         date: m.date().and_then(to_utc),
-        has_attachments: m.attachments().any(|p| !is_inline_image(p)),
+        has_attachments: m.attachments().any(|p| !is_inline_image(p) && !is_smime_signature(p)),
         preview: preview_of(m),
     }
 }
