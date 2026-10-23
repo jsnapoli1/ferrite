@@ -1,5 +1,6 @@
 // Mail settings: the user's layout and list preferences (stored on the server), tags, the
-// mailto: handler, and, for administrators, the defaults everyone starts with.
+// mailto: handler, the way into the composer settings (mail-compose-settings.js), and, for
+// administrators, the defaults everyone starts with.
 
 import { api } from '../api.js';
 import { h, icon, modal, toast, errorToast } from '../ui.js';
@@ -68,6 +69,12 @@ export async function mailSettingsDialog(ctx, { prefs, tags }) {
     h('h3', 'Mail links'),
     h('p.small.muted', 'Open mailto: links from other sites and apps in Ferrite’s composer.'),
     h('button.btn.sm', { type: 'button', onclick: registerMailto }, icon('mail', 'sm'), 'Open mailto: links in Ferrite'),
+    h('h3', 'Composing'),
+    h('p.small.muted', 'The default editor, signatures, aliases, the undo-send delay and text blocks.'),
+    h('button.btn.sm', {
+      type: 'button',
+      onclick: async () => { const { composeSettingsDialog } = await import('./mail-compose-settings.js'); await composeSettingsDialog(ctx); },
+    }, icon('edit', 'sm'), 'Composing, signatures and text blocks…'),
     admin && h('details.ml-admin-defaults',
       h('summary', 'Defaults for everyone (administrator)'),
       h('p.small.muted', 'Users who haven’t changed a setting get these.'),

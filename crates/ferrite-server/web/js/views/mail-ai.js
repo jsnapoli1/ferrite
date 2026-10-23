@@ -7,6 +7,7 @@
 import { api } from '../api.js';
 import { h, clear, icon, toast, errorToast, modal, spinner, relTime } from '../ui.js';
 import { mi } from './mail-integrations-icons.js';
+import { insertIntoComposer } from './mail-compose.js';
 
 let status = { at: 0, promise: null };
 
@@ -18,22 +19,7 @@ export function aiStatus() {
   return status.promise;
 }
 
-/**
- * Puts text into the open composer's message, above the quoted original (with a blank line
- * after it), and focuses it. The [compose] work provides its own insertIntoComposer for the
- * rich editor; this is the plain-text version for the current composer.
- */
-export function insertIntoComposer(text) {
-  const body = document.querySelector('.modal .ml-compose textarea.ml-body-input');
-  if (!body) return false;
-  const at = body.selectionStart ?? 0;
-  const insert = `${text}\n`;
-  body.value = body.value.slice(0, at) + insert + body.value.slice(at);
-  body.dispatchEvent(new Event('input', { bubbles: true }));
-  body.focus();
-  body.setSelectionRange(at + insert.length - 1, at + insert.length - 1);
-  return true;
-}
+// Smart replies go in through the composer's own insertIntoComposer (rich text or plain).
 
 /** Opens a reply and inserts `text` once the composer is there. */
 export function replyWith(text, messageId, compose) {

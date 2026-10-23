@@ -11,7 +11,7 @@ import { filtersDialog, filterFromMessage } from './mail-filters.js';
 import { aiStatus, threadSummary, smartReplies, translateMessage, followUpButton } from './mail-ai.js';
 import { mi } from './mail-integrations-icons.js';
 
-export { insertIntoComposer } from './mail-ai.js';
+export { insertIntoComposer } from './mail-compose.js';
 
 const enc = encodeURIComponent;
 

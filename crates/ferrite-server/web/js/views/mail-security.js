@@ -590,6 +590,7 @@ async function beforeSend(c, p) {
       const missing = emails.filter((e) => !valid[e]);
       if (missing.length) { toast(`Mailvelope has no public key for ${missing.join(', ')}. Import their key in Mailvelope first.`, 'error', { timeout: 9000 }); return false; }
       p.text = await st.editor.encrypt(emails);
+      p.html = null; // the armored text is the whole body; no HTML part beside it
     } catch (e) { errorToast(e); return false; }
     p.security = { smime_sign: false, smime_encrypt: false, pgp_mime: true };
   }

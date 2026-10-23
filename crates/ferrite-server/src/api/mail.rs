@@ -193,7 +193,7 @@ async fn compose_template(State(s): State<AppState>, auth: Auth, Path(id): Path<
 }
 
 /// A downloaded part, always as an attachment unless it is a type safe to show inline.
-fn file_response(name: &str, mime: &str, data: Vec<u8>, inline: bool) -> ApiResult<Response> {
+pub(super) fn file_response(name: &str, mime: &str, data: Vec<u8>, inline: bool) -> ApiResult<Response> {
     let inline = inline && inline_safe(mime);
     let ct = if inline { mime } else { "application/octet-stream" };
     let mut resp = Response::new(Body::from(data));

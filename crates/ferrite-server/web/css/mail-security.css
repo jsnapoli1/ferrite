@@ -78,7 +78,8 @@
 .ms-mailvelope-status .icon { color: var(--ok); vertical-align: -2px; }
 
 /* ---------- composer ---------- */
-.ml-body-host { display: flex; flex-direction: column; min-width: 0; }
+.ml-body-host { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.ml-body-host > [hidden] { display: none; }
 .ml-body-host .ml-body-input { width: 100%; }
 .ms-compose-tools { display: inline-flex; gap: 4px; }
 .ms-compose-tools:not(:has(.btn:not([hidden]))) { display: none; }

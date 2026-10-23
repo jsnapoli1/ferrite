@@ -1,106 +1,122 @@
-// A tiny SMTP server for the browser tests that delivers into Dovecot over LMTP, for test
-// instances run without Postfix (mail-server.sh with POSTFIX=0). It accepts any login and
-// delivers mail for @example.test (the test mailboxes) through Dovecot's LMTP listener;
-// mail for anyone else is accepted and dropped. Plain connections on localhost only.
+// A small SMTP server for the mail browser tests, so they need no system Postfix (one
+// shared service; several isolated Dovecot instances can each get their own relay). It
+// accepts every message (AUTH PLAIN or LOGIN with any password), keeps it for the test to
+// inspect, and delivers a copy for each recipient with a test mailbox (alice, bob and
+// $EXTRA_USERS @example.test; other addresses are only kept) into the test Dovecot with
+// `mail-server.sh deliver` (as if it arrived from outside, Sieve included). A test can make
+// the next messages fail with an SMTP error.
 //
-//   node smtp-relay.mjs SMTP_PORT LMTP_PORT        # e.g. 3315 3312
-import { createServer, connect } from 'node:net';
+//   node smtp-relay.mjs PORT [MAIL_TEST_DIR]      # standalone, e.g. for mail.mjs
+//   import { startSmtpRelay } from './smtp-relay.mjs'
+import { createServer } from 'node:net';
+import { execFile } from 'node:child_process';
+import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const [smtpPort, lmtpPort] = process.argv.slice(2).map(Number);
-if (!smtpPort || !lmtpPort) {
-  console.error('usage: node smtp-relay.mjs SMTP_PORT LMTP_PORT');
-  process.exit(2);
-}
-const LOCAL = /@example\.test$/i;
+const here = dirname(fileURLToPath(import.meta.url));
 
-/** Hands a message to Dovecot over LMTP; resolves when it answered for every recipient. */
-function lmtpDeliver(from, rcpts, data) {
+function deliverTo(user, data, dir) {
   return new Promise((resolve, reject) => {
-    const sock = connect(lmtpPort, '127.0.0.1');
-    const script = ['LHLO relay.test', `MAIL FROM:<${from}>`, ...rcpts.map((r) => `RCPT TO:<${r}>`), 'DATA'];
-    let step = -1;
-    let buf = '';
-    let replies = 0;
-    let sentData = false;
+    const tmp = mkdtempSync(join(tmpdir(), 'relay-'));
+    const file = join(tmp, 'msg.eml');
+    writeFileSync(file, data);
+    execFile('bash', [join(here, 'mail-server.sh'), 'deliver', user, file, dir], (err, _out, stderr) => {
+      rmSync(tmp, { recursive: true, force: true });
+      if (err) reject(new Error(`deliver to ${user}: ${stderr || err.message}`)); else resolve();
+    });
+  });
+}
+
+/**
+ * Starts the relay. Returns { port, messages, waitFor(pred, ms), failNext(n, reply), close() }.
+ * messages: [{ from, to: [addresses], data (CRLF text) }].
+ */
+export function startSmtpRelay({
+  port = 0, dir = process.env.MAIL_TEST_DIR || '/tmp/ferrite-mail-server', deliver = true,
+  mailboxes = ['alice', 'bob', ...(process.env.EXTRA_USERS || '').split(/\s+/).filter(Boolean)],
+} = {}) {
+  const local = new Set(mailboxes.map((u) => `${u}@example.test`));
+  const messages = [];
+  const waiters = [];
+  let failures = 0;
+  let failReply = '451 4.3.0 Try again later';
+  const sockets = new Set();
+  const server = createServer((sock) => {
+    sockets.add(sock);
+    sock.on('close', () => sockets.delete(sock));
     sock.setEncoding('utf8');
+    let buf = '';
+    let inData = false;
+    let data = [];
+    let msg = { from: '', to: [] };
+    let authStep = null;
+    const reply = (s) => sock.write(`${s}\r\n`);
+    reply('220 relay.example.test ESMTP');
     sock.on('data', (chunk) => {
       buf += chunk;
-      for (;;) {
-        const m = buf.match(/^(\d{3}) .*\r\n/m);
-        if (!m) return;
-        buf = buf.slice(buf.indexOf(m[0]) + m[0].length);
-        const code = Number(m[1]);
-        if (code >= 400) { sock.destroy(); reject(new Error(`LMTP ${m[0].trim()}`)); return; }
-        if (sentData) {
-          // One reply per recipient after the data.
-          if (++replies === rcpts.length) { sock.end('QUIT\r\n'); resolve(); return; }
+      let i;
+      while ((i = buf.indexOf('\r\n')) >= 0) {
+        const line = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        if (inData) {
+          if (line === '.') {
+            inData = false;
+            const m = { ...msg, data: `${data.join('\r\n')}\r\n` };
+            data = [];
+            msg = { from: '', to: [] };
+            if (failures > 0) { failures--; reply(failReply); continue; }
+            messages.push(m);
+            const delivered = deliver
+              ? Promise.all(m.to.filter((t) => local.has(t.toLowerCase())).map((t) => deliverTo(t, m.data, dir)))
+              : Promise.resolve();
+            delivered.then(() => {
+              reply('250 2.0.0 queued');
+              for (const w of [...waiters]) if (w.pred(m)) { waiters.splice(waiters.indexOf(w), 1); w.resolve(m); }
+            }, (e) => { console.error(e.message); reply('451 4.3.0 local delivery failed'); });
+          } else data.push(line.startsWith('.') ? line.slice(1) : line);
           continue;
         }
-        step++;
-        if (step < script.length) sock.write(`${script[step]}\r\n`);
-        else {
-          sentData = true;
-          const body = data.replace(/\r?\n/g, '\r\n').replace(/^\./gm, '..');
-          sock.write(`${body}${body.endsWith('\r\n') ? '' : '\r\n'}.\r\n`);
-        }
+        if (authStep === 'plain') { authStep = null; reply('235 2.7.0 Authenticated'); continue; }
+        if (authStep === 'user') { authStep = 'pass'; reply('334 UGFzc3dvcmQ6'); continue; }
+        if (authStep === 'pass') { authStep = null; reply('235 2.7.0 Authenticated'); continue; }
+        const up = line.toUpperCase();
+        if (up.startsWith('EHLO')) sock.write('250-relay.example.test\r\n250-8BITMIME\r\n250-SMTPUTF8\r\n250-AUTH PLAIN LOGIN\r\n250 SIZE 52428800\r\n');
+        else if (up.startsWith('HELO')) reply('250 relay.example.test');
+        else if (up.startsWith('AUTH PLAIN')) { if (line.trim().split(/\s+/).length > 2) reply('235 2.7.0 Authenticated'); else { authStep = 'plain'; reply('334 '); } } else if (up.startsWith('AUTH LOGIN')) { authStep = 'user'; reply('334 VXNlcm5hbWU6'); } else if (up.startsWith('MAIL FROM:')) { msg.from = line.slice(10).trim().replace(/^<|>.*$/g, ''); reply('250 2.1.0 OK'); } else if (up.startsWith('RCPT TO:')) { msg.to.push(line.slice(8).trim().replace(/^<|>.*$/g, '')); reply('250 2.1.5 OK'); } else if (up === 'DATA') { inData = true; reply('354 End data with <CR><LF>.<CR><LF>'); } else if (up === 'QUIT') { reply('221 2.0.0 Bye'); sock.end(); } else if (up === 'RSET') { msg = { from: '', to: [] }; reply('250 OK'); } else reply('250 OK');
       }
     });
-    sock.on('error', reject);
+    sock.on('error', () => {});
   });
+  const ready = new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
+  return {
+    ready,
+    get port() { return server.address()?.port; },
+    messages,
+    /** Resolves with the first message (already received or arriving) matching `pred`. */
+    waitFor(pred, ms = 30000) {
+      const found = messages.find(pred);
+      if (found) return Promise.resolve(found);
+      return new Promise((resolve, reject) => {
+        const w = { pred, resolve };
+        waiters.push(w);
+        setTimeout(() => { const i = waiters.indexOf(w); if (i >= 0) { waiters.splice(i, 1); reject(new Error('timed out waiting for an SMTP message')); } }, ms);
+      });
+    },
+    /** The next `n` messages are refused with `reply`. */
+    failNext(n = 1, replyText = '451 4.3.0 Try again later') { failures = n; failReply = replyText; },
+    /** Stops listening and drops open connections (clients keep pooled ones open). */
+    close() {
+      for (const s of sockets) s.destroy();
+      return new Promise((resolve) => server.close(() => resolve()));
+    },
+  };
 }
 
-createServer((sock) => {
-  sock.setEncoding('utf8');
-  let buf = '';
-  let mode = 'cmd';
-  let from = '';
-  let rcpts = [];
-  let data = [];
-  const reply = (s) => sock.write(`${s}\r\n`);
-  reply('220 relay.test ESMTP test relay');
-  // Lines are handled in order, one delivery at a time.
-  let chain = Promise.resolve();
-  sock.on('data', (chunk) => {
-    buf += chunk;
-    chain = chain.then(handle);
-  });
-  async function handle() {
-    let i;
-    while ((i = buf.indexOf('\r\n')) >= 0) {
-      const line = buf.slice(0, i);
-      buf = buf.slice(i + 2);
-      if (mode === 'data') {
-        if (line === '.') {
-          mode = 'cmd';
-          const local = rcpts.filter((r) => LOCAL.test(r));
-          const message = data.join('\r\n');
-          data = [];
-          try {
-            if (local.length) await lmtpDeliver(from, local, message);
-            reply('250 2.0.0 queued');
-          } catch (e) {
-            reply(`451 4.3.0 ${e.message}`);
-          }
-        } else data.push(line.startsWith('..') ? line.slice(1) : line);
-        continue;
-      }
-      if (mode === 'auth-user') { mode = 'auth-pass'; reply('334 UGFzc3dvcmQ6'); continue; }
-      if (mode === 'auth-pass') { mode = 'cmd'; reply('235 2.7.0 Authentication successful'); continue; }
-      const cmd = line.slice(0, 4).toUpperCase();
-      if (cmd === 'EHLO') { sock.write('250-relay.test\r\n250-AUTH PLAIN LOGIN\r\n250-8BITMIME\r\n250 SIZE 52428800\r\n'); }
-      else if (cmd === 'HELO') reply('250 relay.test');
-      else if (cmd === 'AUTH') {
-        const [, mech, initial] = line.split(' ');
-        if (mech.toUpperCase() === 'LOGIN') { mode = 'auth-user'; reply('334 VXNlcm5hbWU6'); } else if (initial) reply('235 2.7.0 Authentication successful');
-        else { mode = 'auth-pass'; reply('334 '); }
-      } else if (cmd === 'MAIL') { from = (line.match(/<([^>]*)>/) || [])[1] || ''; rcpts = []; reply('250 2.1.0 Ok'); }
-      else if (cmd === 'RCPT') { rcpts.push((line.match(/<([^>]*)>/) || [])[1] || ''); reply('250 2.1.5 Ok'); }
-      else if (cmd === 'DATA') { mode = 'data'; data = []; reply('354 End data with <CR><LF>.<CR><LF>'); }
-      else if (cmd === 'RSET') { from = ''; rcpts = []; reply('250 2.0.0 Ok'); }
-      else if (cmd === 'NOOP') reply('250 2.0.0 Ok');
-      else if (cmd === 'QUIT') { reply('221 2.0.0 Bye'); sock.end(); }
-      else reply('502 5.5.2 Command not recognized');
-    }
-  }
-  sock.on('error', () => {});
-}).listen(smtpPort, '127.0.0.1', () => console.log(`SMTP relay on 127.0.0.1:${smtpPort} -> LMTP 127.0.0.1:${lmtpPort}`));
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const port = Number(process.argv[2] || 3587);
+  const relay = startSmtpRelay({ port, dir: process.argv[3] || process.env.MAIL_TEST_DIR });
+  await relay.ready;
+  console.log(`SMTP relay on 127.0.0.1:${port}, delivering into ${process.argv[3] || process.env.MAIL_TEST_DIR || '/tmp/ferrite-mail-server'}`);
+}

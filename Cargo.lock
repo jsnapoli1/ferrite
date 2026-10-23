@@ -1496,6 +1496,7 @@ dependencies = [
  "http-body-util",
  "libc",
  "mail-auth",
+ "mail-parser",
  "mime_guess",
  "percent-encoding",
  "qrcode",

@@ -30,9 +30,14 @@
 //!   about a message's trustworthiness, S/MIME and PGP.
 //! * Inbox management (see `inbox`): `prefs`, `tags`, `classify`, `snooze`, `folders`,
 //!   `views` (unified views, advanced search, deep links), `quick_actions`, `mailto`.
+//! * `richtext`, `mime`: composed HTML and the MIME structure of outgoing mail.
+//!   `aliases`, `textblocks`: identities, signatures, composer settings, snippets.
+//!   `outbox`: queued, scheduled and retried sending. `reading`: read receipts, attached
+//!   messages, printing.
 
 pub mod abuse;
 pub mod agenda;
+pub mod aliases;
 pub mod antispam;
 pub mod autoconfig;
 pub mod background;
@@ -51,13 +56,17 @@ pub mod integrations;
 pub mod itinerary;
 pub mod mailto;
 pub mod managesieve;
+pub mod mime;
 pub mod oauth;
+pub mod outbox;
 pub mod parse;
 pub mod people;
 pub mod phishing;
 pub mod prefs;
 pub mod provisioning;
 pub mod quick_actions;
+pub mod reading;
+pub mod richtext;
 pub mod security;
 pub mod settings;
 pub mod sieve;
@@ -67,6 +76,7 @@ pub mod snooze;
 pub mod store;
 pub mod sync;
 pub mod tags;
+pub mod textblocks;
 pub mod trust;
 pub mod unsubscribe;
 pub mod views;

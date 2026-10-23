@@ -25,12 +25,30 @@ pub fn definitions() -> &'static Vec<Tool> {
     static DEFS: OnceLock<Vec<Tool>> = OnceLock::new();
     DEFS.get_or_init(|| {
         let account = ("account", "string", "Account id or email address (default: your first account)", false);
-        let recipients = [
-            ("to", "string[]", "Recipients (\"Name <a@b.c>\" or a@b.c)", false),
+        let recipients = vec![
+            (
+                "to",
+                "string[]",
+                "Recipients (\"Name <a@b.c>\", a@b.c, or group:<group name> for a Ferrite group)",
+                false,
+            ),
             ("cc", "string[]", "Cc recipients", false),
             ("bcc", "string[]", "Bcc recipients", false),
             ("subject", "string", "Subject (for replies: default \"Re: …\")", false),
-            ("text", "string", "Plain-text body (for replies, written above the quoted original)", true),
+            ("text", "string", "Plain-text body (for replies, written above the quoted original)", false),
+            (
+                "html",
+                "string",
+                "Formatted body as HTML (p, b, i, u, a, ul/ol, blockquote, …; sanitized). The plain-text version is generated from it. Give text or html",
+                false,
+            ),
+            (
+                "from",
+                "string",
+                "Send as this address: the account's own or one of its aliases (default: the account)",
+                false,
+            ),
+            ("request_read_receipt", "boolean", "Ask the recipients for a read receipt", false),
             (
                 "reply_to",
                 "string",
@@ -40,6 +58,13 @@ pub fn definitions() -> &'static Vec<Tool> {
             ("reply_all", "boolean", "With reply_to: also copy everyone else on the original", false),
             account,
         ];
+        let mut send_args = recipients.clone();
+        send_args.push((
+            "send_at",
+            "string",
+            "Send later at this time (RFC 3339, e.g. 2026-10-24T08:00:00+02:00): the message waits in the outbox until then",
+            false,
+        ));
         let mut tools = vec![
             Tool::new(
                 "mail_accounts",
@@ -95,9 +120,16 @@ pub fn definitions() -> &'static Vec<Tool> {
             Tool::new(
                 "mail_send",
                 "Send mail",
-                "Send a message from one of your mail accounts (a copy is kept in Sent).",
-                &recipients,
+                "Send a message from one of your mail accounts (a copy is kept in Sent), now or scheduled with send_at.",
+                &send_args,
             ),
+            Tool::new(
+                "mail_outbox",
+                "Mail outbox",
+                "Messages waiting to be sent: scheduled (send later), queued, or failed with the error and the next retry.",
+                &[],
+            )
+            .read_only(),
             Tool::new(
                 "mail_mark",
                 "Mark mail",
@@ -215,7 +247,12 @@ pub(crate) async fn account(core: &Core, uid: &str, which: Option<&str>) -> Resu
 
 /// The compose fields from tool arguments (replies start from the quoted original).
 async fn compose(core: &Core, uid: &str, a: &Value) -> Result<(String, Compose), Error> {
-    let text = s(a, "text")?;
+    let text = opt(a, "text").unwrap_or("");
+    let html = opt(a, "html");
+    if text.is_empty() && html.is_none() {
+        return Err(Error::bad("`text` or `html` is required"));
+    }
+    let from = opt(a, "from");
     let (account_id, mut c) = match opt(a, "reply_to") {
         Some(parent) => {
             let mode = if a.get("reply_all").and_then(Value::as_bool).unwrap_or(false) {
@@ -226,16 +263,38 @@ async fn compose(core: &Core, uid: &str, a: &Value) -> Result<(String, Compose),
             let t = core.mail_compose_template(uid, parent, mode).await?;
             let mut c = t.compose;
             c.text = format!("{text}{}", c.text);
+            c.html = html.map(|h| format!("{h}{}", c.html.as_deref().unwrap_or("")));
             (t.account_id, c)
         }
-        None => (
-            account(core, uid, opt(a, "account")).await?.id,
-            Compose {
-                text: text.to_string(),
-                ..Default::default()
-            },
-        ),
+        None => {
+            let acc = match (opt(a, "account"), from) {
+                (None, Some(f)) => sender_account(core, uid, f).await?,
+                (which, _) => account(core, uid, which).await?,
+            };
+            (
+                acc.id,
+                Compose {
+                    text: text.to_string(),
+                    html: html.map(String::from),
+                    ..Default::default()
+                },
+            )
+        }
     };
+    if let Some(f) = from {
+        let acc = core.mail_access(uid, &account_id, ferrite_core::mail::MailRight::Read).await?;
+        c.alias_id = if f.eq_ignore_ascii_case(&acc.email) {
+            None
+        } else {
+            let alias = core
+                .mail_aliases(uid, &acc.id)
+                .await?
+                .into_iter()
+                .find(|x| x.email.eq_ignore_ascii_case(f))
+                .ok_or_else(|| Error::bad(format!("{f} is neither {} nor one of its aliases", acc.email)))?;
+            Some(alias.id)
+        };
+    }
     for (k, field) in [("to", &mut c.to), ("cc", &mut c.cc), ("bcc", &mut c.bcc)] {
         let v = strings(a, k);
         if !v.is_empty() {
@@ -245,7 +304,20 @@ async fn compose(core: &Core, uid: &str, a: &Value) -> Result<(String, Compose),
     if let Some(sub) = opt(a, "subject") {
         c.subject = sub.to_string();
     }
+    if let Some(r) = a.get("request_read_receipt").and_then(Value::as_bool) {
+        c.request_mdn = r;
+    }
     Ok((account_id, c))
+}
+
+/// The account that sends as `from` (its own address or an alias).
+async fn sender_account(core: &Core, uid: &str, from: &str) -> Result<Account, Error> {
+    for acc in core.mail_accounts(uid).await? {
+        if acc.email.eq_ignore_ascii_case(from) || core.mail_aliases(uid, &acc.id).await?.iter().any(|x| x.email.eq_ignore_ascii_case(from)) {
+            return Ok(acc);
+        }
+    }
+    Err(Error::bad(format!("none of your mail accounts sends as {from}")))
 }
 
 pub async fn dispatch(core: &Core, ctx: &UserCtx, name: &str, a: &Value) -> Result<ToolResult, Error> {
@@ -348,8 +420,32 @@ pub async fn dispatch(core: &Core, ctx: &UserCtx, name: &str, a: &Value) -> Resu
         }
         "mail_send" => {
             let (account_id, c) = compose(core, uid, a).await?;
+            if let Some(at) = opt(a, "send_at") {
+                let when = chrono::DateTime::parse_from_rfc3339(at)
+                    .map_err(|e| Error::bad(format!("`send_at` is not an RFC 3339 time: {e}")))?
+                    .with_timezone(&chrono::Utc);
+                let entry = core.mail_outbox_enqueue(uid, &account_id, &c, Some(when)).await?;
+                return Ok(ToolResult::json(
+                    json!({"scheduled": true, "outbox_id": entry.id, "send_at": entry.send_at, "to": c.to, "cc": c.cc}),
+                ));
+            }
             let message_id = core.mail_send(uid, &account_id, &c).await?;
             Ok(ToolResult::json(json!({"sent": true, "message_id": message_id, "to": c.to, "cc": c.cc})))
+        }
+        "mail_outbox" => {
+            let list: Vec<Value> = core
+                .mail_outbox(uid)
+                .await?
+                .into_iter()
+                .map(|e| {
+                    json!({
+                        "id": e.id, "subject": e.subject, "to": e.recipients, "send_at": e.send_at,
+                        "status": if e.send_at.is_none() { "on hold" } else { e.status.as_str() },
+                        "attempts": e.attempts, "error": e.last_error, "next_attempt_at": e.next_attempt_at,
+                    })
+                })
+                .collect();
+            Ok(ToolResult::json(json!({"messages": list})))
         }
         "mail_mark" => {
             let ids = strings(a, "message_ids");

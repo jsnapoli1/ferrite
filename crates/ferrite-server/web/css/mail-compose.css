@@ -1,0 +1,145 @@
+/* Mail composing: the composer window (and its minimized dock), the rich editor and its
+   pickers, the recipient info pane, the outbox, mail settings, read-receipt banners and
+   attached messages in the reader. Tokens only, both themes. */
+
+/* ---------- composer window ---------- */
+.ml-composer-backdrop { z-index: 90; }
+.ml-composer.modal.wide { width: min(1000px, 100%); height: min(880px, calc(100vh - 32px)); }
+.ml-composer .modal-head { padding: 12px 14px 6px 20px; gap: 4px; }
+.ml-composer .modal-body { flex: 1; display: flex; flex-direction: column; min-height: 0; padding-bottom: 8px; }
+.ml-composer .modal-foot { align-items: center; flex-wrap: wrap; padding: 10px 20px 14px; }
+.ml-composer .modal-foot .btn .icon { margin-left: -2px; }
+.ml-compose-layout { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-height: 0; }
+.ml-compose-layout.with-info { grid-template-columns: minmax(0, 1fr) 260px; }
+.ml-composer .ml-compose { min-height: 0; }
+.ml-body { flex: 1; display: flex; flex-direction: column; min-height: 220px; }
+.ml-composer .ml-body-input { flex: 1; height: auto; min-height: 220px; }
+.ml-chip.group { background: var(--info-soft); color: var(--info); padding-left: 7px; gap: 4px; }
+.ml-group-avatar { background: var(--info-soft); color: var(--info); }
+.ml-file-chip.eml { background: var(--info-soft); }
+.ml-mdn-check.check { margin: 0 4px; font-size: 13px; color: var(--text-2); white-space: nowrap; }
+.ml-compose-tools .btn.sm span { white-space: nowrap; }
+
+/* ---------- minimized ---------- */
+.ml-compose-dock { position: fixed; right: 16px; bottom: 16px; z-index: 95; display: flex; align-items: center; gap: 8px; width: min(340px, calc(100vw - 32px));
+  padding: 8px 8px 8px 14px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-lg); }
+.ml-compose-dock > .icon { color: var(--accent); flex: none; }
+/* Notifications stack above the dock instead of covering it. */
+body.has-compose-dock .toasts { bottom: 76px; }
+
+/* ---------- rich editor ---------- */
+.ed { flex: 1; display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); margin-top: 8px; background: var(--surface); }
+.ed:focus-within { border-color: var(--accent); }
+.ed-toolbar { display: flex; align-items: center; gap: 1px; padding: 4px; border-bottom: 1px solid var(--border); background: var(--surface-2); border-radius: var(--radius-sm) var(--radius-sm) 0 0; flex-wrap: wrap; }
+.ed-toolbar .btn.icon.sm { width: 30px; height: 30px; color: var(--text-2); }
+.ed-toolbar .btn.icon.sm:hover { color: var(--text); background: var(--surface-3); }
+.ed-toolbar .btn.active { background: var(--accent-soft); color: var(--accent); }
+.ed-sep { width: 1px; align-self: stretch; margin: 4px 4px; background: var(--border); }
+.ed-select { width: auto; height: 30px; padding: 0 22px 0 8px; font-size: 13px; background-color: transparent; border-color: transparent; }
+.ed-select:hover { background-color: var(--surface-3); }
+.ed-color { position: relative; }
+.ed-color-bar { position: absolute; left: 8px; right: 8px; bottom: 5px; height: 3px; border-radius: 2px; background: currentColor; }
+.ed-area { flex: 1; min-height: 200px; overflow-y: auto; padding: 12px 14px; outline: none; font-size: 14px; line-height: 1.55; color: var(--text); overflow-wrap: anywhere; cursor: text; }
+.ed-area p { margin: 0 0 .6em; }
+.ed-area h1, .ed-area h2, .ed-area h3 { margin: .5em 0 .3em; line-height: 1.25; }
+.ed-area h1 { font-size: 24px; } .ed-area h2 { font-size: 20px; } .ed-area h3 { font-size: 17px; }
+.ed-area ul, .ed-area ol { margin: .2em 0 .4em; padding-left: 1.6em; }
+.ed-area blockquote { margin: .3em 0 .3em .2em; padding-left: .9em; border-left: 3px solid var(--border); color: var(--text-2); }
+.ed-area pre { white-space: pre-wrap; font: 13px/1.5 var(--mono); background: var(--surface-2); padding: 8px 10px; border-radius: var(--radius-sm); }
+.ed-area img { max-width: 100%; height: auto; border-radius: 3px; }
+.ed-area img:hover { outline: 2px solid var(--accent-soft); }
+.ed-area a { color: var(--accent); text-decoration: underline; }
+.ed-area hr { border: 0; border-top: 1px solid var(--border); margin: 12px 0; }
+.ed-area .ferrite-signature { color: var(--text-2); }
+.ed-area .ferrite-signature::before { content: "-- "; display: block; color: var(--text-3); }
+.ed-area .ferrite-quote > div:first-child { color: var(--text-3); }
+.ed.ed-small .ed-area { min-height: 110px; max-height: 260px; }
+.ed-pop { position: fixed; z-index: 300; display: grid; grid-template-columns: repeat(5, 26px); gap: 6px; padding: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow-lg); }
+.ed-swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--border); cursor: pointer; padding: 0; }
+.ed-swatch:hover, .ed-swatch:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+.ed-swatch-auto { grid-column: 1 / -1; }
+.ed-picker { position: fixed; z-index: 300; max-height: 264px; overflow-y: auto; padding: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow-lg); }
+.ed-picker-item { display: flex; align-items: baseline; gap: 8px; padding: 6px 8px; border-radius: 5px; cursor: pointer; min-width: 0; }
+.ed-picker-item .grow { min-width: 0; }
+.ed-picker-item .muted { max-width: 55%; }
+.ed-picker-item.active { background: var(--accent-soft); }
+
+/* ---------- recipient info ---------- */
+.ml-rcpt-pane { display: none; min-height: 0; overflow-y: auto; border-left: 1px solid var(--border); padding: 4px 0 4px 14px; }
+.ml-compose-layout.with-info .ml-rcpt-pane { display: block; }
+.ml-rcpt-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.ml-rcpt { border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 8px; background: var(--surface-2); }
+.ml-rcpt summary { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; list-style: none; min-width: 0; }
+.ml-rcpt summary::-webkit-details-marker { display: none; }
+.ml-rcpt-name { display: flex; flex-direction: column; min-width: 0; }
+.ml-rcpt-rows { display: flex; flex-direction: column; gap: 4px; padding: 0 10px 10px; color: var(--text-2); }
+.ml-rcpt-rows > div { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ml-rcpt-rows .icon { flex: none; color: var(--text-3); }
+.ml-rcpt-note { margin: 2px 0 0; white-space: pre-wrap; color: var(--text-2); }
+.ml-rcpt > p { margin: 0; padding: 0 10px 10px; }
+
+/* ---------- reader additions ---------- */
+.ml-mdn { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 7px 10px; margin-bottom: 8px; border-radius: var(--radius-sm); background: var(--info-soft); color: var(--text-2); font-size: 13px; }
+.ml-mdn > .icon { color: var(--info); }
+.ml-nested { margin-top: 12px; padding: 10px 12px 12px; border: 1px solid var(--border); border-left: 3px solid var(--info); border-radius: var(--radius-sm); background: var(--surface-2); }
+.ml-nested-head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; min-width: 0; }
+.ml-nested-head > .icon { margin-top: 3px; color: var(--info); flex: none; }
+.ml-nested-head .grow { min-width: 0; }
+.ml-nested-subject { font-weight: 600; overflow-wrap: anywhere; }
+.ml-print-frame { position: fixed; right: 0; bottom: 0; width: 1px; height: 1px; border: 0; opacity: 0; pointer-events: none; }
+
+/* ---------- outbox ---------- */
+.ml-outbox-folder .badge.danger { background: var(--danger); color: #fff; }
+.ml-outbox-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.ml-outbox-item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); min-width: 0; }
+.ml-outbox-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ml-outbox-subject { font-weight: 600; }
+.ml-outbox-status.info { color: var(--info); }
+.ml-outbox-status.warn { color: var(--warn); }
+.ml-outbox-status.danger { color: var(--danger); overflow-wrap: anywhere; }
+.ml-outbox-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.ml-outbox .empty { margin-top: 6vh; }
+
+/* ---------- settings ---------- */
+.ml-settings .tabs { margin-bottom: 12px; }
+.ml-set-section { margin-bottom: 18px; }
+.ml-set-section h3 { margin: 0 0 8px; font-size: 15px; }
+.ml-set-section select { width: auto; max-width: 100%; }
+.ml-set-modes .check { margin: 4px 0; }
+.ml-set-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.ml-set-list { display: flex; flex-direction: column; gap: 6px; }
+.ml-set-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); min-width: 0; }
+.ml-set-row .grow { min-width: 0; }
+.ml-set-row > .icon { flex: none; color: var(--text-3); }
+.ml-block-row { align-items: flex-start; }
+.ml-block-row > .icon { margin-top: 3px; }
+.ml-block-preview { margin-top: 4px; max-height: 3.2em; overflow: hidden; color: var(--text-2); }
+.ml-block-preview p, .ml-block-preview div { margin: 0; }
+.ml-set-share { display: flex; gap: 6px; margin-top: 10px; }
+.ml-set-share select { width: auto; }
+.ml-set-share input { flex: 1; min-width: 0; }
+.ml-set-form .ed { margin-top: 0; }
+
+/* ---------- smaller screens ---------- */
+@media (max-width: 1100px) {
+  .ml-compose-layout.with-info { grid-template-columns: minmax(0, 1fr); }
+  .ml-compose-layout.with-info .ml-rcpt-pane { border-left: 0; border-top: 1px solid var(--border); padding: 10px 0 0; max-height: 40vh; }
+}
+@media (max-width: 760px) {
+  .ml-composer-backdrop { padding: 0; }
+  .ml-composer.modal.wide { width: 100%; height: 100%; max-height: none; border-radius: 0; border: 0; }
+  .ml-composer .modal-head { padding: 8px 8px 4px 14px; }
+  .ml-composer .modal-body { padding: 4px 12px 8px; }
+  .ml-composer .modal-foot { padding: 8px 12px calc(10px + env(safe-area-inset-bottom)); gap: 6px; }
+  .ml-composer .modal-foot .btn { padding: 0 10px; }
+  .ml-composer .modal-foot .btn span { display: none; }
+  .ml-compose-tools .btn.sm span { display: none; }
+  .ml-compose-tools .btn.sm { padding: 0 8px; }
+  .ed-toolbar { flex-wrap: nowrap; overflow-x: auto; }
+  .ed-toolbar > * { flex: none; }
+  .ed-area { min-height: 160px; padding: 10px; }
+  .ml-compose-dock { left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); width: auto; }
+  .ml-outbox-item { flex-wrap: wrap; }
+  .ml-outbox-actions .btn.sm span { display: none; }
+  .ml-set-share { flex-wrap: wrap; }
+}

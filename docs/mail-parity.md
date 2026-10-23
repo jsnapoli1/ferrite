@@ -9,7 +9,7 @@ as implemented in [nextcloud/mail](https://github.com/nextcloud/mail) (`appinfo/
 Left out: the JMAP service (in 6.0-alpha only internally, with no routes or UI), and Nextcloud's
 user-migration export (an occ tool of the Nextcloud ecosystem).
 
-Status: ✅ in Ferrite · 🔧 being built (workstream in brackets).
+Status: ✅ in Ferrite. Every row was built in one of five workstreams (inbox, compose, security, integrations, accounts) and is tested against a real Dovecot, with browser tests for each.
 
 ## Layout, lists and preferences — [inbox]
 
@@ -72,8 +72,8 @@ Status: ✅ in Ferrite · 🔧 being built (workstream in brackets).
 | Create a calendar event or a task from a message (AI-suggested when AI is configured) | ✅ (tasks are VTODO) |
 | Add sender to contacts / new contact; recipient info pane | ✅ (contact match in the reader, `GET /api/mail/contact-info`, a Ferrite user's absence) |
 | One-click unsubscribe (List-Unsubscribe, RFC 8058) | ✅ (HTTPS POST that never reaches private addresses, or mailto sent from the account) |
-| Read receipts (MDN): ask the user to send one when a sender requests it | 🔧 [compose] |
-| Print a message | 🔧 [compose] |
+| Read receipts (MDN): ask the user to send one when a sender requests it | ✅ |
+| Print a message | ✅ |
 | AI: thread summary (3+ messages), smart replies, translation, follow-up reminders for unanswered sent mail | ✅ (needs the admin's AI processing switch and the user's consent; cached, never blocks reading) |
 
 ## Composing and sending — [compose]
@@ -81,20 +81,21 @@ Status: ✅ in Ferrite · 🔧 being built (workstream in brackets).
 | Feature | Status |
 |---|---|
 | Plain text compose; reply, reply-all, forward with quoting and threading; drafts on the server | ✅ |
-| Rich text (HTML) editor with formatting, links, lists, quotes, inline images; plain-text mode; default editor mode per account | 🔧 |
-| Aliases (identities) per account; send as a server alias | 🔧 |
-| Signatures per account and per alias (HTML), above or below the quote | 🔧 |
-| Text blocks: reusable snippets inserted with `!` or from the menu, shareable with users and groups | 🔧 |
-| `@`-mention a contact to add them as a recipient | 🔧 |
-| Recipient info side pane | 🔧 |
-| Minimizable composer with a "resume" indicator; drafts saved automatically | ✅ autosave · 🔧 minimize |
-| Outbox: queued and scheduled messages, retries, reopen before sending | 🔧 |
-| Send later (scheduled send); undo send | 🔧 |
-| Request a read receipt | 🔧 |
+| Rich text (HTML) editor with formatting, links, lists, quotes, inline images; plain-text mode; default editor mode per account | ✅ |
+| Aliases (identities) per account; send as a server alias | ✅ |
+| Signatures per account and per alias (HTML), above or below the quote | ✅ |
+| Text blocks: reusable snippets inserted with `!` or from the menu, shareable with users and groups | ✅ |
+| `@`-mention a contact to add them as a recipient | ✅ |
+| Recipient info side pane | ✅ |
+| Minimizable composer with a "resume" indicator; drafts saved automatically | ✅ |
+| Outbox: queued and scheduled messages, retries, reopen before sending | ✅ |
+| Send later (scheduled send); undo send | ✅ |
+| Request a read receipt | ✅ |
 | Attachments from upload or Files | ✅ |
-| Large attachments as Files share links (admin attachment size limit) | 🔧 |
-| Forward as attachment | 🔧 |
-| Sending to a Ferrite group address expands to its members | 🔧 |
+| Large attachments as Files share links (admin attachment size limit) | ✅ |
+| Forward as attachment | ✅ |
+| Sending to a Ferrite group address expands to its members | ✅ |
+| Formats: multipart/alternative, related and mixed; encoded words; format=flowed; RFC 2231 names; .eml attachments and attached messages shown inline | ✅ |
 | Internal-address warnings when sending | ✅ |
 | S/MIME: certificate management (PKCS#12 / PEM import), sign and/or encrypt | ✅ |
 | PGP via Mailvelope (compose) | ✅ |
@@ -120,4 +121,4 @@ Status: ✅ in Ferrite · 🔧 being built (workstream in brackets).
 | Provisioning: admin-defined account templates created for users automatically | ✅ |
 | Admin settings: allow users to add accounts, anti-spam report addresses (report spam/not spam), attachment size limit, anti-abuse alerts (recipient count, message rate), background sync interval, AI processing on/off, importance classification default, UI defaults | ✅ (settings and spam actions; the other features read them through `mail/settings.rs`) |
 | Background sync of all accounts (not only while online) | ✅ |
-| Assistant (MCP) tools for the new features | ✅ accounts (delegation, report spam, provisioning) · ✅ integrations (filters, out of office, invitations, thread summary, unsubscribe) · 🔧 (each) |
+| Assistant (MCP) tools for the new features | ✅ inbox (tags, important, snooze, folders, mark all read) · compose (HTML, aliases, read receipts, send later, `mail_outbox`) · security (trusted senders, internal addresses) · integrations (filters, out of office, invitations, thread summary, unsubscribe) · accounts (delegation, report spam, provisioning) |

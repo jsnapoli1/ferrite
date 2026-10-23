@@ -1,10 +1,10 @@
 // Browser test of Mail's inbox management against a REAL mail server (Dovecot, see
 // mail-server.sh) and a Ferrite server with a fresh data dir. Without Postfix, smtp-relay.mjs
-// stands in for SMTP (it delivers into Dovecot over LMTP):
+// stands in for SMTP (it delivers into Dovecot with mail-server.sh deliver):
 //
 //   export MAIL_TEST_DIR=/tmp/ferrite-mail-inbox IMAP_PORT=3311 LMTP_PORT=3312 AUTH_PORT=3313 SIEVE_PORT=3314
 //   POSTFIX=0 SHARED=1 EXTRA_USERS=carol bash mail-server.sh start $MAIL_TEST_DIR   # once
-//   node smtp-relay.mjs 3315 3312 &
+//   EXTRA_USERS=carol node smtp-relay.mjs 3315 $MAIL_TEST_DIR &
 //   FERRITE_SFU=0 FERRITE_DATA_DIR=$(mktemp -d) FERRITE_LISTEN=127.0.0.1:8861 FERRITE_PUBLIC_URL=http://127.0.0.1:8861 ../target/debug/ferrite serve &
 //   FERRITE_URL=http://127.0.0.1:8861 SMTP_PORT=3315 node mail-inbox.mjs
 //

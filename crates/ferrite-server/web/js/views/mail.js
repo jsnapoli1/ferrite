@@ -28,6 +28,9 @@ import {
 import { mailSettingsDialog } from './mail-settings.js';
 import { decorateMessage, decorateThread, messageMenuItems, accountMenuItems, navExtras } from './mail-integrations.js';
 import { senderAvatar, messageSecurity, remoteBanner, zipLink, readerMenuItems, openSecuritySettings } from './mail-security.js';
+import { composeSettingsDialog } from './mail-compose-settings.js';
+import { mdnBanner, attachedMessageButton, printMessage } from './mail-reading.js';
+import { outboxNavItem, renderOutbox } from './mail-outbox.js';
 
 const PAGE = 50;
 const IMPORTANT = '$label1';
@@ -188,6 +191,7 @@ export default async function render(root, ctx) {
         p.configure && { label: 'Inbox settings…', icon: 'important', run: () => inboxSettings(a) },
         { label: 'Quick actions…', icon: 'zap', run: () => manageQuickActions(a) },
         p.configure && { label: 'Edit account', icon: 'settings', run: () => editAccount(a) },
+        p.configure && { label: 'Signature and aliases', icon: 'edit', run: () => composeSettingsDialog(ctx, { tab: 'aliases', accountId: a.id }) },
         p.share && { label: 'Share…', icon: 'share', run: () => shareDialog(a).then(loadAccounts).catch(errorToast) },
         ...accountMenuItems(a, ctx),
         a.auth_method === 'xoauth2' && p.authenticate && { label: `Reconnect with ${PROVIDER_LABEL[a.oauth_provider] || 'the provider'}`, icon: 'key', run: () => startOAuth(a.oauth_provider, { email: a.email, accountId: a.id }).catch(errorToast) },
@@ -242,6 +246,7 @@ export default async function render(root, ctx) {
       const quota = quotaBar(a);
       if (quota) tree.appendChild(quota);
     });
+    if (state.accounts.length) tree.appendChild(outboxNavItem({ active: !!outboxCleanup, onOpen: openOutbox }));
     navExtras(tree, ctx, { openMessage, compose });
     nav.appendChild(tree);
     if (state.canAdd || state.accounts.length) {
@@ -594,7 +599,29 @@ export default async function render(root, ctx) {
         h('button.btn.primary', { type: 'button', onclick: addAccount }, icon('plus'), 'Add mail account')));
   }
 
+  // ---- outbox (shown in the reading pane) -------------------------------------------------------
+  let outboxCleanup = null;
+  function leaveOutbox() {
+    if (!outboxCleanup) return false;
+    outboxCleanup();
+    outboxCleanup = null;
+    outboxNavItem({ active: false, onOpen: openOutbox });
+    return true;
+  }
+  function openOutbox() {
+    leaveOutbox();
+    state.messageId = null;
+    state.thread = [];
+    state.openSeq++;
+    setUrl();
+    setPane('reader');
+    drawList();
+    outboxCleanup = renderOutbox(reader, ctx, { accounts: state.accounts, onBack: closeReader });
+    outboxNavItem({ active: true, onOpen: openOutbox });
+  }
+
   async function openMessage(id, { focusList = true } = {}) {
+    leaveOutbox();
     state.messageId = id;
     state.selected.clear();
     setUrl();
@@ -674,6 +701,8 @@ export default async function render(root, ctx) {
           { label: 'Download (.eml)', icon: 'download', run: () => { location.href = `/api/mail/messages/${encodeURIComponent(current.id)}/raw`; } },
           ...messageMenuItems(current, ctx, { accounts: state.accounts }),
           ...readerMenuItems(current),
+          !isDraftFolder && { label: 'Forward as attachment', icon: 'paperclip', run: () => compose({ fromMessage: current.id, mode: 'forward_as_attachment' }) },
+          { label: 'Print', icon: 'file', run: () => printMessage(current.id) },
         ]),
       }, icon('more', 'sm'))));
     const cards = h('div.ml-cards');
@@ -740,6 +769,7 @@ export default async function render(root, ctx) {
       onSettings: (tab) => securitySettings(tab),
     });
     body.appendChild(security.el);
+    body.appendChild(mdnBanner(message));
     body.appendChild(content);
     if (message.has_html) {
       let remote = false;
@@ -778,6 +808,7 @@ export default async function render(root, ctx) {
           icon('paperclip', 'sm'),
           h('a.ellipsis', { href, download: a.name, title: `Download ${a.name}` }, a.name),
           h('span.small.muted', bytes(a.size)),
+          attachedMessageButton(body, message, a),
           h('button.btn.ghost.icon.sm', { type: 'button', 'aria-label': `Save ${a.name} to Files`, title: 'Save to Files', onclick: () => saveToFiles(message.id, a) }, icon('files', 'sm')));
       })));
     }
@@ -796,6 +827,7 @@ export default async function render(root, ctx) {
   }
 
   function closeReader() {
+    leaveOutbox();
     state.messageId = null;
     state.thread = [];
     setUrl();
@@ -1023,9 +1055,8 @@ export default async function render(root, ctx) {
     history.replaceState({}, '', '/mail');
     try {
       const { mailto } = await api.get(`/api/mail/mailto${q({ uri })}`);
-      const a = account() || state.accounts[0];
-      const signature = a?.signature ? `\n\n-- \n${a.signature}` : '';
-      compose({ prefill: { to: mailto.to, cc: mailto.cc, bcc: mailto.bcc, subject: mailto.subject, text: `${mailto.body}${signature}` } });
+      // The composer adds the sending identity's signature below the body.
+      compose({ prefill: { to: mailto.to, cc: mailto.cc, bcc: mailto.bcc, subject: mailto.subject, text: mailto.body || '' } });
     } catch (e) {
       errorToast(e);
     }
@@ -1275,6 +1306,7 @@ export default async function render(root, ctx) {
   }
 
   async function openFolder(accountId, folderId) {
+    if (leaveOutbox()) drawReaderEmpty();
     state.accountId = accountId;
     state.folderId = folderId;
     state.view = null;
@@ -1383,6 +1415,7 @@ export default async function render(root, ctx) {
   if (ctx.query.oauth || ctx.query.oauth_error) setUrl();
 
   return () => {
+    leaveOutbox();
     document.removeEventListener('keydown', onKey);
     offs.forEach((off) => off());
   };

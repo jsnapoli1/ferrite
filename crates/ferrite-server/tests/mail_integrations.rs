@@ -248,8 +248,26 @@ async fn mock_llm(calls: Arc<AtomicUsize>) -> String {
     url
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn mail_integrations_against_a_real_server() {
+#[test]
+fn mail_integrations_against_a_real_server() {
+    // The scenario is one very large future (unoptimized builds): run it on a thread with
+    // room for it rather than the test harness's default stack.
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(Box::pin(scenario()))
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+async fn scenario() {
     let Some(t) = target() else {
         eprintln!("FERRITE_TEST_IMAP/FERRITE_TEST_SIEVE/FERRITE_TEST_MAIL_DIR are not set; skipping (see the top of tests/mail_integrations.rs)");
         return;
