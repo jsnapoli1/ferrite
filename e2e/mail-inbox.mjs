@@ -496,6 +496,7 @@ try {
   await row(dark, 'Big sale this week').click();
   await dark.locator('.ml-thread-tags .ml-tag').first().waitFor();
   await rowAction(dark, 'Big sale this week', 'More actions');
+  await dark.waitForTimeout(200); // the menu fades in
   await dark.screenshot({ path: `${shots}/inbox-dark-menu.png` });
   await dark.keyboard.press('Escape');
   await dark.context().close();
@@ -510,6 +511,7 @@ try {
   await phone.screenshot({ path: `${shots}/inbox-phone-list.png` });
   await row(phone, 'Big sale this week').locator('.ml-row-actions').getByRole('button', { name: 'More actions' }).click();
   await menuItem(phone, 'Tags…').waitFor();
+  await phone.waitForTimeout(200);
   await phone.screenshot({ path: `${shots}/inbox-phone-menu.png` });
   await phone.keyboard.press('Escape');
   await phone.locator('.ml-list-head h2').click();
@@ -524,6 +526,7 @@ try {
   await phone.getByRole('button', { name: 'Advanced search' }).click();
   await phone.locator('#ml-as-from').waitFor();
   assert(await phone.evaluate(() => document.documentElement.scrollWidth <= 390), 'no horizontal scroll (dialog)');
+  await phone.waitForTimeout(300); // the dialog fades in
   await phone.screenshot({ path: `${shots}/inbox-phone-search.png` });
   await phone.context().close();
 
