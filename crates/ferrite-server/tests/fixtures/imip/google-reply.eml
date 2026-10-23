@@ -1,0 +1,74 @@
+From: Guest Person <{FROM}>
+To: alice@example.test
+Subject: Accepted: {SUMMARY} @ {DAY} (alice@example.test)
+Date: {DATE}
+Message-ID: <{MSGID}>
+Reply-To: Guest Person <{FROM}>
+Sender: Google Calendar <calendar-notification@google.com>
+Auto-Submitted: auto-generated
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="000000000000b1c2d3e4"
+
+--000000000000b1c2d3e4
+Content-Type: multipart/alternative; boundary="000000000000b1c2d3e5"
+
+--000000000000b1c2d3e5
+Content-Type: text/plain; charset="UTF-8"; format=flowed; delsp=yes
+
+Guest Person has accepted this invitation.
+
+{SUMMARY}
+Invitation from Google Calendar
+
+--000000000000b1c2d3e5
+Content-Type: text/calendar; charset="UTF-8"; method=REPLY
+Content-Transfer-Encoding: 7bit
+
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+CALSCALE:GREGORIAN
+METHOD:REPLY
+BEGIN:VEVENT
+DTSTART:{START_UTC}
+DTEND:{END_UTC}
+DTSTAMP:{DTSTAMP}
+ORGANIZER;CN=Alice:mailto:alice@example.test
+UID:{UID}
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT={PARTSTAT};CN=Guest Person;X-NUM-GUESTS=0:mailto:{ATTENDEE}
+CREATED:20261020T100000Z
+DESCRIPTION:
+LAST-MODIFIED:{DTSTAMP}
+LOCATION:
+SEQUENCE:{SEQ}
+STATUS:CONFIRMED
+SUMMARY:{SUMMARY}
+TRANSP:OPAQUE
+END:VEVENT
+END:VCALENDAR
+
+--000000000000b1c2d3e5--
+--000000000000b1c2d3e4
+Content-Type: application/ics; name="invite.ics"
+Content-Disposition: attachment; filename="invite.ics"
+Content-Transfer-Encoding: 7bit
+
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+CALSCALE:GREGORIAN
+METHOD:REPLY
+BEGIN:VEVENT
+DTSTART:{START_UTC}
+DTEND:{END_UTC}
+DTSTAMP:{DTSTAMP}
+ORGANIZER;CN=Alice:mailto:alice@example.test
+UID:{UID}
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT={PARTSTAT};CN=Guest Person;X-NUM-GUESTS=0:mailto:{ATTENDEE}
+SEQUENCE:{SEQ}
+STATUS:CONFIRMED
+SUMMARY:{SUMMARY}
+END:VEVENT
+END:VCALENDAR
+
+--000000000000b1c2d3e4--

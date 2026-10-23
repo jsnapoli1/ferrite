@@ -22,10 +22,15 @@
 //!   (XOAUTH2). * `provisioning`: admin templates. * `settings`: admin settings.
 //! * `abuse`: sending alerts. * `antispam`: report spam / not spam. * `background`: periodic
 //!   sync of every account.
+//! * `managesieve`, `sieve`, `filters`: Sieve filters and the autoresponder. * `imip`:
+//!   meeting invitations. * `itinerary`: travel reservations. * `unsubscribe`:
+//!   List-Unsubscribe. * `people`: contacts for senders and recipients. * `agenda`:
+//!   events and tasks from a message. * `integrations`: their per-account settings.
 //! * Inbox management (see `inbox`): `prefs`, `tags`, `classify`, `snooze`, `folders`,
 //!   `views` (unified views, advanced search, deep links), `quick_actions`, `mailto`.
 
 pub mod abuse;
+pub mod agenda;
 pub mod antispam;
 pub mod autoconfig;
 pub mod background;
@@ -34,20 +39,28 @@ pub mod compose;
 pub mod crypto;
 pub mod delegation;
 pub mod dns;
+pub mod filters;
 pub mod folders;
 pub mod imap;
+pub mod imip;
 pub mod inbox;
+pub mod integrations;
+pub mod itinerary;
 pub mod mailto;
+pub mod managesieve;
 pub mod oauth;
 pub mod parse;
+pub mod people;
 pub mod prefs;
 pub mod provisioning;
 pub mod quick_actions;
 pub mod settings;
+pub mod sieve;
 pub mod snooze;
 pub mod store;
 pub mod sync;
 pub mod tags;
+pub mod unsubscribe;
 pub mod views;
 
 pub use delegation::{MailRight, MailRole};

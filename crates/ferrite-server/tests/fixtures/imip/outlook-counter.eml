@@ -1,0 +1,43 @@
+From: Guest Person <guest@example.org>
+To: Alice <alice@example.test>
+Subject: New Time Proposed: {SUMMARY}
+Date: {DATE}
+Message-ID: <{MSGID}>
+Thread-Topic: {SUMMARY}
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="_000_AM0PR02MB1111_"
+
+--_000_AM0PR02MB1111_
+Content-Type: text/plain; charset="us-ascii"
+
+Could we move this a bit later?
+
+--_000_AM0PR02MB1111_
+Content-Type: text/calendar; charset="utf-8"; method=COUNTER
+Content-Transfer-Encoding: quoted-printable
+
+BEGIN:VCALENDAR
+METHOD:COUNTER
+PRODID:Microsoft Exchange Server 2010
+VERSION:2.0
+BEGIN:VEVENT
+ORGANIZER;CN=Alice:mailto:alice@example.test
+ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=TENTATIVE;RSVP=TRUE;CN=Guest Person:=
+mailto:guest@example.org
+COMMENT;LANGUAGE=en-US:Could we move this a bit later?\n
+UID:{UID}
+SUMMARY;LANGUAGE=en-US:{SUMMARY}
+DTSTART:{START_UTC}
+DTEND:{END_UTC}
+CLASS:PUBLIC
+PRIORITY:5
+DTSTAMP:{DTSTAMP}
+TRANSP:OPAQUE
+STATUS:CONFIRMED
+SEQUENCE:{SEQ}
+X-MICROSOFT-CDO-APPT-SEQUENCE:{SEQ}
+X-MS-OLK-ORIGINALSTART:{START_UTC}
+END:VEVENT
+END:VCALENDAR
+
+--_000_AM0PR02MB1111_--

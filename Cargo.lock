@@ -1244,6 +1244,7 @@ dependencies = [
  "hex",
  "hkdf 0.13.0",
  "hmac 0.13.0",
+ "html5ever",
  "lettre",
  "mail-parser",
  "mime_guess",

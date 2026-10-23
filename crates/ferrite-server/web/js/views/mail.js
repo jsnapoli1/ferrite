@@ -26,6 +26,7 @@ import {
   advancedSearchDialog, filterSummary, inboxSettingsDialog, stepIcon,
 } from './mail-dialogs.js';
 import { mailSettingsDialog } from './mail-settings.js';
+import { decorateMessage, decorateThread, messageMenuItems, accountMenuItems, navExtras } from './mail-integrations.js';
 
 const PAGE = 50;
 const IMPORTANT = '$label1';
@@ -187,6 +188,7 @@ export default async function render(root, ctx) {
         { label: 'Quick actions…', icon: 'zap', run: () => manageQuickActions(a) },
         p.configure && { label: 'Edit account', icon: 'settings', run: () => editAccount(a) },
         p.share && { label: 'Share…', icon: 'share', run: () => shareDialog(a).then(loadAccounts).catch(errorToast) },
+        ...accountMenuItems(a, ctx),
         a.auth_method === 'xoauth2' && p.authenticate && { label: `Reconnect with ${PROVIDER_LABEL[a.oauth_provider] || 'the provider'}`, icon: 'key', run: () => startOAuth(a.oauth_provider, { email: a.email, accountId: a.id }).catch(errorToast) },
         many && index > 0 && { label: 'Move up', icon: 'chevron-left', run: () => moveAccount(a.id, -1) },
         many && index < state.accounts.length - 1 && { label: 'Move down', icon: 'chevron-down', run: () => moveAccount(a.id, 1) },
@@ -239,6 +241,7 @@ export default async function render(root, ctx) {
       const quota = quotaBar(a);
       if (quota) tree.appendChild(quota);
     });
+    navExtras(tree, ctx, { openMessage, compose });
     nav.appendChild(tree);
     if (state.canAdd) nav.appendChild(h('div.ml-nav-foot', h('button.btn.ghost.sm', { type: 'button', onclick: addAccount }, icon('plus', 'sm'), 'Add account')));
   }
@@ -664,6 +667,7 @@ export default async function render(root, ctx) {
             : { label: 'Report spam', icon: 'junk', run: () => act('spam', [current.id]) },
           ...threadMenuItems(current),
           { label: 'Download (.eml)', icon: 'download', run: () => { location.href = `/api/mail/messages/${encodeURIComponent(current.id)}/raw`; } },
+          ...messageMenuItems(current, ctx, { accounts: state.accounts }),
         ]),
       }, icon('more', 'sm'))));
     const cards = h('div.ml-cards');
@@ -673,6 +677,7 @@ export default async function render(root, ctx) {
       const expanded = m.id === current.id || !m.seen;
       cards.appendChild(messageCard(m, expanded));
     }
+    decorateThread(box, cards, thread, current, ctx, { compose, accounts: state.accounts });
     clear(reader).appendChild(box);
     reader.scrollTop = 0;
     const openCard = cards.querySelector(`[data-id="${CSS.escape(current.id)}"]`);
@@ -760,6 +765,7 @@ export default async function render(root, ctx) {
           h('button.btn.ghost.icon.sm', { type: 'button', 'aria-label': `Save ${a.name} to Files`, title: 'Save to Files', onclick: () => saveToFiles(message.id, a) }, icon('files', 'sm')));
       })));
     }
+    decorateMessage(body, message, ctx, { accounts: state.accounts });
   }
 
   async function saveToFiles(messageId, a) {

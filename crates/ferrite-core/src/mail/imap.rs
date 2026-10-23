@@ -609,6 +609,26 @@ impl ImapConn {
         Ok(fetches.iter().filter_map(owned_fetch).collect())
     }
 
+    /// The UIDs in `set` whose MIME structure has a calendar part (`text/calendar` or
+    /// `application/ics`): meeting invitations and replies, found without fetching bodies.
+    pub async fn uids_with_calendar(&mut self, set: &str) -> Result<Vec<u32>> {
+        let set = set.to_string();
+        let fetches = self
+            .run("FETCH", |s| {
+                Box::pin(async move {
+                    let stream = s.uid_fetch(set, "(UID BODYSTRUCTURE)").await?;
+                    stream.try_collect::<Vec<_>>().await
+                })
+            })
+            .await?;
+        self.drain();
+        Ok(fetches
+            .iter()
+            .filter(|f| f.bodystructure().is_some_and(has_calendar_part))
+            .filter_map(|f| f.uid)
+            .collect())
+    }
+
     pub async fn uid_search(&mut self, query: &str) -> Result<Vec<u32>> {
         let q = query.to_string();
         let found = self.run("SEARCH", |s| Box::pin(s.uid_search(q))).await?;
@@ -828,6 +848,20 @@ impl ImapConn {
         };
         conn.drain();
         Ok((conn, changed))
+    }
+}
+
+/// Whether a BODYSTRUCTURE contains a `text/calendar` or `application/ics` part.
+fn has_calendar_part(bs: &async_imap::imap_proto::BodyStructure<'_>) -> bool {
+    use async_imap::imap_proto::BodyStructure as B;
+    let is_cal = |c: &async_imap::imap_proto::BodyContentCommon<'_>| {
+        let (t, s) = (c.ty.ty.to_ascii_lowercase(), c.ty.subtype.to_ascii_lowercase());
+        (t == "text" && s == "calendar") || (t == "application" && s == "ics")
+    };
+    match bs {
+        B::Basic { common, .. } | B::Text { common, .. } => is_cal(common),
+        B::Message { body, .. } => has_calendar_part(body),
+        B::Multipart { bodies, .. } => bodies.iter().any(has_calendar_part),
     }
 }
 

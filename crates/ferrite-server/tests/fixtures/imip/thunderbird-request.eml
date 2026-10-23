@@ -1,0 +1,89 @@
+From: Organizer One <org@example.org>
+To: Alice <alice@example.test>, bob@example.org
+Subject: Invitation: Design review @ {DAY}
+Date: {DATE}
+Message-ID: <{MSGID}>
+MIME-Version: 1.0
+User-Agent: Mozilla Thunderbird
+Content-Type: multipart/mixed; boundary="------------mixA1B2"
+
+This is a multi-part message in MIME format.
+--------------mixA1B2
+Content-Type: multipart/alternative; boundary="------------altC3D4"
+
+--------------altC3D4
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: 7bit
+
+You have been invited to a meeting: Design review
+When: {DAY} 10:00 Europe/Berlin
+Where: Room 4
+
+--------------altC3D4
+Content-Type: text/calendar; charset=UTF-8; method=REQUEST
+Content-Transfer-Encoding: 8bit
+
+BEGIN:VCALENDAR
+PRODID:-//Mozilla.org/NONSGML Mozilla Calendar V1.1//EN
+VERSION:2.0
+METHOD:REQUEST
+BEGIN:VTIMEZONE
+TZID:Europe/Berlin
+BEGIN:DAYLIGHT
+TZOFFSETFROM:+0100
+TZOFFSETTO:+0200
+TZNAME:CEST
+DTSTART:19700329T020000
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3
+END:DAYLIGHT
+BEGIN:STANDARD
+TZOFFSETFROM:+0200
+TZOFFSETTO:+0100
+TZNAME:CET
+DTSTART:19701025T030000
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10
+END:STANDARD
+END:VTIMEZONE
+BEGIN:VEVENT
+CREATED:20261020T100000Z
+LAST-MODIFIED:{DTSTAMP}
+DTSTAMP:{DTSTAMP}
+UID:{UID}
+SUMMARY:{SUMMARY}
+ORGANIZER;RSVP=TRUE;CN=Organizer One;PARTSTAT=ACCEPTED;ROLE=CHAIR:mailto:org@example.org
+ATTENDEE;RSVP=TRUE;CN=Alice;PARTSTAT=NEEDS-ACTION;ROLE=REQ-PARTICIPANT:mailto:alice@example.test
+ATTENDEE;RSVP=TRUE;PARTSTAT=NEEDS-ACTION;ROLE=OPT-PARTICIPANT:mailto:bob@example.org
+DTSTART;TZID=Europe/Berlin:{START}
+DTEND;TZID=Europe/Berlin:{END}
+LOCATION:Room 4
+DESCRIPTION:Walk through the new designs.
+SEQUENCE:{SEQ}
+TRANSP:OPAQUE
+X-MOZ-SEND-INVITATIONS:TRUE
+X-MOZ-SEND-INVITATIONS-UNDISCLOSED:FALSE
+END:VEVENT
+END:VCALENDAR
+
+--------------altC3D4--
+--------------mixA1B2
+Content-Type: application/ics; name="invite.ics"
+Content-Disposition: attachment; filename="invite.ics"
+Content-Transfer-Encoding: 8bit
+
+BEGIN:VCALENDAR
+PRODID:-//Mozilla.org/NONSGML Mozilla Calendar V1.1//EN
+VERSION:2.0
+METHOD:REQUEST
+BEGIN:VEVENT
+DTSTAMP:{DTSTAMP}
+UID:{UID}
+SUMMARY:{SUMMARY}
+ORGANIZER;RSVP=TRUE;CN=Organizer One;PARTSTAT=ACCEPTED;ROLE=CHAIR:mailto:org@example.org
+ATTENDEE;RSVP=TRUE;CN=Alice;PARTSTAT=NEEDS-ACTION;ROLE=REQ-PARTICIPANT:mailto:alice@example.test
+DTSTART;TZID=Europe/Berlin:{START}
+DTEND;TZID=Europe/Berlin:{END}
+SEQUENCE:{SEQ}
+END:VEVENT
+END:VCALENDAR
+
+--------------mixA1B2--

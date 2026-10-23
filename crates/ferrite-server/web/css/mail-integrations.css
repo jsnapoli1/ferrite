@@ -1,0 +1,128 @@
+/* Mail integrations: invitation and reservation cards, AI summary/replies/translation,
+   follow-ups, the filters dialog, and the reader's sender and unsubscribe lines. */
+
+/* ---- above a message ---------------------------------------------------------------- */
+.mx-extras { display: flex; flex-direction: column; gap: 8px; margin: 2px 0 12px; }
+.mx-sender, .mx-unsub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--text-2); min-width: 0; }
+.mx-sender .btn.sm { height: 24px; padding: 0 8px; }
+.mx-unsub { padding: 6px 10px; border-radius: var(--radius-sm); background: var(--surface-2); }
+.mx-unsub.done { background: var(--ok-soft); color: var(--ok); }
+
+/* ---- invitation and reservation cards -------------------------------------------------- */
+.mi-card { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--radius-sm); background: var(--surface-2); padding: 10px 14px 12px; min-width: 0; }
+.mi-card.mi-cancelled { border-left-color: var(--danger); }
+.mi-card.mi-cancelled .mi-title { text-decoration: line-through; color: var(--text-2); }
+.mi-card.mi-reply { border-left-color: var(--info); }
+.mi-card.mi-trip { border-left-color: var(--info); }
+.mi-head { display: flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.mi-head .pill { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.mi-title { margin: 4px 0 6px; font-size: 16px; overflow-wrap: anywhere; }
+.mi-facts { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; margin: 0; font-size: 13px; }
+.mi-facts dt { color: var(--text-3); }
+.mi-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.mi-facts code { font-family: var(--mono); font-size: 12px; background: var(--surface); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border); }
+.mi-when { font-weight: 600; }
+.mi-guests summary { cursor: pointer; color: var(--text-2); }
+.mi-guests ul { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.mi-guests li { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.mi-desc { margin: 8px 0 0; font-size: 13px; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.mi-conflicts, .mi-warn, .mi-note { display: flex; align-items: flex-start; gap: 6px; margin-top: 8px; font-size: 13px; }
+.mi-conflicts { color: var(--warn); }
+.mi-conflicts span, .mi-warn span { min-width: 0; overflow-wrap: anywhere; }
+.mi-warn { color: var(--danger); background: var(--danger-soft); padding: 6px 8px; border-radius: var(--radius-sm); }
+.mi-note { color: var(--text-2); align-items: center; flex-wrap: wrap; }
+.mi-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.mi-actions .btn.busy { opacity: .6; }
+.mi-answer { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); margin-right: 4px; }
+.mi-extra { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.mi-extra .mi-comment { flex: 1 1 200px; height: 30px; padding: 4px 8px; font-size: 13px; }
+.mi-inline { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-weight: 400; font-size: 13px; }
+.mi-cal-select { width: auto; max-width: 220px; height: 30px; padding: 3px 8px; font-size: 13px; }
+.mi-reply { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; font-size: 13px; }
+.mi-quote { margin: 8px 0 0; padding: 4px 10px; border-left: 3px solid var(--border); color: var(--text-2); font-size: 13px; white-space: pre-wrap; }
+.mi-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; color: var(--text-2); }
+.mi-status.applied, .mi-status.answered { color: var(--ok); }
+.mi-status.rejected, .mi-status.error { color: var(--danger); }
+.mi-status.outdated { color: var(--warn); }
+.mi-form .mi-row { display: flex; gap: 10px; }
+
+/* ---- AI ------------------------------------------------------------------------------ */
+.ma-summary, .ma-replies, .ma-translation { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 10px 14px; margin-bottom: 10px; }
+.ma-summary { background: var(--info-soft); border-color: transparent; }
+.ma-head { display: flex; align-items: center; gap: 6px; color: var(--text-2); }
+.ma-head .icon { color: var(--info); }
+.ma-summary-text p { margin: 6px 0 0; line-height: 1.5; }
+.ma-foot { margin-top: 6px; }
+.ma-replies { margin-top: 10px; margin-bottom: 0; }
+.ma-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.ma-chip { height: auto; min-height: 28px; white-space: normal; text-align: left; border-radius: 14px; }
+.ma-translation { background: var(--surface-2); }
+.ma-translation-text { margin-top: 6px; }
+.ma-tr-subject { font-weight: 600; margin-bottom: 4px; }
+.ma-tr-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.ma-followup-btn { margin-bottom: 6px; }
+.ma-followups { max-height: 60vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.ma-followup-actions { display: flex; gap: 4px; flex: none; }
+
+/* ---- filters dialog ------------------------------------------------------------------ */
+.mf-tabs { margin-bottom: 12px; }
+.mf-tabs button { display: inline-flex; align-items: center; gap: 6px; }
+.mf-tabs button:disabled { opacity: .45; cursor: default; }
+.mf-pane { min-height: 260px; }
+.mf-list { margin-bottom: 10px; }
+.mf-item.off strong, .mf-item.off .mf-desc { opacity: .55; }
+.mf-item input[type=checkbox] { width: auto; flex: none; }
+.mf-desc { white-space: normal; overflow-wrap: anywhere; }
+.mf-foot { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 10px; }
+.mf-editor-title { margin: 0 0 8px; font-size: 15px; }
+.mf-editor h4 { margin: 14px 0 6px; font-size: 13px; color: var(--text-2); }
+.mf-match { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; font-size: 14px; }
+.mf-match select { width: auto; }
+.mf-rows { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+.mf-row { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.mf-row select { width: auto; flex: none; max-width: 40%; }
+.mf-row input { flex: 1; }
+.mf-arg { flex: 1; display: flex; min-width: 0; }
+.mf-arg select, .mf-arg input { flex: 1; max-width: none; }
+.mf-notice { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--info-soft); color: var(--text); margin-bottom: 10px; font-size: 14px; }
+.mf-quote { margin: 8px 0 0; padding: 6px 12px; border-left: 3px solid var(--border); white-space: pre-wrap; color: var(--text-2); }
+.mf-grid, .mf-grid3 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.mf-grid3 { grid-template-columns: 2fr 1fr 1.4fr; }
+.mf-script { font-family: var(--mono); font-size: 12.5px; line-height: 1.45; white-space: pre; min-height: 280px; tab-size: 4; }
+.mf-error { margin: 8px 0 0; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger); font-family: var(--mono); font-size: 12px; white-space: pre-wrap; }
+.mf-ext { margin-top: 8px; overflow-wrap: anywhere; }
+.mf-server { border: 0; padding: 0; margin: 0 0 6px; min-width: 0; }
+.mf-server:disabled { opacity: .55; }
+.mf h4 { margin: 16px 0 2px; font-size: 13px; }
+.mf h4:first-child { margin-top: 0; }
+
+/* ---- event, task and contact dialogs ---------------------------------------------------- */
+.mx-form .field { margin-bottom: 8px; }
+.mx-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.mx-invite { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px 12px 8px; margin: 6px 0 10px; min-width: 0; }
+.mx-invite legend { font-size: 13px; font-weight: 600; color: var(--text-2); padding: 0 4px; }
+.mx-invite .check { overflow-wrap: anywhere; }
+.mx-ai { display: flex; align-items: center; gap: 6px; }
+.mx-contacts { max-height: 240px; overflow: auto; margin-top: 8px; }
+
+.set-absence-state { display: inline-flex; align-items: center; }
+
+@media (max-width: 760px) {
+  .mi-card { padding: 9px 11px 11px; }
+  .mi-facts { grid-template-columns: 1fr; gap: 0; }
+  .mi-facts dt { margin-top: 4px; font-size: 12px; }
+  .mf-grid, .mf-grid3, .mx-grid { grid-template-columns: 1fr; }
+  .mf-row { flex-wrap: wrap; }
+  .mf-row select { max-width: none; flex: 1 1 40%; }
+  /* The value and its remove button share the second line. */
+  .mf-row input, .mf-arg { flex: 1 1 calc(100% - 40px); }
+  .ma-followup { flex-wrap: wrap; }
+  .ma-followup-actions { width: 100%; justify-content: flex-end; }
+}
+.mf-check-now { margin: 0 0 8px 26px; }
+
+/* Dialogs of this file stay within the screen (the backdrop's grid would otherwise size them to
+   their widest unbreakable content, such as the tab row). */
+.modal:has(.mf), .modal:has(.mx-form), .modal:has(.ma-followups), .modal:has(.mi-form) { max-width: calc(100vw - 32px); }
+.modal:has(.mf) .modal-head h2 { overflow-wrap: anywhere; }
+.mf, .mf-pane, .mf-tab { min-width: 0; }
