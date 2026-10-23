@@ -205,7 +205,10 @@ async fn image_server(seen: Arc<Mutex<Vec<String>>>) -> u16 {
                     "/huge.png" => ("200 OK", "image/png", vec![0x89; 9 * 1024 * 1024]),
                     _ => ("404 Not Found", "text/plain", b"no".to_vec()),
                 };
-                let head = format!("HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nSet-Cookie: tracker=1\r\nConnection: close\r\n\r\n", body.len());
+                let head = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nSet-Cookie: tracker=1\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
                 let _ = s.write_all(head.as_bytes()).await;
                 let _ = s.write_all(&body).await;
             });
@@ -255,7 +258,10 @@ async fn server(cfg_mut: impl FnOnce(&mut Config)) -> (tempfile::TempDir, Core, 
         url,
     };
     let setup = b
-        .post("/api/setup", json!({"username": "alice", "password": "alice-password", "display_name": "Alice"}))
+        .post(
+            "/api/setup",
+            json!({"username": "alice", "password": "alice-password", "display_name": "Alice"}),
+        )
         .await;
     let user_id = setup["user"]["id"].as_str().unwrap().to_string();
     (dir, core, state, b, user_id)
@@ -269,13 +275,21 @@ async fn security_apis_without_a_mail_server() {
 
     // Settings default off; patch them.
     let s = b.get("/api/mail/security/settings").await;
-    assert_eq!(s["settings"], json!({"internal_enabled": false, "index_decrypted": false, "assistant_decrypted": false}));
-    let (st, v) = b.call(Method::PATCH, "/api/mail/security/settings", Some(json!({"internal_enabled": true}))).await;
+    assert_eq!(
+        s["settings"],
+        json!({"internal_enabled": false, "index_decrypted": false, "assistant_decrypted": false})
+    );
+    let (st, v) = b
+        .call(Method::PATCH, "/api/mail/security/settings", Some(json!({"internal_enabled": true})))
+        .await;
     assert!(st.is_success() && v["settings"]["internal_enabled"] == true, "{v}");
 
     // Trusted senders: addresses and domains, normalized, de-duplicated, removable.
     let e = b.post("/api/mail/trusted-senders", json!({"value": " News@Example.ORG "})).await;
-    assert_eq!((e["entry"]["kind"].as_str(), e["entry"]["value"].as_str()), (Some("address"), Some("news@example.org")));
+    assert_eq!(
+        (e["entry"]["kind"].as_str(), e["entry"]["value"].as_str()),
+        (Some("address"), Some("news@example.org"))
+    );
     b.post("/api/mail/trusted-senders", json!({"value": "news@example.org"})).await;
     b.post("/api/mail/trusted-senders", json!({"value": "@shop.example"})).await;
     let list = b.get("/api/mail/trusted-senders").await["entries"].clone();
@@ -292,7 +306,10 @@ async fn security_apis_without_a_mail_server() {
     // Internal addresses and the composer's check (own addresses are not special here).
     b.post("/api/mail/internal-addresses", json!({"value": "example.test"})).await;
     let c = b
-        .post("/api/mail/security/check-recipients", json!({"recipients": ["Bob <bob@example.test>", "eve@attacker.example", "x@sub.example.test"]}))
+        .post(
+            "/api/mail/security/check-recipients",
+            json!({"recipients": ["Bob <bob@example.test>", "eve@attacker.example", "x@sub.example.test"]}),
+        )
         .await;
     assert_eq!(c["external"], json!(["eve@attacker.example", "x@sub.example.test"]), "{c}");
     assert_eq!(c["smime"].as_array().unwrap().len(), 3);
@@ -300,7 +317,9 @@ async fn security_apis_without_a_mail_server() {
 
     // S/MIME: a PKCS#12 import; the key is sealed at rest and never returned.
     let p12 = base64::engine::general_purpose::STANDARD.encode(fixture("alice.p12"));
-    let (st, v) = b.call(Method::POST, "/api/mail/smime/certificates", Some(json!({"pkcs12": p12, "password": "wrong"}))).await;
+    let (st, v) = b
+        .call(Method::POST, "/api/mail/smime/certificates", Some(json!({"pkcs12": p12, "password": "wrong"})))
+        .await;
     assert_eq!(st, StatusCode::BAD_REQUEST, "{v}");
     assert!(v["error"].as_str().unwrap().contains("password"), "{v}");
     let cert = b.post("/api/mail/smime/certificates", json!({"pkcs12": p12, "password": "alice-p12"})).await["certificate"].clone();
@@ -318,7 +337,10 @@ async fn security_apis_without_a_mail_server() {
     assert!(!sealed.contains(&key_b64[..40]), "the private key is encrypted at rest");
     // The sealed key is bound to its row: copied to another row it does not open.
     let other = b
-        .post("/api/mail/smime/certificates", json!({"certificate": String::from_utf8(fixture("bob.pem")).unwrap()}))
+        .post(
+            "/api/mail/smime/certificates",
+            json!({"certificate": String::from_utf8(fixture("bob.pem")).unwrap()}),
+        )
         .await["certificate"]
         .clone();
     assert_eq!((other["kind"].as_str(), other["has_key"].as_bool()), (Some("contact"), Some(false)));
@@ -326,7 +348,11 @@ async fn security_apis_without_a_mail_server() {
     let opened = sb.open(&format!("smime-key:{}", cert["id"].as_str().unwrap()), &sealed).unwrap();
     assert_eq!(opened, key_b64, "it is Alice's key, sealed");
     assert!(sb.open(&format!("smime-key:{}", other["id"].as_str().unwrap()), &sealed).is_err());
-    assert!(ferrite_core::mail::crypto::SecretBox::new("another-server-secret").open(&format!("smime-key:{}", cert["id"].as_str().unwrap()), &sealed).is_err());
+    assert!(
+        ferrite_core::mail::crypto::SecretBox::new("another-server-secret")
+            .open(&format!("smime-key:{}", cert["id"].as_str().unwrap()), &sealed)
+            .is_err()
+    );
     // PEM certificate + PEM key import; a key that does not match is refused.
     let (st, v) = b
         .call(
@@ -339,15 +365,26 @@ async fn security_apis_without_a_mail_server() {
     assert!(v["error"].as_str().unwrap().contains("does not belong"), "{v}");
     // A CA becomes a trusted issuer; the PEM download never includes a key.
     let ca = b
-        .post("/api/mail/smime/certificates", json!({"certificate": String::from_utf8(fixture("ca.pem")).unwrap()}))
+        .post(
+            "/api/mail/smime/certificates",
+            json!({"certificate": String::from_utf8(fixture("ca.pem")).unwrap()}),
+        )
         .await["certificate"]
         .clone();
     assert_eq!(ca["kind"], "authority");
-    let pem = b.raw(&format!("/api/mail/smime/certificates/{}/pem", cert["id"].as_str().unwrap())).await.text().await.unwrap();
+    let pem = b
+        .raw(&format!("/api/mail/smime/certificates/{}/pem", cert["id"].as_str().unwrap()))
+        .await
+        .text()
+        .await
+        .unwrap();
     assert!(pem.starts_with("-----BEGIN CERTIFICATE-----") && !pem.contains("PRIVATE"));
     // An expired certificate is flagged.
     let old = b
-        .post("/api/mail/smime/certificates", json!({"certificate": String::from_utf8(fixture("expired.pem")).unwrap()}))
+        .post(
+            "/api/mail/smime/certificates",
+            json!({"certificate": String::from_utf8(fixture("expired.pem")).unwrap()}),
+        )
         .await["certificate"]
         .clone();
     assert_eq!(old["expired"], true);
@@ -365,7 +402,9 @@ async fn security_apis_without_a_mail_server() {
     assert!(core.mail_proxy_check(&user_id, &q["u"], past, &q["s"]).is_err(), "expired");
     assert!(core.mail_proxy_url(&user_id, "javascript:alert(1)").is_none());
     assert!(core.mail_proxy_url(&user_id, "file:///etc/passwd").is_none());
-    let (st, _) = b.call(Method::GET, &url.replace(&format!("s={}", q["s"]), &format!("s={}", "0".repeat(64))), None).await;
+    let (st, _) = b
+        .call(Method::GET, &url.replace(&format!("s={}", q["s"]), &format!("s={}", "0".repeat(64))), None)
+        .await;
     assert_eq!(st, StatusCode::FORBIDDEN);
     // Signed for this user but pointing at a private address: the SSRF guard refuses.
     let ssrf = core.mail_proxy_url(&user_id, "http://127.0.0.1:9/x.png").unwrap();
@@ -397,10 +436,18 @@ async fn security_apis_without_a_mail_server() {
     assert!(def("mail_trusted_senders_edit").annotations.is_none_or(|a| a["readOnlyHint"] != true));
     let r = state
         .tools
-        .call(&ctx, "mail_trusted_senders_edit", json!({"add": ["deals.example"], "remove": ["news@example.org"]}))
+        .call(
+            &ctx,
+            "mail_trusted_senders_edit",
+            json!({"add": ["deals.example"], "remove": ["news@example.org"]}),
+        )
         .await
         .unwrap();
-    assert!(r.text_content().contains("deals.example") && !r.text_content().contains("news@example.org"), "{}", r.text_content());
+    assert!(
+        r.text_content().contains("deals.example") && !r.text_content().contains("news@example.org"),
+        "{}",
+        r.text_content()
+    );
     let r = state
         .tools
         .call(&ctx, "mail_internal_addresses_edit", json!({"add": ["corp.example"], "warn": false}))
@@ -410,7 +457,11 @@ async fn security_apis_without_a_mail_server() {
     assert!(v["warn"] == false && v["internal_addresses"].to_string().contains("corp.example"), "{v}");
     // Another user sees none of it.
     let (st, _) = b
-        .call(Method::POST, "/api/admin/users", Some(json!({"username": "bob", "password": "bob-password-1", "display_name": "Bob"})))
+        .call(
+            Method::POST,
+            "/api/admin/users",
+            Some(json!({"username": "bob", "password": "bob-password-1", "display_name": "Bob"})),
+        )
         .await;
     assert!(st.is_success());
     let bob = Browser {
@@ -420,7 +471,9 @@ async fn security_apis_without_a_mail_server() {
     bob.post("/api/auth/login", json!({"username": "bob", "password": "bob-password-1"})).await;
     assert_eq!(bob.get("/api/mail/trusted-senders").await["entries"], json!([]));
     assert_eq!(bob.get("/api/mail/smime/certificates").await["certificates"], json!([]));
-    let (st, _) = bob.call(Method::DELETE, &format!("/api/mail/smime/certificates/{}", cert["id"].as_str().unwrap()), None).await;
+    let (st, _) = bob
+        .call(Method::DELETE, &format!("/api/mail/smime/certificates/{}", cert["id"].as_str().unwrap()), None)
+        .await;
     assert_eq!(st, StatusCode::NOT_FOUND);
     let (st, _) = bob.call(Method::GET, &url, None).await;
     assert_eq!(st, StatusCode::FORBIDDEN, "alice's proxy URL does not work for bob");
@@ -459,7 +512,9 @@ async fn mail_security_against_a_real_imap_server() {
     })
     .await;
     let (smtp_port, mut sink) = ferrite_core::mailer::sink::sink().await;
-    let (st, v) = b.call(Method::PATCH, "/api/admin/mail/settings", Some(json!({"allow_local_servers": true}))).await;
+    let (st, v) = b
+        .call(Method::PATCH, "/api/admin/mail/settings", Some(json!({"allow_local_servers": true})))
+        .await;
     assert!(st.is_success(), "{v}");
     let account = b
         .post(
@@ -474,7 +529,8 @@ async fn mail_security_against_a_real_imap_server() {
     // A contact named like a phisher's display name, with a photo.
     let book = core.dav_collections(&user_id, "addressbook").await.unwrap().remove(0);
     let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-    let vcard = format!("BEGIN:VCARD\r\nVERSION:3.0\r\nUID:ada\r\nFN:Ada Lovelace\r\nEMAIL:ada@example.test\r\nPHOTO;ENCODING=b;TYPE=PNG:{png}\r\nEND:VCARD\r\n");
+    let vcard =
+        format!("BEGIN:VCARD\r\nVERSION:3.0\r\nUID:ada\r\nFN:Ada Lovelace\r\nEMAIL:ada@example.test\r\nPHOTO;ENCODING=b;TYPE=PNG:{png}\r\nEND:VCARD\r\n");
     core.put_dav_object(&book, "ada.vcf", &vcard, None, true).await.unwrap();
 
     // Mail arrives.
@@ -487,9 +543,7 @@ async fn mail_security_against_a_real_imap_server() {
                 .sign(raw.as_bytes())
                 .unwrap()
                 .to_header(),
-            _ => DkimSigner::from_key(
-                RsaKey::<Sha256>::from_key_der(rustls_pki_types::PrivateKeyDer::Pkcs8(rsa_pkcs8.as_ref().to_vec().into())).unwrap(),
-            )
+            _ => DkimSigner::from_key(RsaKey::<Sha256>::from_key_der(rustls_pki_types::PrivateKeyDer::Pkcs8(rsa_pkcs8.as_ref().to_vec().into())).unwrap())
                 .domain("signed.example")
                 .selector("rsa")
                 .headers(["From", "To", "Subject", "Date", "Message-ID"])
@@ -500,11 +554,45 @@ async fn mail_security_against_a_real_imap_server() {
         format!("{sig}{raw}")
     };
     let plain = "Content-Type: text/plain; charset=utf-8\r\n";
-    t.deliver(sign(message("Signer <news@signed.example>", "DKIM ed25519", "dkim-ed@signed.example", plain, "Signed with Ed25519.\r\n"), "ed").as_bytes())
-        .await;
-    t.deliver(sign(message("Signer <news@signed.example>", "DKIM rsa", "dkim-rsa@signed.example", plain, "Signed with RSA.\r\n"), "rsa").as_bytes())
-        .await;
-    let tampered = sign(message("Signer <news@signed.example>", "DKIM tampered", "dkim-bad@signed.example", plain, "Pay 10 EUR.\r\n"), "ed").replace("Pay 10 EUR.", "Pay 10000 EUR.");
+    t.deliver(
+        sign(
+            message(
+                "Signer <news@signed.example>",
+                "DKIM ed25519",
+                "dkim-ed@signed.example",
+                plain,
+                "Signed with Ed25519.\r\n",
+            ),
+            "ed",
+        )
+        .as_bytes(),
+    )
+    .await;
+    t.deliver(
+        sign(
+            message(
+                "Signer <news@signed.example>",
+                "DKIM rsa",
+                "dkim-rsa@signed.example",
+                plain,
+                "Signed with RSA.\r\n",
+            ),
+            "rsa",
+        )
+        .as_bytes(),
+    )
+    .await;
+    let tampered = sign(
+        message(
+            "Signer <news@signed.example>",
+            "DKIM tampered",
+            "dkim-bad@signed.example",
+            plain,
+            "Pay 10 EUR.\r\n",
+        ),
+        "ed",
+    )
+    .replace("Pay 10 EUR.", "Pay 10000 EUR.");
     t.deliver(tampered.as_bytes()).await;
     let phish_html = "Content-Type: text/html; charset=utf-8\r\nReply-To: collect@attacker.example\r\n";
     let phish = message(
@@ -516,7 +604,13 @@ async fn mail_security_against_a_real_imap_server() {
     )
     .replace("Date: Mon, 19 Oct 2026 09:00:00 +0000", "Date: Fri, 1 Jan 2038 09:00:00 +0000");
     t.deliver(phish.as_bytes()).await;
-    let fake_name = message("\"support@bank.example\" <x@attacker.example>", "Account locked", "fakename@attacker.example", plain, "Click.\r\n");
+    let fake_name = message(
+        "\"support@bank.example\" <x@attacker.example>",
+        "Account locked",
+        "fakename@attacker.example",
+        plain,
+        "Click.\r\n",
+    );
     t.deliver(fake_name.as_bytes()).await;
     let images = message(
         "Newsletter <news@shop.example>",
@@ -558,10 +652,14 @@ async fn mail_security_against_a_real_imap_server() {
     }
 
     let folders = b.get(&format!("/api/mail/accounts/{acc}/folders")).await["folders"].clone();
-    let inbox = folders.as_array().unwrap().iter().find(|f| f["role"] == "inbox").unwrap()["id"].as_str().unwrap().to_string();
+    let inbox = folders.as_array().unwrap().iter().find(|f| f["role"] == "inbox").unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let mut list = Value::Null;
     for _ in 0..100 {
-        b.call(Method::POST, &format!("/api/mail/accounts/{acc}/sync"), Some(json!({"folder_id": inbox}))).await;
+        b.call(Method::POST, &format!("/api/mail/accounts/{acc}/sync"), Some(json!({"folder_id": inbox})))
+            .await;
         list = b.get(&format!("/api/mail/folders/{inbox}/messages?limit=100")).await;
         if list["messages"].as_array().unwrap().len() >= 12 {
             break;
@@ -587,7 +685,11 @@ async fn mail_security_against_a_real_imap_server() {
 
     // DKIM over real DNS lookups, stored once verified.
     let r = report(id_of("DKIM ed25519")).await;
-    assert_eq!((r["dkim"]["status"].as_str(), r["dkim"]["domain"].as_str()), (Some("pass"), Some("signed.example")), "{r}");
+    assert_eq!(
+        (r["dkim"]["status"].as_str(), r["dkim"]["domain"].as_str()),
+        (Some("pass"), Some("signed.example")),
+        "{r}"
+    );
     let r = report(id_of("DKIM rsa")).await;
     assert_eq!(r["dkim"]["status"], "pass", "{r}");
     let r = report(id_of("DKIM tampered")).await;
@@ -597,7 +699,10 @@ async fn mail_security_against_a_real_imap_server() {
     // Stored: with the key gone from DNS, the result stays.
     records.lock().unwrap().clear();
     assert_eq!(report(id_of("DKIM ed25519")).await["dkim"]["status"], "pass");
-    let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mail_dkim_results WHERE status = 'pass'").fetch_one(&core.db).await.unwrap();
+    let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mail_dkim_results WHERE status = 'pass'")
+        .fetch_one(&core.db)
+        .await
+        .unwrap();
     assert_eq!(stored, 2);
 
     // Phishing hints.
@@ -612,7 +717,8 @@ async fn mail_security_against_a_real_imap_server() {
     assert_eq!(report(id_of("Two files")).await["phishing"], json!([]));
 
     // Internal addresses: senders outside the list are external (the switch is on).
-    b.call(Method::PATCH, "/api/mail/security/settings", Some(json!({"internal_enabled": true}))).await;
+    b.call(Method::PATCH, "/api/mail/security/settings", Some(json!({"internal_enabled": true})))
+        .await;
     b.post("/api/mail/internal-addresses", json!({"value": "example.test"})).await;
     assert_eq!(report(id_of("Urgent invoice")).await["external"], true);
     assert_eq!(report(id_of("Two files")).await["external"], false);
@@ -627,7 +733,11 @@ async fn mail_security_against_a_real_imap_server() {
     let doc = blocked.text().await.unwrap();
     assert!(!doc.contains("127.0.0.1"), "{doc}");
     let shown = b.raw(&format!("/api/mail/messages/{id}/html?remote=true")).await;
-    assert_eq!(shown.headers()["content-security-policy"].to_str().unwrap(), csp, "the same CSP: images only from Ferrite");
+    assert_eq!(
+        shown.headers()["content-security-policy"].to_str().unwrap(),
+        csp,
+        "the same CSP: images only from Ferrite"
+    );
     let doc = shown.text().await.unwrap();
     assert!(!doc.contains(&format!("127.0.0.1:{img_port}")), "no direct remote URL left: {doc}");
     let proxied: Vec<String> = doc
@@ -648,7 +758,10 @@ async fn mail_security_against_a_real_imap_server() {
     assert!(r.bytes().await.unwrap().starts_with(b"\x89PNG"));
     let upstream = seen.lock().unwrap()[before..].join("\n").to_ascii_lowercase();
     assert!(upstream.contains("get /pixel.png"), "{upstream}");
-    assert!(!upstream.contains("cookie:") && !upstream.contains("referer:"), "no cookies or referrer upstream: {upstream}");
+    assert!(
+        !upstream.contains("cookie:") && !upstream.contains("referer:"),
+        "no cookies or referrer upstream: {upstream}"
+    );
     // A "PNG" that is HTML is not served.
     let r = b.raw(&proxied[1]).await;
     assert_eq!(r.status(), StatusCode::UNPROCESSABLE_ENTITY);
@@ -659,11 +772,17 @@ async fn mail_security_against_a_real_imap_server() {
     assert!(report(id.clone()).await["trusted_sender"].is_null());
     b.post("/api/mail/trusted-senders", json!({"value": "shop.example", "kind": "domain"})).await;
     let r = report(id.clone()).await;
-    assert_eq!((r["trusted_sender"]["kind"].as_str(), r["trusted_sender"]["value"].as_str()), (Some("domain"), Some("shop.example")));
+    assert_eq!(
+        (r["trusted_sender"]["kind"].as_str(), r["trusted_sender"]["value"].as_str()),
+        (Some("domain"), Some("shop.example"))
+    );
 
     // Avatars: the contact's photo.
     let av = b.get("/api/mail/avatars?emails=ada@example.test").await;
-    assert!(av["avatars"]["ada@example.test"].as_str().unwrap().starts_with("data:image/png;base64,iVBOR"), "{av}");
+    assert!(
+        av["avatars"]["ada@example.test"].as_str().unwrap().starts_with("data:image/png;base64,iVBOR"),
+        "{av}"
+    );
 
     // View source and the ZIP of attachments.
     let src = b.get(&format!("/api/mail/messages/{}/source", id_of("Two files"))).await;
@@ -688,7 +807,9 @@ async fn mail_security_against_a_real_imap_server() {
             .collect()
     };
     assert_eq!(names, vec!["a.txt", "a (2).txt", "_.._evil.sh"], "unique names, no paths");
-    let (st, _) = b.call(Method::GET, &format!("/api/mail/messages/{}/attachments.zip", id_of("DKIM rsa")), None).await;
+    let (st, _) = b
+        .call(Method::GET, &format!("/api/mail/messages/{}/attachments.zip", id_of("DKIM rsa")), None)
+        .await;
     assert_eq!(st, StatusCode::BAD_REQUEST, "no attachments");
 
     // PGP inline is detected and handed over armored (Mailvelope decrypts in the browser).
@@ -702,7 +823,10 @@ async fn mail_security_against_a_real_imap_server() {
     assert_eq!(m["encrypted"], true);
     assert!(!m["text"].as_str().unwrap().contains("launch code"));
     let r = report(enc_id.clone()).await;
-    assert_eq!((r["smime"]["encrypted"].as_bool(), r["smime"]["decrypted"].as_bool()), (Some(true), Some(false)));
+    assert_eq!(
+        (r["smime"]["encrypted"].as_bool(), r["smime"]["decrypted"].as_bool()),
+        (Some(true), Some(false))
+    );
     assert!(r["smime"]["decrypt_error"].as_str().unwrap().contains("import your certificate"), "{r}");
     // With Alice's PKCS#12 it is decrypted (cached bodies of encrypted mail are re-read).
     let p12 = base64::engine::general_purpose::STANDARD.encode(fixture("alice.p12"));
@@ -711,11 +835,21 @@ async fn mail_security_against_a_real_imap_server() {
         let m = b.get(&format!("/api/mail/messages/{}", id_of(subject))).await["message"].clone();
         assert!(m["text"].as_str().unwrap().contains(&format!("The launch code is {code}.")), "{subject}: {m}");
         assert_eq!(m["preview"], "", "decrypted text stays out of previews");
-        assert!(m["attachments"].as_array().unwrap().iter().all(|a| a["name"] != "smime.p7m" && a["name"] != "smime.p7s"), "{m}");
+        assert!(
+            m["attachments"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|a| a["name"] != "smime.p7m" && a["name"] != "smime.p7s"),
+            "{m}"
+        );
     }
     let r = report(enc_id.clone()).await;
     assert_eq!(r["smime"]["decrypted"], true, "{r}");
-    let fts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM fts WHERE body LIKE '%3456%' OR body LIKE '%8901%' OR body LIKE '%6789%'").fetch_one(&core.db).await.unwrap();
+    let fts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM fts WHERE body LIKE '%3456%' OR body LIKE '%8901%' OR body LIKE '%6789%'")
+        .fetch_one(&core.db)
+        .await
+        .unwrap();
     assert_eq!(fts, 0, "decrypted text is not in the shared index");
     // Signatures: valid, untrusted until the CA is trusted; the signer's certificate is kept.
     let signed_id = id_of("Signed detached");
@@ -724,23 +858,41 @@ async fn mail_security_against_a_real_imap_server() {
     assert_eq!((sig["valid"].as_bool(), sig["matches_sender"].as_bool()), (Some(true), Some(true)), "{r}");
     // The PKCS#12 brought the CA along as Alice's chain, but that does not make it trusted.
     assert_eq!(sig["chain"]["status"], "untrusted", "{r}");
-    b.post("/api/mail/smime/certificates", json!({"certificate": String::from_utf8(fixture("ca.pem")).unwrap()})).await;
+    b.post(
+        "/api/mail/smime/certificates",
+        json!({"certificate": String::from_utf8(fixture("ca.pem")).unwrap()}),
+    )
+    .await;
     let r = report(signed_id.clone()).await;
     assert_eq!(r["smime"]["signatures"][0]["chain"]["status"], "trusted", "{r}");
     assert_eq!(r["smime"]["signatures"][0]["chain"]["path"].as_array().unwrap().len(), 2, "{r}");
     let certs = b.get("/api/mail/smime/certificates").await["certificates"].clone();
-    assert!(certs.as_array().unwrap().iter().any(|c| c["kind"] == "contact" && c["source"] == "collected" && c["emails"][0] == "bob@example.test"), "{certs}");
+    assert!(
+        certs
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["kind"] == "contact" && c["source"] == "collected" && c["emails"][0] == "bob@example.test"),
+        "{certs}"
+    );
     let m = b.get(&format!("/api/mail/messages/{signed_id}")).await["message"].clone();
-    assert!(m["text"].as_str().unwrap().contains("1234") && m["attachments"].as_array().unwrap().is_empty(), "{m}");
+    assert!(
+        m["text"].as_str().unwrap().contains("1234") && m["attachments"].as_array().unwrap().is_empty(),
+        "{m}"
+    );
 
     // Search: decrypted text only with the opt-in, and only in Mail search.
     let found = b.get("/api/mail/search?q=launch").await["messages"].clone();
     assert!(found.as_array().unwrap().iter().all(|m| m["subject"] != "Encrypted AES"), "{found}");
-    b.call(Method::PATCH, "/api/mail/security/settings", Some(json!({"index_decrypted": true}))).await;
+    b.call(Method::PATCH, "/api/mail/security/settings", Some(json!({"index_decrypted": true})))
+        .await;
     let found = b.get("/api/mail/search?q=launch").await["messages"].clone();
     assert!(found.as_array().unwrap().iter().any(|m| m["subject"] == "Encrypted AES"), "{found}");
     let global = b.get("/api/search?q=launch").await;
-    assert!(!global.to_string().contains("launch code"), "global search never shows decrypted text: {global}");
+    assert!(
+        !global.to_string().contains("launch code"),
+        "global search never shows decrypted text: {global}"
+    );
 
     // The assistant does not see decrypted mail unless allowed.
     let ctx = ferrite_server::tools::UserCtx {
@@ -748,10 +900,15 @@ async fn mail_security_against_a_real_imap_server() {
         scopes: "mail".into(),
     };
     let read = state.tools.call(&ctx, "mail_read", json!({"message_id": enc_id})).await.unwrap();
-    assert!(!read.text_content().contains("launch code") && read.text_content().contains("encrypted"), "{}", read.text_content());
+    assert!(
+        !read.text_content().contains("launch code") && read.text_content().contains("encrypted"),
+        "{}",
+        read.text_content()
+    );
     let s = state.tools.call(&ctx, "mail_search", json!({"query": "launch"})).await.unwrap();
     assert!(!s.text_content().contains("Encrypted AES"), "{}", s.text_content());
-    b.call(Method::PATCH, "/api/mail/security/settings", Some(json!({"assistant_decrypted": true}))).await;
+    b.call(Method::PATCH, "/api/mail/security/settings", Some(json!({"assistant_decrypted": true})))
+        .await;
     let read = state.tools.call(&ctx, "mail_read", json!({"message_id": enc_id})).await.unwrap();
     assert!(read.text_content().contains("launch code is 3456"), "{}", read.text_content());
 
@@ -780,7 +937,11 @@ async fn mail_security_against_a_real_imap_server() {
     )
     .await;
     let got = tokio::time::timeout(Duration::from_secs(10), sink.recv()).await.unwrap().unwrap();
-    assert!(got.data.contains("application/pkcs7-mime; smime-type=enveloped-data") && !got.data.contains("observatory"), "{}", got.data);
+    assert!(
+        got.data.contains("application/pkcs7-mime; smime-type=enveloped-data") && !got.data.contains("observatory"),
+        "{}",
+        got.data
+    );
     assert!(got.data.contains("Subject: Signed and sealed"));
     if std::process::Command::new("openssl").arg("version").output().is_ok() {
         let dir = tempfile::tempdir().unwrap();
@@ -805,9 +966,20 @@ async fn mail_security_against_a_real_imap_server() {
         assert!(String::from_utf8_lossy(&ver.stdout).contains("Meet at the observatory."));
     }
     // The Sent copy is encrypted to Alice too, so she can read it.
-    let sent = folders.as_array().unwrap().iter().find(|f| f["role"] == "sent").unwrap()["id"].as_str().unwrap().to_string();
+    let sent = folders.as_array().unwrap().iter().find(|f| f["role"] == "sent").unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let sent_list = b.get(&format!("/api/mail/folders/{sent}/messages")).await;
-    let sent_id = sent_list["messages"].as_array().unwrap().iter().find(|m| m["subject"] == "Signed and sealed").unwrap()["id"].as_str().unwrap().to_string();
+    let sent_id = sent_list["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["subject"] == "Signed and sealed")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let m = b.get(&format!("/api/mail/messages/{sent_id}")).await["message"].clone();
     assert!(m["text"].as_str().unwrap().contains("Meet at the observatory. ü"), "{m}");
     let r = report(sent_id).await;
@@ -820,7 +992,11 @@ async fn mail_security_against_a_real_imap_server() {
     )
     .await;
     let got = tokio::time::timeout(Duration::from_secs(10), sink.recv()).await.unwrap().unwrap();
-    assert!(got.data.contains("multipart/encrypted; protocol=\"application/pgp-encrypted\"") && got.data.contains("Version: 1"), "{}", got.data);
+    assert!(
+        got.data.contains("multipart/encrypted; protocol=\"application/pgp-encrypted\"") && got.data.contains("Version: 1"),
+        "{}",
+        got.data
+    );
     let (st, _) = b
         .call(
             Method::POST,
@@ -831,7 +1007,12 @@ async fn mail_security_against_a_real_imap_server() {
     assert_eq!(st, StatusCode::BAD_REQUEST, "no PGP block: not sent as PGP/MIME");
 
     // Deleting the key forgets decrypted mail.
-    b.call(Method::DELETE, &format!("/api/mail/smime/certificates/{}", alice_cert["id"].as_str().unwrap()), None).await;
+    b.call(
+        Method::DELETE,
+        &format!("/api/mail/smime/certificates/{}", alice_cert["id"].as_str().unwrap()),
+        None,
+    )
+    .await;
     let m = b.get(&format!("/api/mail/messages/{enc_id}")).await["message"].clone();
     assert!(!m["text"].as_str().unwrap().contains("launch code"), "{m}");
     let idx: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mail_decrypted_fts").fetch_one(&core.db).await.unwrap();

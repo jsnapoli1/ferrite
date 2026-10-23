@@ -308,8 +308,10 @@ async fn webmail_against_a_real_imap_server() {
     let csp = headers["content-security-policy"].to_str().unwrap();
     assert!(csp.contains("sandbox") && csp.contains("img-src 'self' data:;"), "{csp}");
     let (_, headers, html) = b.bytes(&format!("/api/mail/messages/{news_id}/html?remote=true")).await;
-    assert!(String::from_utf8(html).unwrap().contains("https://tracker.example/p.gif"));
-    assert!(headers["content-security-policy"].to_str().unwrap().contains("https:"));
+    // Shown remote images load through Ferrite's image proxy, never from the sender directly.
+    let shown = String::from_utf8(html).unwrap();
+    assert!(shown.contains("/api/mail/proxy?") && !shown.contains("tracker.example"), "{shown}");
+    assert!(!headers["content-security-policy"].to_str().unwrap().contains("https:"));
     // Opening a message does not mark it read on the server (BODY.PEEK).
     let mut check = ImapConn::connect(&t.settings()).await.unwrap();
     check.select("INBOX").await.unwrap();

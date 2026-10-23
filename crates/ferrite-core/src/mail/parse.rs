@@ -279,7 +279,9 @@ fn decode_entities(s: &str) -> String {
 fn is_smime_signature(p: &MessagePart) -> bool {
     p.content_type().is_some_and(|ct| {
         ct.ctype().eq_ignore_ascii_case("application")
-            && ct.subtype().is_some_and(|s| s.eq_ignore_ascii_case("pkcs7-signature") || s.eq_ignore_ascii_case("x-pkcs7-signature"))
+            && ct
+                .subtype()
+                .is_some_and(|s| s.eq_ignore_ascii_case("pkcs7-signature") || s.eq_ignore_ascii_case("x-pkcs7-signature"))
     })
 }
 
@@ -572,6 +574,9 @@ fn is_remote(url: &str) -> bool {
     u.starts_with("http:") || u.starts_with("https:") || u.starts_with("//")
 }
 
+/// Rewrites a remote URL (to an image proxy URL), or refuses it.
+pub type ProxyFn = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
 /// What happens to remote images and CSS resources.
 #[derive(Clone)]
 pub enum RemotePolicy {
@@ -580,7 +585,7 @@ pub enum RemotePolicy {
     /// Kept as written. Only for callers that do not serve the result to a browser.
     Allow,
     /// Rewritten through the function (an image proxy URL); `None` removes the reference.
-    Proxy(Arc<dyn Fn(&str) -> Option<String> + Send + Sync>),
+    Proxy(ProxyFn),
 }
 
 impl RemotePolicy {
@@ -901,7 +906,11 @@ JVBERi0xLjQK\r\n\
         assert!(s.html.contains(r#"src="/cid/logo@x""#) && s.html.contains("data:image/png;base64,AAAA"));
         // The proxy may refuse a URL: then it is dropped, not kept.
         let refuse = RemotePolicy::Proxy(Arc::new(|_: &str| None));
-        let s = sanitize_html_with(r#"<img src="https://x.example/a.png"><p style="background:url(https://x.example/b)">t</p>"#, refuse, |c| c.to_string());
+        let s = sanitize_html_with(
+            r#"<img src="https://x.example/a.png"><p style="background:url(https://x.example/b)">t</p>"#,
+            refuse,
+            |c| c.to_string(),
+        );
         assert!(!s.html.contains("x.example"), "{}", s.html);
         // Protocol-relative URLs are handed to the proxy as https.
         let seen = Arc::new(std::sync::Mutex::new(Vec::new()));

@@ -129,7 +129,11 @@ pub struct PgpView {
 pub fn detect_pgp(raw: &[u8], text: &str) -> Option<PgpView> {
     let (he, bs) = smime::split_header(raw);
     let (ty, params) = smime::content_type(&raw[..he]);
-    let protocol = params.iter().find(|(k, _)| k == "protocol").map(|(_, v)| v.to_ascii_lowercase()).unwrap_or_default();
+    let protocol = params
+        .iter()
+        .find(|(k, _)| k == "protocol")
+        .map(|(_, v)| v.to_ascii_lowercase())
+        .unwrap_or_default();
     let boundary = params.iter().find(|(k, _)| k == "boundary").map(|(_, v)| v.clone());
     if ty == "multipart/encrypted" && protocol == "application/pgp-encrypted" {
         let armored = boundary.and_then(|b| {
@@ -138,7 +142,10 @@ pub fn detect_pgp(raw: &[u8], text: &str) -> Option<PgpView> {
                 armor_block(&s, "PGP MESSAGE")
             })
         });
-        return Some(PgpView { kind: PgpKind::PgpMime, armored });
+        return Some(PgpView {
+            kind: PgpKind::PgpMime,
+            armored,
+        });
     }
     if ty == "multipart/signed" && protocol == "application/pgp-signature" {
         return Some(PgpView {
@@ -225,7 +232,8 @@ impl Core {
                     any = true;
                     let v = smime::verify(&der, None, &[]);
                     let content = v.content.clone();
-                    view.signatures.push(self.signature_view(user_id, &v, from.as_ref(), &mut verified_signers).await);
+                    view.signatures
+                        .push(self.signature_view(user_id, &v, from.as_ref(), &mut verified_signers).await);
                     match content {
                         Some(entity) => current = smime::with_entity(&current, &smime::canonical_crlf(&entity)),
                         None => break,
@@ -234,7 +242,8 @@ impl Core {
                 Kind::SignedDetached { content, signature } => {
                     any = true;
                     let v = smime::verify(&signature, Some(&content), &[]);
-                    view.signatures.push(self.signature_view(user_id, &v, from.as_ref(), &mut verified_signers).await);
+                    view.signatures
+                        .push(self.signature_view(user_id, &v, from.as_ref(), &mut verified_signers).await);
                     current = smime::with_entity(&current, &content);
                 }
             }
@@ -287,7 +296,10 @@ impl Core {
             return Ok(());
         }
         let mut tx = self.db.begin().await?;
-        sqlx::query("DELETE FROM mail_decrypted_fts WHERE message_id = ?").bind(message_id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM mail_decrypted_fts WHERE message_id = ?")
+            .bind(message_id)
+            .execute(&mut *tx)
+            .await?;
         sqlx::query("INSERT INTO mail_decrypted_fts (message_id, user_id, body) VALUES (?, ?, ?)")
             .bind(message_id)
             .bind(user_id)
@@ -377,11 +389,11 @@ impl Core {
     /// DKIM for a cached message: the stored result, else verified now (and stored).
     pub async fn mail_dkim(&self, user_id: &str, id: &str, raw: &[u8], from_domain: Option<&str>) -> Result<dkim::Verdict> {
         let (_, m) = self.message_row(user_id, id).await?;
-        let stored: Option<(String, Option<String>, Option<String>, Option<String>, DateTime<Utc>)> =
-            sqlx::query_as("SELECT status, domain, selector, detail, checked_at FROM mail_dkim_results WHERE message_id = ?")
-                .bind(&m.id)
-                .fetch_optional(&self.db)
-                .await?;
+        type Stored = (String, Option<String>, Option<String>, Option<String>, DateTime<Utc>);
+        let stored: Option<Stored> = sqlx::query_as("SELECT status, domain, selector, detail, checked_at FROM mail_dkim_results WHERE message_id = ?")
+            .bind(&m.id)
+            .fetch_optional(&self.db)
+            .await?;
         if let Some((status, domain, selector, detail, at)) = stored {
             let status = dkim::Status::parse(&status);
             if status != dkim::Status::Temperror || now() - at < DKIM_RETRY {
@@ -525,7 +537,10 @@ impl Core {
             let Some((name, _, data)) = parse::attachment(&raw, a.index) else { continue };
             total += data.len();
             if total > ZIP_CAP {
-                return Err(Error::bad(format!("the attachments are larger than {} MB; download them one by one", ZIP_CAP / 1024 / 1024)));
+                return Err(Error::bad(format!(
+                    "the attachments are larger than {} MB; download them one by one",
+                    ZIP_CAP / 1024 / 1024
+                )));
             }
             let name = zip_name(&name, &names);
             names.push(name.clone());
@@ -541,7 +556,15 @@ impl Core {
     /// wraps Mailvelope's armored text as PGP/MIME. `wire` is the message as it goes over SMTP
     /// (without Bcc), `copy` the Sent copy (with Bcc). Returns them transformed; recipients
     /// must all have certificates when encrypting (else a clear error, nothing is sent).
-    pub async fn mail_secure_outgoing(&self, user_id: &str, account_id: &str, opts: &OutgoingSecurity, recipients: &[String], wire: &[u8], copy: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+    pub async fn mail_secure_outgoing(
+        &self,
+        user_id: &str,
+        account_id: &str,
+        opts: &OutgoingSecurity,
+        recipients: &[String],
+        wire: &[u8],
+        copy: &[u8],
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
         if opts.pgp_mime {
             if opts.smime_sign || opts.smime_encrypt {
                 return Err(Error::bad("choose either S/MIME or PGP, not both"));
@@ -554,10 +577,12 @@ impl Core {
         let from = from_of(wire).ok_or_else(|| Error::bad("the message has no sender"))?;
         let mut entity = smime::entity_of(wire);
         if opts.smime_sign {
-            let id = self
-                .smime_signing_identity(user_id, account_id, &from.address)
-                .await?
-                .ok_or_else(|| Error::bad(format!("there is no S/MIME certificate for {}; import one in Mail settings or turn signing off", from.address)))?;
+            let id = self.smime_signing_identity(user_id, account_id, &from.address).await?.ok_or_else(|| {
+                Error::bad(format!(
+                    "there is no S/MIME certificate for {}; import one in Mail settings or turn signing off",
+                    from.address
+                ))
+            })?;
             let micalg = smime::micalg(&smime::digest_for(id.key.kind));
             let sig = smime::sign_detached(&entity, &id, now()).map_err(Error::bad)?;
             entity = smime::signed_entity(&entity, &sig, micalg);
@@ -601,7 +626,9 @@ impl Core {
 fn pgp_mime(raw: &[u8]) -> Result<Vec<u8>> {
     let parsed = parse::parse_body(raw);
     if parsed.attachments.iter().any(|a| !a.inline) {
-        return Err(Error::bad("attachments cannot be encrypted with Mailvelope; remove them or send them separately"));
+        return Err(Error::bad(
+            "attachments cannot be encrypted with Mailvelope; remove them or send them separately",
+        ));
     }
     let armored = armor_block(&parsed.text, "PGP MESSAGE").ok_or_else(|| Error::bad("the message is not encrypted yet (no PGP MESSAGE block)"))?;
     let mut b = [0u8; 12];
@@ -855,8 +882,15 @@ impl Core {
                             continue;
                         }
                         (meta.trim_end_matches(";base64").to_string(), data.to_string())
-                    } else if params.iter().any(|(k, v)| k == "ENCODING" && (v.eq_ignore_ascii_case("b") || v.eq_ignore_ascii_case("base64"))) {
-                        let ty = params.iter().find(|(k, _)| k == "TYPE").map(|(_, v)| v.to_ascii_lowercase()).unwrap_or_else(|| "jpeg".into());
+                    } else if params
+                        .iter()
+                        .any(|(k, v)| k == "ENCODING" && (v.eq_ignore_ascii_case("b") || v.eq_ignore_ascii_case("base64")))
+                    {
+                        let ty = params
+                            .iter()
+                            .find(|(k, _)| k == "TYPE")
+                            .map(|(_, v)| v.to_ascii_lowercase())
+                            .unwrap_or_else(|| "jpeg".into());
                         (format!("image/{}", ty.trim_start_matches("image/")), value.to_string())
                     } else {
                         continue;
@@ -876,7 +910,8 @@ impl Core {
     }
 
     pub async fn mail_avatar_cache_get(&self, key: &str) -> Result<Option<CachedAvatar>> {
-        let row: Option<(Option<String>, Option<Vec<u8>>, DateTime<Utc>)> = sqlx::query_as("SELECT mime, data, fetched_at FROM mail_avatar_cache WHERE key = ?")
+        type Row = (Option<String>, Option<Vec<u8>>, DateTime<Utc>);
+        let row: Option<Row> = sqlx::query_as("SELECT mime, data, fetched_at FROM mail_avatar_cache WHERE key = ?")
             .bind(key)
             .fetch_optional(&self.db)
             .await?;
@@ -938,11 +973,25 @@ mod tests {
         let v = detect_pgp(pgp_mime, "").unwrap();
         assert_eq!(v.kind, PgpKind::PgpMime);
         assert_eq!(v.armored.as_deref(), Some("-----BEGIN PGP MESSAGE-----\n\nwcBMA0x\n-----END PGP MESSAGE-----"));
-        let v = detect_pgp(b"Content-Type: text/plain\r\n\r\n", "hi\n-----BEGIN PGP MESSAGE-----\nabc\n-----END PGP MESSAGE-----\nbye").unwrap();
+        let v = detect_pgp(
+            b"Content-Type: text/plain\r\n\r\n",
+            "hi\n-----BEGIN PGP MESSAGE-----\nabc\n-----END PGP MESSAGE-----\nbye",
+        )
+        .unwrap();
         assert_eq!(v.kind, PgpKind::Inline);
-        let v = detect_pgp(b"Content-Type: text/plain\r\n\r\n", "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA256\n\nhello\n-----BEGIN PGP SIGNATURE-----\nx\n-----END PGP SIGNATURE-----").unwrap();
+        let v = detect_pgp(
+            b"Content-Type: text/plain\r\n\r\n",
+            "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA256\n\nhello\n-----BEGIN PGP SIGNATURE-----\nx\n-----END PGP SIGNATURE-----",
+        )
+        .unwrap();
         assert_eq!(v.kind, PgpKind::InlineSigned);
-        assert!(detect_pgp(b"Content-Type: multipart/signed; protocol=\"application/pgp-signature\"; boundary=b\r\n\r\n", "").is_some_and(|v| v.kind == PgpKind::PgpMimeSigned));
+        assert!(
+            detect_pgp(
+                b"Content-Type: multipart/signed; protocol=\"application/pgp-signature\"; boundary=b\r\n\r\n",
+                ""
+            )
+            .is_some_and(|v| v.kind == PgpKind::PgpMimeSigned)
+        );
         assert!(detect_pgp(b"Content-Type: text/plain\r\n\r\n", "BEGIN PGP MESSAGE without armor").is_none());
         // An unterminated block is not handed to Mailvelope.
         assert!(detect_pgp(b"Content-Type: text/plain\r\n\r\n", "-----BEGIN PGP MESSAGE-----\nabc").is_none());

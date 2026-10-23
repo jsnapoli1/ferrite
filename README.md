@@ -293,7 +293,7 @@ link_by_email = false                       # link to the account with the same,
 - `FERRITE_CRAFT_BIN_DIR`
 - `FERRITE_REQUIRE_2FA`
 - `FERRITE_PUSH_ALLOW_INSECURE` (`1`: accept `http`/private push endpoints; tests only)
-- `FERRITE_MAIL_DNS`, `FERRITE_SMIME_TRUST_STORE` (the `[mail_security]` settings), `FERRITE_MAIL_PROXY_ALLOW_PRIVATE` (`1`: the mail image proxy and favicon fetcher may reach private addresses; tests only)
+- `FERRITE_MAIL_DNS`, `FERRITE_SMIME_TRUST_STORE` (the `[mail_security]` settings), `FERRITE_MAIL_PROXY_ALLOW_PRIVATE` (`1`: the mail image proxy and favicon fetcher may reach private addresses; tests only. The admin setting "allow local mail servers" allows that too)
 
 **Command line:**
 
@@ -434,7 +434,7 @@ cd e2e && FERRITE_URL=http://127.0.0.1:8821 node files.mjs
 | `security.mjs` | 2FA set-up in Settings, sign-in with a TOTP code (computed in the test) and with a recovery code, the admin's 2FA view, SSO through a mock OpenID Connect provider served by the script (cancel and success); needs the `[[oidc]]` block from its header |
 | `invites.mjs` | Calendar sharing and public links, guests with suggestions, invitation by email (the script runs an SMTP sink; set `[smtp]` to 127.0.0.1:8836), answers from the dialog and from the public page, read-only and read-write shares |
 | `push.mjs` | Service worker and manifest, Settings → Notifications, pushes to a mock push service decrypted independently, push handling and notification clicks in the service worker (run the server with `FERRITE_PUSH_ALLOW_INSECURE=1`) |
-| `mail.mjs` | Mail against a real Dovecot/Postfix server (`mail-server.sh start` first; or Dovecot only with `mail-relay.mjs` as the SMTP server): account setup, folders, threads, sanitized HTML and remote images (run the server with `FERRITE_MAIL_PROXY_ALLOW_PRIVATE=1`, the test image is local), attachments to Files, keyboard shortcuts, reply/compose with autocomplete and attachments, live arrival over IDLE, archive/delete, drafts, search, dark and phone layouts |
+| `mail.mjs` | Mail against a real Dovecot/Postfix server (`mail-server.sh start` first; or Dovecot only with `mail-relay.mjs` as the SMTP server): account setup, folders, threads, sanitized HTML and remote images (through the image proxy, which may fetch the local test image because the test allows local mail servers), attachments to Files, keyboard shortcuts, reply/compose with autocomplete and attachments, live arrival over IDLE, archive/delete, drafts, search, dark and phone layouts |
 | `mail-security.mjs` | Mail security against a real Dovecot (no Postfix): DKIM (keys and DNS served by the script), phishing hints, external senders, remote images through the proxy and trusted senders, contact photos, S/MIME import, decryption, signatures and sign+encrypt sending, view source, ZIP of attachments, PGP with and without a mock of Mailvelope's client API, dark and phone layouts (see its header) |
 | `mail-accounts.mjs` | Mail accounts against two Dovecot instances (one validating OAuth tokens by introspection, see its header) with a mock OAuth provider and SMTP sink run by the script: Mail admin settings, connection test, quota, drag-and-drop account order, sharing an account and the delegate's view, report spam, a provisioning template and the provisioned account, connecting a Google account through the consent screen, dark and phone layouts |
 

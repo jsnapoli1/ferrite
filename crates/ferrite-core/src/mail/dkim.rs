@@ -263,7 +263,10 @@ pub fn summarize(results: impl Iterator<Item = (DkimResult, Option<String>, Opti
         return Verdict::none(None);
     }
     let aligned = |d: &Option<String>| {
-        from_domain.is_some_and(|f| d.as_deref().is_some_and(|d| f.eq_ignore_ascii_case(d) || f.to_ascii_lowercase().ends_with(&format!(".{}", d.to_ascii_lowercase()))))
+        from_domain.is_some_and(|f| {
+            d.as_deref()
+                .is_some_and(|d| f.eq_ignore_ascii_case(d) || f.to_ascii_lowercase().ends_with(&format!(".{}", d.to_ascii_lowercase())))
+        })
     };
     all.sort_by_key(|(r, d, _)| (rank(r), !aligned(d)));
     let (r, domain, selector) = all.swap_remove(0);
@@ -346,7 +349,10 @@ Joe.\r
 
     #[tokio::test]
     async fn rfc8463_ed25519_and_rsa_signatures_verify() {
-        let d = verifier(&[("brisbane._domainkey.football.example.com", ED_KEY), ("test._domainkey.football.example.com", RSA_KEY)]);
+        let d = verifier(&[
+            ("brisbane._domainkey.football.example.com", ED_KEY),
+            ("test._domainkey.football.example.com", RSA_KEY),
+        ]);
         for (sel, expect) in [("brisbane", "brisbane"), ("test", "test")] {
             let v = d.verify(only_signature(sel).as_bytes(), Some("football.example.com")).await;
             assert_eq!(v.status, Status::Pass, "{sel}: {v:?}");
@@ -359,7 +365,10 @@ Joe.\r
 
     #[tokio::test]
     async fn altered_messages_fail() {
-        let d = verifier(&[("brisbane._domainkey.football.example.com", ED_KEY), ("test._domainkey.football.example.com", RSA_KEY)]);
+        let d = verifier(&[
+            ("brisbane._domainkey.football.example.com", ED_KEY),
+            ("test._domainkey.football.example.com", RSA_KEY),
+        ]);
         // Body changed.
         let body = RFC8463.replace("We lost the game.", "We won the game.");
         let v = d.verify(body.as_bytes(), None).await;
@@ -380,7 +389,10 @@ Joe.\r
     #[tokio::test]
     async fn unsigned_and_wrong_keys() {
         // Another Ed25519 key under the selector (key rotation gone wrong, or a forgery).
-        let d = verifier(&[("brisbane._domainkey.football.example.com", "v=DKIM1; k=ed25519; p=MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=")]);
+        let d = verifier(&[(
+            "brisbane._domainkey.football.example.com",
+            "v=DKIM1; k=ed25519; p=MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=",
+        )]);
         let unsigned = &RFC8463[RFC8463.find("From: Joe").unwrap()..];
         assert_eq!(d.verify(unsigned.as_bytes(), None).await, Verdict::none(None));
         let v = d.verify(only_signature("brisbane").as_bytes(), None).await;

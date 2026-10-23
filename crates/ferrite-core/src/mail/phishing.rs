@@ -85,10 +85,7 @@ pub fn check(i: &Input) -> Vec<Finding> {
             if !other.is_empty() {
                 out.push(Finding {
                     kind: CheckKind::ReplyTo,
-                    message: format!(
-                        "Replies go to {}, in another domain than the sender ({from_domain}).",
-                        other.join(", ")
-                    ),
+                    message: format!("Replies go to {}, in another domain than the sender ({from_domain}).", other.join(", ")),
                     links: vec![],
                 });
             }
@@ -330,7 +327,14 @@ mod tests {
         }
         // The same address in the name is fine.
         let from = addr("ada@example.org", "Ada@Example.org");
-        assert!(check(&Input { from: Some(&from), now: Utc::now(), ..Default::default() }).is_empty());
+        assert!(
+            check(&Input {
+                from: Some(&from),
+                now: Utc::now(),
+                ..Default::default()
+            })
+            .is_empty()
+        );
     }
 
     #[test]

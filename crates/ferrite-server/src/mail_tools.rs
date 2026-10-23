@@ -332,8 +332,12 @@ pub async fn dispatch(core: &Core, ctx: &UserCtx, name: &str, a: &Value) -> Resu
                 .mail_search(uid, s(a, "query")?, acc.as_ref().map(|x| x.id.as_str()), folder.as_deref(), 30)
                 .await?;
             // Matches on decrypted text would reveal it: encrypted messages are left out.
-            let hidden = core.mail_hidden_from_assistant(uid, &found.iter().map(|m| m.id.clone()).collect::<Vec<_>>()).await?;
-            Ok(ToolResult::json(json!({"messages": found.iter().filter(|m| !hidden.contains(&m.id)).map(summary).collect::<Vec<_>>()})))
+            let hidden = core
+                .mail_hidden_from_assistant(uid, &found.iter().map(|m| m.id.clone()).collect::<Vec<_>>())
+                .await?;
+            Ok(ToolResult::json(
+                json!({"messages": found.iter().filter(|m| !hidden.contains(&m.id)).map(summary).collect::<Vec<_>>()}),
+            ))
         }
         "mail_draft" => {
             let (account_id, c) = compose(core, uid, a).await?;

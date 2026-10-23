@@ -86,9 +86,8 @@ pub fn valid_domain(d: &str) -> bool {
     !d.is_empty()
         && d.len() <= 253
         && d.contains('.')
-        && d.split('.').all(|l| {
-            !l.is_empty() && l.len() <= 63 && !l.starts_with('-') && !l.ends_with('-') && l.chars().all(|c| c.is_alphanumeric() || c == '-')
-        })
+        && d.split('.')
+            .all(|l| !l.is_empty() && l.len() <= 63 && !l.starts_with('-') && !l.ends_with('-') && l.chars().all(|c| c.is_alphanumeric() || c == '-'))
 }
 
 /// Normalizes user input into an entry: `@example.org` or `example.org` is a domain,
@@ -258,8 +257,14 @@ impl Core {
     /// Removes the user's decrypted text from the Mail search index (opting out).
     pub(crate) async fn mail_drop_decrypted_index(&self, user_id: &str) -> Result<()> {
         let mut tx = self.db.begin().await?;
-        sqlx::query("DELETE FROM mail_decrypted_fts WHERE user_id = ?").bind(user_id).execute(&mut *tx).await?;
-        sqlx::query("DELETE FROM mail_decrypted_indexed WHERE user_id = ?").bind(user_id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM mail_decrypted_fts WHERE user_id = ?")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM mail_decrypted_indexed WHERE user_id = ?")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -301,7 +306,17 @@ mod tests {
         assert_eq!(normalize(None, "example.org.").unwrap(), (EntryKind::Domain, "example.org".into()));
         assert_eq!(normalize(Some(EntryKind::Domain), "münchen.de").unwrap().1, "münchen.de");
         assert_eq!(normalize(None, "Ada <ada@example.org>").unwrap().1, "ada@example.org");
-        for bad in ["", "localhost", "exa mple.org", "-x.org", "a@b", "a@-b.org", "x@y@z.org", "<script>.org", "a..b"] {
+        for bad in [
+            "",
+            "localhost",
+            "exa mple.org",
+            "-x.org",
+            "a@b",
+            "a@-b.org",
+            "x@y@z.org",
+            "<script>.org",
+            "a..b",
+        ] {
             assert!(normalize(None, bad).is_err(), "{bad:?} must be rejected");
         }
         assert!(normalize(Some(EntryKind::Address), "example.org").is_err());

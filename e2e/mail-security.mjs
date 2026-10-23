@@ -295,6 +295,7 @@ try {
     headers: { Authorization: `Basic ${Buffer.from('alice:alice-password').toString('base64')}`, 'Content-Type': 'text/vcard' }, data: vcard,
   });
   assert(put.ok(), `contact PUT ${put.status()}`);
+  await page.api('PATCH', '/api/admin/mail/settings', { allow_local_servers: true });
   const { account } = await page.api('POST', '/api/mail/accounts', {
     email: 'alice@example.test', name: 'Alice Archer', password: 'alice-mail-pw', imap_host: '127.0.0.1', imap_port: IMAP_PORT, imap_security: 'none',
     smtp_host: '127.0.0.1', smtp_port: SMTP_PORT, smtp_security: 'none', smtp_auth: false,

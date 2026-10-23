@@ -101,7 +101,9 @@ async fn trusted(State(s): State<AppState>, auth: Auth) -> ApiResult<Json<Value>
 
 async fn add_trusted(State(s): State<AppState>, auth: Auth, Json(b): Json<EntryBody>) -> ApiResult<Json<Value>> {
     scope(&auth)?;
-    Ok(Json(json!({"entry": s.core.mail_add_entry(&auth.user.id, List::Trusted, b.kind, &b.value).await?})))
+    Ok(Json(
+        json!({"entry": s.core.mail_add_entry(&auth.user.id, List::Trusted, b.kind, &b.value).await?}),
+    ))
 }
 
 async fn remove_trusted(State(s): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Json<Value>> {
@@ -117,7 +119,9 @@ async fn internal(State(s): State<AppState>, auth: Auth) -> ApiResult<Json<Value
 
 async fn add_internal(State(s): State<AppState>, auth: Auth, Json(b): Json<EntryBody>) -> ApiResult<Json<Value>> {
     scope(&auth)?;
-    Ok(Json(json!({"entry": s.core.mail_add_entry(&auth.user.id, List::Internal, b.kind, &b.value).await?})))
+    Ok(Json(
+        json!({"entry": s.core.mail_add_entry(&auth.user.id, List::Internal, b.kind, &b.value).await?}),
+    ))
 }
 
 async fn remove_internal(State(s): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Json<Value>> {
@@ -184,7 +188,7 @@ struct ProxyQ {
 async fn proxy(State(s): State<AppState>, auth: Auth, Query(q): Query<ProxyQ>) -> ApiResult<Response> {
     scope(&auth)?;
     let url = s.core.mail_proxy_check(&auth.user.id, &q.u, q.e, &q.s)?;
-    let allow_private = s.core.config.mail_security.proxy_allow_private;
+    let allow_private = local_allowed(&s).await;
     let (mime, data) = match mail_fetch::proxied_image(&url, mail_fetch::MAX_IMAGE, allow_private).await {
         Ok(x) => x,
         Err(e) => {
@@ -205,7 +209,10 @@ async fn proxy(State(s): State<AppState>, auth: Auth, Query(q): Query<ProxyQ>) -
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
     h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     // An SVG opened directly is a document: no scripts, no requests, no same origin.
-    h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; sandbox"));
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; sandbox"),
+    );
     h.insert(header::CONTENT_DISPOSITION, HeaderValue::from_static("inline; filename=\"image\""));
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=3600"));
     h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
@@ -234,7 +241,7 @@ async fn cached(s: &AppState, key: &str) -> Option<Option<String>> {
 }
 
 async fn network_avatar(s: &AppState, email: &str, gravatar: bool) -> Option<String> {
-    let allow_private = s.core.config.mail_security.proxy_allow_private;
+    let allow_private = local_allowed(s).await;
     if gravatar {
         let hash = ferrite_core::util::sha256_hex(email.trim().to_lowercase().as_bytes());
         let key = format!("gravatar:{hash}");
@@ -259,7 +266,10 @@ async fn network_avatar(s: &AppState, email: &str, gravatar: bool) -> Option<Str
     if let Some(hit) = cached(s, &key).await {
         return hit;
     }
-    let found = tokio::time::timeout(Duration::from_secs(8), mail_fetch::favicon(&domain, allow_private)).await.ok().flatten();
+    let found = tokio::time::timeout(Duration::from_secs(8), mail_fetch::favicon(&domain, allow_private))
+        .await
+        .ok()
+        .flatten();
     let _ = s.core.mail_avatar_cache_put(&key, found.as_ref().map(|(m, d)| (*m, d.as_slice()))).await;
     found.map(|(m, d)| data_uri(m, &d))
 }
@@ -298,7 +308,8 @@ async fn avatars(State(s): State<AppState>, auth: Auth, Query(q): Query<AvatarsQ
     let map: HashMap<String, Option<String>> = results.into_iter().collect();
     let mut resp = Response::new(Body::from(serde_json::to_vec(&json!({"avatars": map})).map_err(Error::internal)?));
     resp.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    resp.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=600"));
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=600"));
     Ok(resp)
 }
 
@@ -323,7 +334,9 @@ fn text_or_b64(v: &str) -> Vec<u8> {
         v.as_bytes().to_vec()
     } else {
         let clean: String = v.split_whitespace().collect();
-        base64::engine::general_purpose::STANDARD.decode(clean).unwrap_or_else(|_| v.as_bytes().to_vec())
+        base64::engine::general_purpose::STANDARD
+            .decode(clean)
+            .unwrap_or_else(|_| v.as_bytes().to_vec())
     }
 }
 
@@ -381,4 +394,11 @@ async fn identities(State(s): State<AppState>, auth: Auth) -> ApiResult<Json<Val
 async fn set_identity(State(s): State<AppState>, auth: Auth, Json(b): Json<IdentityInput>) -> ApiResult<Json<Value>> {
     scope(&auth)?;
     Ok(Json(json!({"identities": s.core.smime_set_identity(&auth.user.id, &b).await?})))
+}
+
+/// Whether the image proxy and favicon fetcher may reach local and private addresses: when
+/// the admin allows mail servers there (`allow_local_servers`, for a LAN), or in tests
+/// (`[mail_security] proxy_allow_private`). Otherwise such addresses are refused.
+async fn local_allowed(s: &AppState) -> bool {
+    s.core.config.mail_security.proxy_allow_private || s.core.mail_settings().await.allow_local_servers
 }

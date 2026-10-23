@@ -272,7 +272,10 @@ fn fix_encrypted_content(der: &[u8]) -> R<Vec<u8>> {
     let ed = children(der, wrapper, 1)?;
     let Some(env) = ed.first() else { return Ok(der.to_vec()) };
     let env_children = children(der, env, 2)?;
-    let Some(eci) = env_children.iter().find(|c| c.tag == [0x30] && c.content.as_ref().is_some_and(|r| der.get(r.start) == Some(&0x06))) else {
+    let Some(eci) = env_children
+        .iter()
+        .find(|c| c.tag == [0x30] && c.content.as_ref().is_some_and(|r| der.get(r.start) == Some(&0x06)))
+    else {
         return Ok(der.to_vec());
     };
     let eci_children = children(der, eci, 3)?;
@@ -564,8 +567,11 @@ pub fn read_private_key(data: &[u8], password: Option<&str>) -> R<PrivateKey> {
 
 /// Whether `key` belongs to the certificate.
 pub fn key_matches(key: &PrivateKey, cert_der: &[u8]) -> bool {
-    let Ok((_, c)) = x509_parser::parse_x509_certificate(cert_der) else { return false };
-    key.public_key().is_ok_and(|pk| pk.as_slice() == c.public_key().subject_public_key.data.as_ref())
+    let Ok((_, c)) = x509_parser::parse_x509_certificate(cert_der) else {
+        return false;
+    };
+    key.public_key()
+        .is_ok_and(|pk| pk.as_slice() == c.public_key().subject_public_key.data.as_ref())
 }
 
 /// A certificate with its private key and the intermediates to send along.
@@ -591,7 +597,7 @@ pub fn read_pkcs12(data: &[u8], password: &str) -> R<Identity> {
     for bag in &archive.keys {
         let key = PrivateKey::from_der(bag.key.as_der())?;
         if let Some(cert) = certs.iter().find(|c| key_matches(&key, c)) {
-            let chain = certs.iter().filter(|c| *c != cert).cloned().take(MAX_CHAIN).collect();
+            let chain = certs.iter().filter(|c| *c != cert).take(MAX_CHAIN).cloned().collect();
             return Ok(Identity {
                 cert: cert.clone(),
                 chain,
@@ -671,11 +677,13 @@ pub fn digest_for(kind: KeyKind) -> Oid {
 pub fn sign_detached(content: &[u8], id: &Identity, now: DateTime<Utc>) -> R<Vec<u8>> {
     let digest_oid = digest_for(id.key.kind);
     let md = digest(&digest_oid, content)?;
-    let signing_time = x509_cert::time::Time::UtcTime(
-        UtcTime::from_unix_duration(std::time::Duration::from_secs(now.timestamp().max(0) as u64)).map_err(|e| e.to_string())?,
-    );
+    let signing_time =
+        x509_cert::time::Time::UtcTime(UtcTime::from_unix_duration(std::time::Duration::from_secs(now.timestamp().max(0) as u64)).map_err(|e| e.to_string())?);
     // SMIMECapabilities: AES-256-CBC, AES-128-CBC (what we can read).
-    let caps = der_tlv(0x30, &[der_tlv(0x30, &oid_tlv(&oid::AES256_CBC)), der_tlv(0x30, &oid_tlv(&oid::AES128_CBC))].concat());
+    let caps = der_tlv(
+        0x30,
+        &[der_tlv(0x30, &oid_tlv(&oid::AES256_CBC)), der_tlv(0x30, &oid_tlv(&oid::AES128_CBC))].concat(),
+    );
     let mut signed_attrs = SetOfVec::new();
     for a in [
         attribute(oid::CONTENT_TYPE, any_of(&oid::DATA)?)?,
@@ -691,7 +699,8 @@ pub fn sign_detached(content: &[u8], id: &Identity, now: DateTime<Utc>) -> R<Vec
         KeyKind::Rsa => {
             let kp = sig::RsaKeyPair::from_pkcs8(&id.key.pkcs8).map_err(|e| format!("private key: {e}"))?;
             let mut out = vec![0u8; kp.public_modulus_len()];
-            kp.sign(&sig::RSA_PKCS1_SHA256, &rng, &to_sign, &mut out).map_err(|_| "signing failed".to_string())?;
+            kp.sign(&sig::RSA_PKCS1_SHA256, &rng, &to_sign, &mut out)
+                .map_err(|_| "signing failed".to_string())?;
             (out, alg(oid::RSA, Some(Any::null())))
         }
         kind => {
@@ -762,8 +771,8 @@ pub fn encrypt(content: &[u8], recipients: &[Vec<u8>]) -> R<Vec<u8>> {
     }
     let mut cek = Zeroizing::new([0u8; 32]);
     aws_lc_rs::rand::fill(&mut cek[..]).map_err(|_| "no randomness".to_string())?;
-    let key = PaddedBlockEncryptingKey::cbc_pkcs7(UnboundCipherKey::new(&AES_256, &cek[..]).map_err(|_| "cipher".to_string())?)
-        .map_err(|_| "cipher".to_string())?;
+    let key =
+        PaddedBlockEncryptingKey::cbc_pkcs7(UnboundCipherKey::new(&AES_256, &cek[..]).map_err(|_| "cipher".to_string())?).map_err(|_| "cipher".to_string())?;
     let mut data = content.to_vec();
     let ctx = key.encrypt(&mut data).map_err(|_| "encryption failed".to_string())?;
     let iv: Vec<u8> = match ctx {
@@ -827,7 +836,9 @@ fn recipient_matches(rid: &RecipientIdentifier, cert_der: &[u8]) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecryptError {
     /// None of the recipients is one of the given certificates.
-    NotForYou { recipients: usize },
+    NotForYou {
+        recipients: usize,
+    },
     /// Ours, but it does not decrypt (corrupt, or the wrong key).
     Failed(String),
     Unsupported(String),
@@ -848,7 +859,9 @@ impl std::fmt::Display for DecryptError {
 fn oaep_alg(params: Option<&Any>) -> std::result::Result<&'static aws_lc_rs::rsa::OaepAlgorithm, DecryptError> {
     use aws_lc_rs::rsa::{OAEP_SHA1_MGF1SHA1, OAEP_SHA256_MGF1SHA256, OAEP_SHA384_MGF1SHA384, OAEP_SHA512_MGF1SHA512};
     // RSAES-OAEP-params ::= SEQUENCE { hashFunc [0] DEFAULT sha1, maskGenFunc [1] DEFAULT mgf1SHA1, pSourceFunc [2] DEFAULT empty }
-    let Some(p) = params.filter(|p| !p.is_null()) else { return Ok(&OAEP_SHA1_MGF1SHA1) };
+    let Some(p) = params.filter(|p| !p.is_null()) else {
+        return Ok(&OAEP_SHA1_MGF1SHA1);
+    };
     let der = p.to_der().map_err(|e| DecryptError::Malformed(e.to_string()))?;
     let top = read_tlv(&der, 0, 0).map_err(DecryptError::Malformed)?;
     let mut hash = oid::SHA1;
@@ -1033,7 +1046,15 @@ fn verify_raw(cert_der: &[u8], sig_alg: &AlgorithmIdentifierOwned, digest_alg: &
         if key_oid != "1.2.840.113549.1.1.1" {
             return Err("RSA signature with a non-RSA key".into());
         }
-        let h = if *s == oid::RSA { *d } else if *s == oid::RSA_SHA256 { oid::SHA256 } else if *s == oid::RSA_SHA384 { oid::SHA384 } else { oid::SHA512 };
+        let h = if *s == oid::RSA {
+            *d
+        } else if *s == oid::RSA_SHA256 {
+            oid::SHA256
+        } else if *s == oid::RSA_SHA384 {
+            oid::SHA384
+        } else {
+            oid::SHA512
+        };
         if h == oid::SHA256 {
             &sig::RSA_PKCS1_2048_8192_SHA256
         } else if h == oid::SHA384 {
@@ -1187,7 +1208,12 @@ pub fn verify(raw: &[u8], detached: Option<&[u8]>, extra_certs: &[Vec<u8>]) -> V
             let mut ok_type = false;
             for a in attrs.iter() {
                 if a.oid == oid::MESSAGE_DIGEST {
-                    ok_digest = a.values.len() == 1 && a.values.iter().next().and_then(|x| x.decode_as::<OctetString>().ok()).is_some_and(|o| o.as_bytes() == md.as_slice());
+                    ok_digest = a.values.len() == 1
+                        && a.values
+                            .iter()
+                            .next()
+                            .and_then(|x| x.decode_as::<OctetString>().ok())
+                            .is_some_and(|o| o.as_bytes() == md.as_slice());
                 } else if a.oid == oid::CONTENT_TYPE {
                     ok_type = a.values.iter().next().and_then(|x| x.decode_as::<Oid>().ok()) == Some(sd.encap_content_info.econtent_type);
                 } else if a.oid == oid::SIGNING_TIME {
@@ -1256,15 +1282,25 @@ pub fn check_chain(leaf: &[u8], pool: &[Vec<u8>], anchors: &[Vec<u8>], now: Date
     };
     let mut path = vec![leaf_c.subject().to_string()];
     if let Some(s) = valid_at(&leaf_c, at) {
-        return fail(s, format!("the certificate is {}", if s == "expired" { "expired" } else { "not valid yet" }), path);
+        return fail(
+            s,
+            format!("the certificate is {}", if s == "expired" { "expired" } else { "not valid yet" }),
+            path,
+        );
     }
     if let Ok(Some(eku)) = leaf_c.extended_key_usage() {
         if !(eku.value.email_protection || eku.value.any) {
             return fail("invalid", "the certificate is not meant for email".into(), path);
         }
     }
-    let parsed_anchors: Vec<x509_parser::certificate::X509Certificate> = anchors.iter().filter_map(|a| x509_parser::parse_x509_certificate(a).ok().map(|(_, c)| c)).collect();
-    let parsed_pool: Vec<x509_parser::certificate::X509Certificate> = pool.iter().filter_map(|a| x509_parser::parse_x509_certificate(a).ok().map(|(_, c)| c)).collect();
+    let parsed_anchors: Vec<x509_parser::certificate::X509Certificate> = anchors
+        .iter()
+        .filter_map(|a| x509_parser::parse_x509_certificate(a).ok().map(|(_, c)| c))
+        .collect();
+    let parsed_pool: Vec<x509_parser::certificate::X509Certificate> = pool
+        .iter()
+        .filter_map(|a| x509_parser::parse_x509_certificate(a).ok().map(|(_, c)| c))
+        .collect();
     // The leaf itself being an anchor (a certificate the user marked as trusted).
     if parsed_anchors.iter().any(|a| a.as_raw() == leaf_c.as_raw()) {
         return ChainCheck {
@@ -1352,7 +1388,11 @@ pub fn header_fields(header: &[u8]) -> Vec<(String, Vec<u8>)> {
             out.last_mut().expect("checked").1.extend_from_slice(line);
             continue;
         }
-        let name = line.iter().position(|b| *b == b':').map(|p| String::from_utf8_lossy(&line[..p]).trim().to_ascii_lowercase()).unwrap_or_default();
+        let name = line
+            .iter()
+            .position(|b| *b == b':')
+            .map(|p| String::from_utf8_lossy(&line[..p]).trim().to_ascii_lowercase())
+            .unwrap_or_default();
         out.push((name, line.to_vec()));
     }
     out
@@ -1427,7 +1467,10 @@ pub enum Kind {
     /// application/pkcs7-mime signed-data (content inside).
     SignedOpaque(Vec<u8>),
     /// multipart/signed: the signed first part (canonical CRLF) and the signature.
-    SignedDetached { content: Vec<u8>, signature: Vec<u8> },
+    SignedDetached {
+        content: Vec<u8>,
+        signature: Vec<u8>,
+    },
     Plain,
 }
 
@@ -1536,7 +1579,14 @@ pub fn classify(raw: &[u8]) -> Kind {
     }
 }
 
-const CONTENT_FIELDS: &[&str] = &["content-type", "content-transfer-encoding", "content-disposition", "content-id", "content-description", "mime-version"];
+const CONTENT_FIELDS: &[&str] = &[
+    "content-type",
+    "content-transfer-encoding",
+    "content-disposition",
+    "content-id",
+    "content-description",
+    "mime-version",
+];
 
 /// The MIME entity of a message: its Content-* fields and the body (canonical CRLF).
 pub fn entity_of(raw: &[u8]) -> Vec<u8> {
@@ -1681,15 +1731,22 @@ mod tests {
             ("encrypted-oaep.eml", "5678"),
             ("encrypted-ber.eml", "8901"),
         ] {
-            let Kind::Enveloped(der) = classify(&crlf(f)) else { panic!("{f} is enveloped") };
+            let Kind::Enveloped(der) = classify(&crlf(f)) else {
+                panic!("{f} is enveloped")
+            };
             let plain = decrypt(&der, &ids).unwrap_or_else(|e| panic!("{f}: {e}"));
             let text = String::from_utf8(plain).unwrap();
             assert!(text.contains(&format!("The launch code is {code}.")), "{f}: {text}");
         }
         // Not for Bob.
-        let Kind::Enveloped(der) = classify(&crlf("encrypted-aes.eml")) else { panic!() };
+        let Kind::Enveloped(der) = classify(&crlf("encrypted-aes.eml")) else {
+            panic!()
+        };
         let b = bob();
-        assert_eq!(decrypt(&der, &[(b.cert.clone(), b.key.clone())]), Err(DecryptError::NotForYou { recipients: 1 }));
+        assert_eq!(
+            decrypt(&der, &[(b.cert.clone(), b.key.clone())]),
+            Err(DecryptError::NotForYou { recipients: 1 })
+        );
         // Alice's certificate with Bob's key: the key transport fails, reported like corruption.
         let wrong = decrypt(&der, &[(cert("alice.pem"), b.key)]).unwrap_err();
         assert!(matches!(wrong, DecryptError::Failed(_)), "{wrong:?}");
@@ -1727,7 +1784,9 @@ mod tests {
 
     #[test]
     fn tampered_signatures_fail() {
-        let Kind::SignedDetached { content, signature } = classify(&crlf("signed-detached.eml")) else { panic!() };
+        let Kind::SignedDetached { content, signature } = classify(&crlf("signed-detached.eml")) else {
+            panic!()
+        };
         let changed = String::from_utf8(content.clone()).unwrap().replace("1234", "9999");
         let v = verify(&signature, Some(changed.as_bytes()), &[]);
         assert!(!v.valid && v.problem.as_deref().unwrap().contains("changed"), "{:?}", v.problem);
@@ -1749,7 +1808,9 @@ mod tests {
         let chain = check_chain(v.signer.as_ref().unwrap(), &v.certificates, &[cert("ca.pem")], Utc::now());
         assert_eq!(chain.status, "expired", "{chain:?}");
         // Opaque signature with the content swapped inside is detected.
-        let Kind::SignedOpaque(der) = classify(&crlf("signed-opaque.eml")) else { panic!() };
+        let Kind::SignedOpaque(der) = classify(&crlf("signed-opaque.eml")) else {
+            panic!()
+        };
         let mut swapped = der.clone();
         let p = find(&swapped, b"2345").unwrap();
         swapped[p..p + 4].copy_from_slice(b"0000");
@@ -1764,11 +1825,15 @@ mod tests {
         let v = verify(&sig_der, Some(&entity), &[]);
         assert!(v.valid, "{:?}", v.problem);
         let signed = signed_entity(&entity, &sig_der, "sha-256");
-        let Kind::SignedDetached { content, signature } = classify(&signed) else { panic!("signed entity") };
+        let Kind::SignedDetached { content, signature } = classify(&signed) else {
+            panic!("signed entity")
+        };
         assert_eq!(content, entity);
         assert!(verify(&signature, Some(&content), &[]).valid);
         let enc = encrypt(&signed, &[cert("alice.pem"), b.cert.clone()]).unwrap();
-        let Kind::Enveloped(der) = classify(&enveloped_entity(&enc)) else { panic!("enveloped") };
+        let Kind::Enveloped(der) = classify(&enveloped_entity(&enc)) else {
+            panic!("enveloped")
+        };
         assert_eq!(decrypt(&der, &[alice()]).unwrap(), signed);
         assert_eq!(decrypt(&der, &[(b.cert.clone(), b.key.clone())]).unwrap(), signed);
         // EC certificates cannot be encrypted to (RSA key transport only).
@@ -1800,7 +1865,10 @@ mod tests {
             .unwrap();
         assert!(out.status.success(), "openssl cms -verify: {}", String::from_utf8_lossy(&out.stderr));
         assert!(String::from_utf8_lossy(&out.stdout).contains("Interop works."));
-        let enc = with_entity(b"From: bob@example.test\r\nTo: alice@example.test\r\n\r\n", &enveloped_entity(&encrypt(&entity, &[cert("alice.pem")]).unwrap()));
+        let enc = with_entity(
+            b"From: bob@example.test\r\nTo: alice@example.test\r\n\r\n",
+            &enveloped_entity(&encrypt(&entity, &[cert("alice.pem")]).unwrap()),
+        );
         let enc_path = dir.path().join("enc.eml");
         std::fs::write(&enc_path, &enc).unwrap();
         let out = std::process::Command::new("openssl")
@@ -1815,9 +1883,13 @@ mod tests {
 
     #[test]
     fn signed_and_encrypted() {
-        let Kind::Enveloped(der) = classify(&crlf("signed-encrypted.eml")) else { panic!() };
+        let Kind::Enveloped(der) = classify(&crlf("signed-encrypted.eml")) else {
+            panic!()
+        };
         let inner = decrypt(&der, &[alice()]).unwrap();
-        let Kind::SignedDetached { content, signature } = classify(&inner) else { panic!("inner signature: {}", String::from_utf8_lossy(&inner)) };
+        let Kind::SignedDetached { content, signature } = classify(&inner) else {
+            panic!("inner signature: {}", String::from_utf8_lossy(&inner))
+        };
         let v = verify(&signature, Some(&content), &[]);
         assert!(v.valid, "{:?}", v.problem);
         assert!(String::from_utf8_lossy(&content).contains("6789"));
@@ -1843,14 +1915,23 @@ mod tests {
         assert_eq!(e, b"Content-Type: text/plain;\r\n charset=\"utf-8\"\r\n\r\nbody\r\n");
         let m = with_entity(raw, b"Content-Type: text/html\r\n\r\n<p>x</p>\r\n");
         let s = String::from_utf8(m).unwrap();
-        assert!(s.starts_with("From: a@b.c\r\nSubject: x\r\nMIME-Version: 1.0\r\nContent-Type: text/html\r\n\r\n<p>x</p>"), "{s}");
-        assert_eq!(content_type(b"Content-Type: Multipart/Signed; boundary=\"a;b\"; protocol=x\r\n").1[0], ("boundary".into(), "a;b".into()));
+        assert!(
+            s.starts_with("From: a@b.c\r\nSubject: x\r\nMIME-Version: 1.0\r\nContent-Type: text/html\r\n\r\n<p>x</p>"),
+            "{s}"
+        );
+        assert_eq!(
+            content_type(b"Content-Type: Multipart/Signed; boundary=\"a;b\"; protocol=x\r\n").1[0],
+            ("boundary".into(), "a;b".into())
+        );
         let parts = multipart_parts(b"pre\r\n--b\r\nA\r\n\r\n--b\r\nB\r\n--b--\r\n", "b");
         assert_eq!(parts, vec![b"A\r\n".to_vec(), b"B".to_vec()]);
         assert_eq!(canonical_crlf(b"a\nb\r\nc"), b"a\r\nb\r\nc");
         assert_eq!(classify(b"Content-Type: text/plain\r\n\r\nhi"), Kind::Plain);
         // multipart/signed with another protocol (PGP) is not S/MIME.
-        assert_eq!(classify(b"Content-Type: multipart/signed; protocol=\"application/pgp-signature\"; boundary=b\r\n\r\n--b\r\nx\r\n--b--"), Kind::Plain);
+        assert_eq!(
+            classify(b"Content-Type: multipart/signed; protocol=\"application/pgp-signature\"; boundary=b\r\n\r\n--b\r\nx\r\n--b--"),
+            Kind::Plain
+        );
     }
 
     #[test]

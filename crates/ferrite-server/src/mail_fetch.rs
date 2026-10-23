@@ -12,8 +12,8 @@
 //!
 //! `[mail_security] proxy_allow_private` (tests only) lifts the address check.
 
-use ferrite_core::net::is_public;
 use ferrite_core::mail::security::sniff_image;
+use ferrite_core::net::is_public;
 use ferrite_core::{Error, Result};
 use reqwest::{StatusCode, Url};
 use std::net::{IpAddr, SocketAddr};
@@ -85,14 +85,17 @@ pub fn check_url(raw: &str, allow_private: bool) -> Result<Url> {
     let host = url.host_str().ok_or_else(|| Error::bad("the address has no host"))?;
     if !allow_private {
         // IP literals bypass the resolver, so they are checked here.
-        if let Ok(ip) = host.trim_start_matches('[').trim_end_matches(']').parse::<IpAddr>() {
-            if !is_public(ip) {
-                return Err(Error::Forbidden);
+        match host.trim_start_matches('[').trim_end_matches(']').parse::<IpAddr>() {
+            Ok(ip) if !is_public(ip) => return Err(Error::Forbidden),
+            Ok(_) => {}
+            Err(_) => {
+                // Names that only make sense inside a network (the resolver drops private
+                // answers too, this refuses them without a lookup).
+                let lower = host.to_ascii_lowercase();
+                if lower == "localhost" || lower.ends_with(".localhost") || lower.ends_with(".local") || lower.ends_with(".internal") || !lower.contains('.') {
+                    return Err(Error::Forbidden);
+                }
             }
-        }
-        let lower = host.to_ascii_lowercase();
-        if lower == "localhost" || lower.ends_with(".localhost") || lower.ends_with(".local") || lower.ends_with(".internal") || !lower.contains('.') {
-            return Err(Error::Forbidden);
         }
     }
     Ok(url)
@@ -142,7 +145,11 @@ pub async fn get(raw: &str, accept: &str, max: usize, allow_private: bool) -> Re
             .unwrap_or_default();
         let mut resp = resp;
         let mut data = Vec::new();
-        while let Some(chunk) = resp.chunk().await.map_err(|e| Error::Unavailable(format!("reading failed: {}", without_url(&e))))? {
+        while let Some(chunk) = resp
+            .chunk()
+            .await
+            .map_err(|e| Error::Unavailable(format!("reading failed: {}", without_url(&e))))?
+        {
             if data.len() + chunk.len() > max {
                 return Err(Error::bad("too large"));
             }
@@ -170,7 +177,13 @@ pub async fn image(url: &str, max: usize, allow_private: bool) -> Result<(&'stat
 
 /// A remote image for the proxy: raster formats, or SVG (which the proxy serves sandboxed).
 pub async fn proxied_image(url: &str, max: usize, allow_private: bool) -> Result<(&'static str, Vec<u8>)> {
-    let f = get(url, "image/avif,image/webp,image/png,image/jpeg,image/gif,image/svg+xml,image/*;q=0.8", max, allow_private).await?;
+    let f = get(
+        url,
+        "image/avif,image/webp,image/png,image/jpeg,image/gif,image/svg+xml,image/*;q=0.8",
+        max,
+        allow_private,
+    )
+    .await?;
     if let Some(kind) = sniff_image(&f.data) {
         return Ok((kind, f.data));
     }
@@ -212,7 +225,10 @@ pub fn icon_links(html: &str, base: &Url) -> Vec<Url> {
         let tag_l = &lower[start..end];
         i = end;
         let rel = attr(tag, tag_l, "rel").unwrap_or_default().to_ascii_lowercase();
-        if !rel.split_whitespace().any(|r| r == "icon" || r == "apple-touch-icon" || r == "apple-touch-icon-precomposed") {
+        if !rel
+            .split_whitespace()
+            .any(|r| r == "icon" || r == "apple-touch-icon" || r == "apple-touch-icon-precomposed")
+        {
             continue;
         }
         let Some(href) = attr(tag, tag_l, "href") else { continue };
@@ -245,7 +261,7 @@ fn attr(tag: &str, lower: &str, name: &str) -> Option<String> {
         let v = tag[offset..].trim_start();
         let value = match v.chars().next() {
             Some(q @ ('"' | '\'')) => v[1..].split(q).next().unwrap_or(""),
-            _ => v.split(|c: char| c.is_whitespace() || c == '/').next().unwrap_or(""),
+            _ => v.split(char::is_whitespace).next().unwrap_or("").trim_end_matches('/'),
         };
         return Some(value.replace("&amp;", "&"));
     }
@@ -358,7 +374,14 @@ mod tests {
 <link rel="icon" type="image/png" sizes="32x32" href="icon-32.png"><link rel="icon" href="/logo.svg" type="image/svg+xml">
 <link rel=apple-touch-icon href=//cdn.example.org/touch.png></head>"#;
         let links: Vec<String> = icon_links(html, &base).into_iter().map(|u| u.to_string()).collect();
-        assert_eq!(links, vec!["https://cdn.example.org/touch.png", "https://example.org/news/icon-32.png", "https://example.org/favicon.ico"]);
+        assert_eq!(
+            links,
+            vec![
+                "https://cdn.example.org/touch.png",
+                "https://example.org/news/icon-32.png",
+                "https://example.org/favicon.ico"
+            ]
+        );
     }
 
     #[test]

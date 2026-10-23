@@ -123,10 +123,15 @@ fn system_anchors(path: Option<&std::path::Path>) -> &'static Vec<Vec<u8>> {
     ANCHORS.get_or_init(|| {
         let candidates: Vec<std::path::PathBuf> = match path {
             Some(p) => vec![p.to_path_buf()],
-            None => ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/cert.pem", "/etc/ssl/ca-bundle.pem"]
-                .iter()
-                .map(std::path::PathBuf::from)
-                .collect(),
+            None => [
+                "/etc/ssl/certs/ca-certificates.crt",
+                "/etc/pki/tls/certs/ca-bundle.crt",
+                "/etc/ssl/cert.pem",
+                "/etc/ssl/ca-bundle.pem",
+            ]
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect(),
         };
         for c in candidates {
             if let Ok(data) = std::fs::read(&c) {
@@ -206,7 +211,10 @@ impl Core {
             // Never downgrade an own certificate (and never drop its key) by importing it again.
             if old_kind == "own" || kind != CertKind::Own {
                 if old_kind != kind.as_str() && kind == CertKind::Authority && old_kind == "contact" {
-                    sqlx::query("UPDATE mail_smime_certs SET kind = 'authority' WHERE id = ?").bind(id).execute(&self.db).await?;
+                    sqlx::query("UPDATE mail_smime_certs SET kind = 'authority' WHERE id = ?")
+                        .bind(id)
+                        .execute(&self.db)
+                        .await?;
                 }
                 return Ok(self.smime_certificate(user_id, id).await?.0);
             }
@@ -253,7 +261,8 @@ impl Core {
             // Encrypted mail read before this key arrived is re-read with it.
             self.smime_forget_encrypted_bodies(user_id).await?;
         }
-        self.hub.publish([user_id], &serde_json::json!({"type": "mail.security", "what": "certificates"}));
+        self.hub
+            .publish([user_id], &serde_json::json!({"type": "mail.security", "what": "certificates"}));
         Ok(self.smime_certificate(user_id, &id).await?.0)
     }
 
@@ -329,7 +338,8 @@ impl Core {
             self.smime_forget_encrypted_bodies(user_id).await?;
             self.mail_drop_decrypted_index(user_id).await?;
         }
-        self.hub.publish([user_id], &serde_json::json!({"type": "mail.security", "what": "certificates"}));
+        self.hub
+            .publish([user_id], &serde_json::json!({"type": "mail.security", "what": "certificates"}));
         Ok(())
     }
 
