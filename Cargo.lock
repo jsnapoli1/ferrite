@@ -1306,6 +1306,7 @@ dependencies = [
  "hex",
  "http-body-util",
  "libc",
+ "mail-parser",
  "mime_guess",
  "percent-encoding",
  "qrcode",

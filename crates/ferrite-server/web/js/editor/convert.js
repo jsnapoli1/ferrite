@@ -64,7 +64,7 @@ class TextWriter {
   blank() {
     this.newline();
     const last = this.lines[this.lines.length - 1];
-    if (last && last[1] !== '') this.lines.push([this.depth, '']);
+    if (last && last[1] !== '' && last[1] !== '-- ') this.lines.push([this.depth, '']);
   }
 
   finish() {

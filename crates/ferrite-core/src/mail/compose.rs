@@ -190,7 +190,7 @@ pub fn html_with_signature(quote: &str, signature: &str, above: bool) -> String 
 }
 
 fn escape(s: &str) -> String {
-    ammonia::clean_text(s)
+    super::richtext::escape(s)
 }
 
 fn attribution(from: &str, date: Option<DateTime<Utc>>) -> String {

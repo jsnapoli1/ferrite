@@ -12,8 +12,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-/// Key of the admin's attachment size limit (bytes; 0 or missing: no limit).
-const ATTACHMENT_LIMIT_KEY: &str = "mail.attachment_size_limit";
+/// The admins' mail settings document (kept by mail/settings.rs of the [accounts] work).
+const MAIL_SETTINGS_KEY: &str = "mail_settings";
 /// Undo-send delays the user can choose (seconds; 0 sends at once).
 pub const UNDO_SEND_CHOICES: &[i64] = &[0, 5, 10, 20, 30];
 pub const DEFAULT_UNDO_SEND_SECONDS: i64 = 10;
@@ -349,19 +349,21 @@ impl Core {
         self.mail_send_prefs(user_id).await
     }
 
-    /// The admin's limit for a single attachment in bytes (0: none). Larger files go out as
-    /// share links.
+    /// The admin's limit for a single attachment in bytes (0: none); larger files go out as
+    /// share links. Admins set it with the other mail settings (`attachment_size_limit` of the
+    /// mail settings document, `PATCH /api/admin/mail/settings`).
     pub async fn mail_attachment_limit(&self) -> Result<i64> {
-        Ok(self.kv_get(ATTACHMENT_LIMIT_KEY).await?.and_then(|v| v.parse().ok()).unwrap_or(0).max(0))
+        let doc = self.kv_get(MAIL_SETTINGS_KEY).await?;
+        Ok(attachment_limit_of(doc.as_deref()))
     }
+}
 
-    pub async fn set_mail_attachment_limit(&self, bytes: i64) -> Result<i64> {
-        if bytes < 0 {
-            return Err(Error::bad("the attachment size limit cannot be negative"));
-        }
-        self.kv_set(ATTACHMENT_LIMIT_KEY, &bytes.to_string()).await?;
-        Ok(bytes)
-    }
+/// `attachment_size_limit` (bytes or null) of the mail settings document.
+fn attachment_limit_of(doc: Option<&str>) -> i64 {
+    doc.and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+        .and_then(|v| v.get("attachment_size_limit").and_then(serde_json::Value::as_i64))
+        .unwrap_or(0)
+        .max(0)
 }
 
 #[cfg(test)]
@@ -378,6 +380,9 @@ mod tests {
         assert!(h.contains("Alice Archer") && !h.contains("<b>"), "{h}");
         assert_eq!(signature_pair("", None), (String::new(), String::new()));
         assert_eq!(clean_signature("<p><br></p>"), (None, String::new()));
+        assert_eq!(attachment_limit_of(Some(r#"{"attachment_size_limit": 2048, "sync_interval": 300}"#)), 2048);
+        assert_eq!(attachment_limit_of(Some(r#"{"attachment_size_limit": null}"#)), 0);
+        assert_eq!(attachment_limit_of(None), 0);
         let (html, text) = clean_signature("<p>Bob <script>x</script><i>B</i></p>");
         assert_eq!((html.as_deref(), text.as_str()), (Some("<p>Bob <i>B</i></p>"), "Bob /B/"));
     }

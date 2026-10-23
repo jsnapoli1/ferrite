@@ -2,7 +2,7 @@
 //! blocks, the outbox (queue, schedule, undo, edit, send now), recipient details, large
 //! attachments as share links, read receipts, attached messages and printing. Everything
 //! requires the `mail` scope and only touches the caller's own accounts; the attachment size
-//! limit is set by admins.
+//! limit comes from the admins' mail settings.
 
 use super::mail::file_response;
 use crate::AppState;
@@ -33,7 +33,6 @@ pub fn router() -> Router<AppState> {
         .route("/api/mail/accounts/{id}/aliases", get(aliases).post(create_alias))
         .route("/api/mail/aliases/{id}", patch(update_alias).delete(delete_alias))
         .route("/api/mail/send-settings", put(set_send_settings))
-        .route("/api/admin/mail/attachment-limit", get(attachment_limit).put(set_attachment_limit))
         .route("/api/mail/text-blocks", get(text_blocks).post(create_text_block))
         .route("/api/mail/text-blocks/{id}", patch(update_text_block).delete(delete_text_block))
         .route("/api/mail/text-blocks/{id}/shares", post(share_text_block))
@@ -167,22 +166,6 @@ struct SendSettings {
 async fn set_send_settings(State(s): State<AppState>, auth: Auth, Json(b): Json<SendSettings>) -> ApiResult<Json<Value>> {
     scope(&auth)?;
     Ok(Json(json!({"send": s.core.set_mail_send_prefs(&auth.user.id, b.undo_send_seconds).await?})))
-}
-
-async fn attachment_limit(State(s): State<AppState>, auth: Auth) -> ApiResult<Json<Value>> {
-    auth.require_admin()?;
-    Ok(Json(json!({"bytes": s.core.mail_attachment_limit().await?})))
-}
-
-#[derive(Deserialize)]
-struct LimitBody {
-    bytes: i64,
-}
-
-/// The admin's limit for one attachment (0: none); larger files are sent as share links.
-async fn set_attachment_limit(State(s): State<AppState>, auth: Auth, Json(b): Json<LimitBody>) -> ApiResult<Json<Value>> {
-    auth.require_admin()?;
-    Ok(Json(json!({"bytes": s.core.set_mail_attachment_limit(b.bytes).await?})))
 }
 
 async fn text_blocks(State(s): State<AppState>, auth: Auth) -> ApiResult<Json<Value>> {

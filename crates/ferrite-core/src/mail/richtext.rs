@@ -482,11 +482,12 @@ impl TextWriter {
         self.space = false;
     }
 
-    /// A paragraph break: one blank line (never two, none at the start).
+    /// A paragraph break: one blank line (never two, none at the start or right after the
+    /// signature separator).
     fn blank(&mut self) {
         self.newline();
         match self.lines.last() {
-            Some((_, l)) if l.is_empty() => {}
+            Some((_, l)) if l.is_empty() || l == "-- " => {}
             None => {}
             _ => self.lines.push((self.depth, String::new())),
         }
@@ -690,7 +691,8 @@ pub fn html_to_text(html: &str) -> String {
 
 // ---- text → HTML ------------------------------------------------------------------------
 
-fn escape(s: &str) -> String {
+/// Text escaped for HTML (element content and quoted attributes).
+pub(crate) fn escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -930,7 +932,7 @@ mod tests {
 <div>line one<br>line two</div><div><br></div><div>after blank</div><hr><h1>Title</h1>\
 <blockquote type=\"cite\"><p>quoted <i>text</i></p><blockquote><p>older</p></blockquote></blockquote>\
 <pre>  keep   spaces\n  here</pre><img src=\"cid:x\" alt=\"Logo\"><u>under</u>\
-<div class=\"ferrite-signature\"><div>Alice &amp; Co</div></div>";
+<div class=\"ferrite-signature\"><p>Alice &amp; Co</p></div>";
         let t = html_to_text(html);
         let expected = "Hello *Bob*,\n\nsee the report <https://example.org/q3> and https://example.org.\n\n- first\n- second\n  - nested\n\n1. one\n2. two\n\nline one\nline two\n\nafter blank\n\n----------\n\nTitle\n\n> quoted /text/\n>\n>> older\n\n  keep   spaces\n  here\n\n[Logo]_under_\n-- \nAlice & Co";
         assert_eq!(t, expected);

@@ -61,7 +61,7 @@ fn receipt_address(header: &[u8]) -> Option<Addr> {
 }
 
 fn escape(s: &str) -> String {
-    ammonia::clean_text(s)
+    super::richtext::escape(s)
 }
 
 impl Core {
@@ -231,11 +231,12 @@ impl Core {
             // The message's own document is embedded in the printed page.
             let start = doc.find("<body>").map(|p| p + 6).unwrap_or(0);
             let end = doc.rfind("</body>").unwrap_or(doc.len());
+            // Only the message's own styles: the reader's page styles would undo the print layout.
             let head_css: String = doc
                 .match_indices("<style>")
                 .filter_map(|(p, _)| doc[p + 7..].find("</style>").map(|e| doc[p + 7..p + 7 + e].to_string()))
-                .collect::<Vec<_>>()
-                .join("\n");
+                .last()
+                .unwrap_or_default();
             format!("<style>{head_css}</style><div class=\"body\">{}</div>", &doc[start..end])
         } else {
             format!("<pre class=\"body\">{}</pre>", escape(&view.text))

@@ -21,7 +21,7 @@
 // the Outbox (scheduled, edit, send now), a failed send retried from the Outbox;
 // minimizing with autosave of drafts and insertIntoComposer; forward as attachment and the
 // attached message shown inline; an .eml attached by upload; a large attachment shared as a
-// link over the admin's limit; the print view; light/dark/390px screenshots. Prints
+// link by choice and over the admin's limit; the print view; light/dark/390px screenshots. Prints
 // {ok, errors}; any console error fails the run.
 import { chromium } from 'playwright';
 import { mkdirSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
@@ -161,6 +161,10 @@ try {
   const { group } = await page.api('POST', '/api/admin/groups', { name: 'Team' });
   for (const u of ['bob', 'carol']) await page.api('POST', `/api/admin/groups/${group.id}/members`, { username: u });
   await page.api('POST', '/api/contacts', { name: 'Bob Builder', emails: ['bob@example.test'], phones: ['+49 30 1234567'], org: 'Builder & Sons', note: 'Prefers short mails.' });
+  // Servers on 127.0.0.1 need the admin's consent (mail settings of the [accounts] work).
+  page.expected = ['/api/admin/mail/settings'];
+  await page.apiStatus('PATCH', '/api/admin/mail/settings', { allow_local_servers: true });
+  page.expected = [];
   const acc = await account(page, 'alice@example.test', 'alice-mail-pw');
 
   log('Mail settings: rich text, signature, undo delay, alias, shared text block');
@@ -470,30 +474,57 @@ try {
   await composer(page).waitFor();
   await composer(page).locator('.ml-compose-tools input[type=file]').setInputFiles({ name: 'old thread.eml', mimeType: 'message/rfc822', buffer: Buffer.from('From: x@example.org\r\nSubject: Old thread\r\n\r\nHello\r\n') });
   await composer(page).locator('.ml-file-chip.eml', { hasText: 'old thread.eml' }).locator('button').waitFor();
-  await page.api('PUT', '/api/admin/mail/attachment-limit', { bytes: 2048 });
   await composer(page).getByRole('button', { name: 'Discard' }).click();
+
+  // By choice: "Share link" uploads to Files and puts a link in the message.
   await page.getByRole('button', { name: 'Compose' }).click();
   await composer(page).waitFor();
   await page.keyboard.type('bob@example.test,');
-  await page.locator('.ml-subject-input').fill('Big file');
-  await composer(page).locator('.ml-compose-tools input[type=file]').setInputFiles({ name: 'report.csv', mimeType: 'text/csv', buffer: Buffer.alloc(6000, 'a,b,c\n') });
-  const big = page.locator('.modal', { hasText: 'Large attachment' });
-  await big.waitFor();
-  await big.getByRole('button', { name: 'Share as link' }).click();
-  const link = area(page).locator('a[href*="/s/"]', { hasText: 'report.csv' });
-  await link.waitFor({ timeout: 15000 });
-  const href = await link.getAttribute('href');
-  const shared = await page.request.get(href);
-  assert(shared.ok(), 'the link works');
+  await page.locator('.ml-subject-input').fill('Linked file');
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    (async () => {
+      await composer(page).getByRole('button', { name: 'Share link' }).click();
+      await page.locator('.menu button', { hasText: 'Upload a file and share a link' }).click();
+    })(),
+  ]);
+  await chooser.setFiles({ name: 'slides.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n') });
+  const choice = area(page).locator('a[href*="/s/"]', { hasText: 'slides.pdf' });
+  await choice.waitFor({ timeout: 15000 });
+  assert((await page.request.get(await choice.getAttribute('href'))).ok(), 'the link works');
   await composer(page).getByRole('button', { name: 'Send', exact: true }).click();
-  const bigMail = await relay.waitFor((m) => m.data.includes('Subject: Big file'));
-  assert(pyParse(bigMail.data).texts['text/plain'][0].includes(href) && !bigMail.data.includes('report.csv"'), 'sent as a link, not attached');
-  // The server enforces the limit too.
-  const { upload } = await (await page.request.post(`${base}/api/mail/uploads?name=big.bin`, { headers: { ...H, 'Content-Type': 'application/octet-stream' }, data: Buffer.alloc(5000) })).json();
-  page.expected = ['/api/mail/outbox'];
-  assert(await page.apiStatus('POST', '/api/mail/outbox', { account_id: acc.id, compose: { to: ['bob@example.test'], subject: 'x', text: 'x', attachments: [{ kind: 'upload', id: upload.id }] } }) === 400, 'over the limit is refused');
+  const linked = await relay.waitFor((m) => m.data.includes('Subject: Linked file'));
+  assert(!linked.data.includes('application/pdf'), 'shared as a link, not attached');
+
+  // Over the admin's limit (mail settings of the [accounts] work): always a link, and the
+  // server refuses such attachments.
+  page.expected = ['/api/admin/mail/settings'];
+  const limitSet = await page.apiStatus('PATCH', '/api/admin/mail/settings', { attachment_size_limit: 2048 });
   page.expected = [];
-  await page.api('PUT', '/api/admin/mail/attachment-limit', { bytes: 0 });
+  if (limitSet === 200) {
+    await page.getByRole('button', { name: 'Compose' }).click();
+    await composer(page).waitFor();
+    await page.keyboard.type('bob@example.test,');
+    await page.locator('.ml-subject-input').fill('Big file');
+    await composer(page).locator('.ml-compose-tools input[type=file]').setInputFiles({ name: 'report.csv', mimeType: 'text/csv', buffer: Buffer.alloc(6000, 'a,b,c\n') });
+    const big = page.locator('.modal', { hasText: 'Large attachment' });
+    await big.waitFor();
+    await big.getByRole('button', { name: 'Share as link' }).click();
+    const link = area(page).locator('a[href*="/s/"]', { hasText: 'report.csv' });
+    await link.waitFor({ timeout: 15000 });
+    const href = await link.getAttribute('href');
+    assert((await page.request.get(href)).ok(), 'the link works');
+    await composer(page).getByRole('button', { name: 'Send', exact: true }).click();
+    const bigMail = await relay.waitFor((m) => m.data.includes('Subject: Big file'));
+    assert(pyParse(bigMail.data).texts['text/plain'][0].includes(href) && !bigMail.data.includes('report.csv"'), 'sent as a link, not attached');
+    const { upload } = await (await page.request.post(`${base}/api/mail/uploads?name=big.bin`, { headers: { ...H, 'Content-Type': 'application/octet-stream' }, data: Buffer.alloc(5000) })).json();
+    page.expected = ['/api/mail/outbox'];
+    assert(await page.apiStatus('POST', '/api/mail/outbox', { account_id: acc.id, compose: { to: ['bob@example.test'], subject: 'x', text: 'x', attachments: [{ kind: 'upload', id: upload.id }] } }) === 400, 'over the limit is refused');
+    page.expected = [];
+    await page.api('PATCH', '/api/admin/mail/settings', { attachment_size_limit: null });
+  } else {
+    log('(no admin mail settings API on this server: the attachment-limit steps are covered by tests/mail_compose.rs)');
+  }
 
   log('print view');
   await row(page, 'Engine notes').click();

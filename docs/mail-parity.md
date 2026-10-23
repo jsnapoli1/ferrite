@@ -72,8 +72,8 @@ Status: ✅ in Ferrite · 🔧 being built (workstream in brackets).
 | Create a calendar event or a task from a message (AI-suggested when AI is configured) | 🔧 [integrations] |
 | Add sender to contacts / new contact; recipient info pane | 🔧 [integrations] |
 | One-click unsubscribe (List-Unsubscribe, RFC 8058) | 🔧 [integrations] |
-| Read receipts (MDN): ask the user to send one when a sender requests it | 🔧 [compose] |
-| Print a message | 🔧 [compose] |
+| Read receipts (MDN): ask the user to send one when a sender requests it | ✅ |
+| Print a message | ✅ |
 | AI: thread summary (3+ messages), smart replies, translation, follow-up reminders for unanswered sent mail | 🔧 [integrations] |
 
 ## Composing and sending — [compose]
@@ -81,20 +81,21 @@ Status: ✅ in Ferrite · 🔧 being built (workstream in brackets).
 | Feature | Status |
 |---|---|
 | Plain text compose; reply, reply-all, forward with quoting and threading; drafts on the server | ✅ |
-| Rich text (HTML) editor with formatting, links, lists, quotes, inline images; plain-text mode; default editor mode per account | 🔧 |
-| Aliases (identities) per account; send as a server alias | 🔧 |
-| Signatures per account and per alias (HTML), above or below the quote | 🔧 |
-| Text blocks: reusable snippets inserted with `!` or from the menu, shareable with users and groups | 🔧 |
-| `@`-mention a contact to add them as a recipient | 🔧 |
-| Recipient info side pane | 🔧 |
-| Minimizable composer with a "resume" indicator; drafts saved automatically | ✅ autosave · 🔧 minimize |
-| Outbox: queued and scheduled messages, retries, reopen before sending | 🔧 |
-| Send later (scheduled send); undo send | 🔧 |
-| Request a read receipt | 🔧 |
+| Rich text (HTML) editor with formatting, links, lists, quotes, inline images; plain-text mode; default editor mode per account | ✅ |
+| Aliases (identities) per account; send as a server alias | ✅ |
+| Signatures per account and per alias (HTML), above or below the quote | ✅ |
+| Text blocks: reusable snippets inserted with `!` or from the menu, shareable with users and groups | ✅ |
+| `@`-mention a contact to add them as a recipient | ✅ |
+| Recipient info side pane | ✅ |
+| Minimizable composer with a "resume" indicator; drafts saved automatically | ✅ |
+| Outbox: queued and scheduled messages, retries, reopen before sending | ✅ |
+| Send later (scheduled send); undo send | ✅ |
+| Request a read receipt | ✅ |
 | Attachments from upload or Files | ✅ |
-| Large attachments as Files share links (admin attachment size limit) | 🔧 |
-| Forward as attachment | 🔧 |
-| Sending to a Ferrite group address expands to its members | 🔧 |
+| Large attachments as Files share links (admin attachment size limit) | ✅ |
+| Forward as attachment | ✅ |
+| Sending to a Ferrite group address expands to its members | ✅ |
+| Formats: multipart/alternative, related and mixed; encoded words; format=flowed; RFC 2231 names; .eml attachments and attached messages shown inline | ✅ |
 | Internal-address warnings when sending | 🔧 [security] |
 | S/MIME: certificate management (PKCS#12 / PEM import), sign and/or encrypt | 🔧 [security] |
 | PGP via Mailvelope (compose) | 🔧 [security] |
