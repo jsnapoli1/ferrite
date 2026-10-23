@@ -713,7 +713,14 @@ async fn mail_security_against_a_real_imap_server() {
     let r = report(id_of("Account locked")).await;
     let kinds: Vec<&str> = r["phishing"].as_array().unwrap().iter().map(|f| f["kind"].as_str().unwrap()).collect();
     assert_eq!(kinds, vec!["custom_address", "server_flag"], "{r}");
-    assert!(r["keywords"].as_array().unwrap().iter().any(|k| k == "$Phishing"));
+    // IMAP keywords are case-insensitive (Ferrite reports them lowercased).
+    assert!(
+        r["keywords"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|k| k.as_str().is_some_and(|k| k.eq_ignore_ascii_case("$Phishing")))
+    );
     assert_eq!(report(id_of("Two files")).await["phishing"], json!([]));
 
     // Internal addresses: senders outside the list are external (the switch is on).

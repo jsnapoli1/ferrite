@@ -28,37 +28,48 @@
 //!   events and tasks from a message. * `integrations`: their per-account settings.
 //! * `security`, `trust`, `phishing`, `dkim`, `smime`, `smime_store`: what the reader shows
 //!   about a message's trustworthiness, S/MIME and PGP.
+//! * Inbox management (see `inbox`): `prefs`, `tags`, `classify`, `snooze`, `folders`,
+//!   `views` (unified views, advanced search, deep links), `quick_actions`, `mailto`.
 
 pub mod abuse;
 pub mod agenda;
 pub mod antispam;
 pub mod autoconfig;
 pub mod background;
+pub mod classify;
 pub mod compose;
 pub mod crypto;
 pub mod delegation;
 pub mod dkim;
 pub mod dns;
 pub mod filters;
+pub mod folders;
 pub mod imap;
 pub mod imip;
+pub mod inbox;
 pub mod integrations;
 pub mod itinerary;
+pub mod mailto;
 pub mod managesieve;
 pub mod oauth;
 pub mod parse;
 pub mod people;
 pub mod phishing;
+pub mod prefs;
 pub mod provisioning;
+pub mod quick_actions;
 pub mod security;
 pub mod settings;
 pub mod sieve;
 pub mod smime;
 pub mod smime_store;
+pub mod snooze;
 pub mod store;
 pub mod sync;
+pub mod tags;
 pub mod trust;
 pub mod unsubscribe;
+pub mod views;
 
 pub use delegation::{MailRight, MailRole};
 
@@ -709,6 +720,7 @@ impl Core {
     /// periodic sync of every account with provisioning.
     pub fn spawn_mail_background(&self) {
         self.spawn_mail_sync_all();
+        self.spawn_inbox_background();
         let core = self.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(15));

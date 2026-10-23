@@ -1,7 +1,9 @@
-// Home: what needs attention — unread conversations, my cards, recent files.
+// Home: what needs attention — unread conversations, my cards, recent files, and (with a
+// mail account) unread and important mail.
 
 import { api } from '../api.js';
 import { h, icon, relTime, fileIcon, avatar, dateTime } from '../ui.js';
+import { mailWidgets } from './home-mail.js';
 
 export default async function render(root, ctx) {
   ctx.setTitle('Home');
@@ -26,7 +28,7 @@ export default async function render(root, ctx) {
     !ai.configured && ctx.me.user.is_admin && h('div.card.pad', { style: { marginBottom: '14px', borderColor: 'var(--accent)' } },
       h('strong', 'Connect an AI model. '), 'Point Ferrite at a local model server (Ollama, llama.cpp, vLLM, LM Studio) or Claude in ',
       h('a', { href: '/settings/ai', onclick: go('/settings/ai') }, 'Settings → AI'), '. Everything else works without it.'),
-    h('div', { style: { display: 'grid', gap: '14px', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' } },
+    h('div.home-grid', { style: { display: 'grid', gap: '14px', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' } },
       section('Unread conversations', '/talk', unread.length
         ? h('div.list', unread.slice(0, 8).map((r) => h('a.list-item.clickable', { href: `/talk/${r.token}`, onclick: go(`/talk/${r.token}`) },
           avatar(r.display_name, { size: 'sm', seed: r.id }),
@@ -44,4 +46,5 @@ export default async function render(root, ctx) {
           return h('a.list-item.clickable', { href, onclick: go(href) }, icon(fileIcon(node)), h('div.grow', h('div.ellipsis', node.name), h('div.small.muted.ellipsis', path)), h('span.small.muted', relTime(node.modified_at)));
         }))
         : h('p.muted', 'No files yet.')))));
+  mailWidgets(root.querySelector('.home-grid'), { go, section });
 }

@@ -286,7 +286,7 @@ try {
   log('report spam: forwarded as an attachment, moved to Junk');
   await row(page, 'Win a prize').click();
   await page.locator('.ml-card.expanded .ml-text').waitFor();
-  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.locator('.ml-actions').getByRole('button', { name: 'More actions' }).click();
   await page.getByRole('menuitem', { name: 'Report spam' }).click();
   await page.getByText('Reported as spam: 1 message').waitFor();
   const report = await until('the spam report', () => received.find((m) => m.to.includes('spam-reports@example.test')));

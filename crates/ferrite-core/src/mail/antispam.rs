@@ -96,7 +96,8 @@ impl Core {
                     .await?
                     .ok_or_else(|| Error::Unavailable("the account has no INBOX".into()))?,
             };
-            if dest.id != f.id {
+            // The account may keep reported mail where it is (inbox settings).
+            if dest.id != f.id && self.account_prefs_row(&a.id).await?.move_junk {
                 self.move_group(&a, &f, &msgs, &dest).await?;
                 out.moved += msgs.len();
             }

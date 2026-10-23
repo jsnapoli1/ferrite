@@ -56,7 +56,8 @@ pub struct AbuseSettings {
 pub struct UiDefaults {
     /// `vertical-split` (three panes), `horizontal-split` (list above the message) or `list`.
     pub layout: String,
-    /// Group messages into conversations.
+    /// One row per conversation in the list (opening a message shows its conversation
+    /// either way).
     pub threaded: bool,
     /// `newest` or `oldest` first.
     pub sort: String,
@@ -68,7 +69,7 @@ impl Default for UiDefaults {
     fn default() -> Self {
         UiDefaults {
             layout: "vertical-split".into(),
-            threaded: true,
+            threaded: false,
             sort: "newest".into(),
             compact: false,
         }

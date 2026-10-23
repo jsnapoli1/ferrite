@@ -7,6 +7,7 @@ pub mod groupware;
 pub mod mail;
 pub mod mail_accounts;
 pub mod mail_admin;
+pub mod mail_inbox;
 pub mod mail_integrations;
 pub mod mail_security;
 pub mod push;
@@ -75,6 +76,7 @@ pub fn router() -> Router<AppState> {
         .merge(mail_security::router())
         .merge(mail_accounts::router())
         .merge(mail_admin::router())
+        .merge(mail_inbox::router())
         .merge(mail_integrations::router())
         .route("/api/{*rest}", get(not_found).post(not_found).put(not_found).patch(not_found).delete(not_found))
 }

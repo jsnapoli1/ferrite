@@ -17,6 +17,10 @@
 # introspection endpoint (RFC 7662; it answers {"active": true, "username": "<user>"}).
 # With SIEVE=1 and POSTFIX=0, mail Sieve sends (vacation replies) is captured in
 # DIR/outgoing/ instead.
+# SHARED=1 adds ACLs
+# and a shared namespace ("shared/<user>/..."): folders another user may read (e.g.
+# `doveadm -c DIR/dovecot.conf acl set -u carol@example.test INBOX user=alice@example.test
+# lookup read`) show up in that user's folder list.
 #
 # Mailboxes (domain example.test): alice@example.test / alice-mail-pw, bob@example.test /
 # bob-mail-pw. Ports: IMAP $IMAP_PORT (3143), SMTP $SMTP_PORT (3587). Then, for the Rust
@@ -37,6 +41,7 @@ AUTH_PORT=${AUTH_PORT:-3012}
 SIEVE_PORT=${SIEVE_PORT:-4190}
 POSTFIX=${POSTFIX:-1}
 SIEVE=${SIEVE:-0}
+SHARED=${SHARED:-0}
 EXTRA_USERS=${EXTRA_USERS:-}
 QUOTA=${QUOTA:-0}
 OAUTH2_INTROSPECTION_URL=${OAUTH2_INTROSPECTION_URL:-}
@@ -163,6 +168,25 @@ plugin {
   quota = count:User quota
   quota_rule = *:storage=10M
   quota_vsizes = yes
+}
+EOF
+  fi
+  if [ "$SHARED" = 1 ]; then
+    # ACLs, and other users' folders under shared/<user>/ (with private \Seen flags).
+    sed -i 's/^mail_plugins = \$mail_plugins$/mail_plugins = $mail_plugins acl/' "$DIR/dovecot.conf"
+    sed -i 's/^protocol imap {$/protocol imap {\n  mail_plugins = $mail_plugins acl imap_acl/' "$DIR/dovecot.conf"
+    cat >>"$DIR/dovecot.conf" <<EOF
+namespace shared {
+  type = shared
+  separator = /
+  prefix = shared/%%u/
+  location = maildir:$DIR/mail/%%d/%%n/Maildir:INDEXPVT=$DIR/mail/%d/%n/shared/%%d/%%n
+  subscriptions = no
+  list = children
+}
+plugin {
+  acl = vfile
+  acl_shared_dict = file:$DIR/mail/shared-mailboxes.db
 }
 EOF
   fi

@@ -263,7 +263,8 @@ const exact = (text) => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&
 const row = (page, subject) => page.locator('.ml-row', { has: page.locator('.ml-subject', { hasText: exact(subject) }) });
 const card = (page) => page.locator('.ml-card.expanded').first();
 async function open(page, subject) {
-  await row(page, subject).click();
+  // The subject, not the row's middle: a row's hover toolbar covers its top right.
+  await row(page, subject).locator('.ml-subject').click();
   await page.locator('.ml-thread-head h2', { hasText: exact(subject) }).waitFor();
   await card(page).locator('.ml-card-body > .ml-content > *').first().waitFor();
 }
@@ -397,7 +398,7 @@ try {
   await page.screenshot({ path: `${shots}/security-smime.png` });
 
   log('view source and the ZIP of attachments');
-  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.locator('.ml-actions').getByRole('button', { name: 'More actions' }).click();
   await page.getByRole('menuitem', { name: 'View source' }).click();
   await page.locator('.ms-source', { hasText: 'Message-ID: <signed-detached@example.test>' }).waitFor();
   assert(await page.locator('.ms-source script, .ms-source b').count() === 0, 'source is text');

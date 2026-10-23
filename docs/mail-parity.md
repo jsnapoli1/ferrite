@@ -15,32 +15,32 @@ Status: ✅ in Ferrite · 🔧 being built (workstream in brackets).
 
 | Feature | Status |
 |---|---|
-| Layouts: list, vertical split, horizontal split | 🔧 |
-| Compact mode (no avatars or previews, checkboxes always shown) | 🔧 |
-| Threaded or one-message-per-row display | 🔧 |
-| Sort newest or oldest first (all accounts) | 🔧 |
-| Favorites (starred) shown in their own section at the top; Starred view | 🔧 |
-| All inboxes (unified across accounts) | 🔧 |
-| Priority inbox: Important / Others sections, importance learned per account from the user's behaviour (read, replied, sent, marked important, subject), can be switched off; admin default | 🔧 |
-| Tags: IMAP keywords with the defaults `$label1`–`$label5` (Important, Work, Personal, To Do, Later; renamable), custom tags with colours, rename/recolour/delete | 🔧 |
-| Quick actions: user-defined one-click sequences (mark read/unread, favourite, important, spam, apply tag, move, delete), per account | 🔧 |
-| Snooze a message or thread until a chosen time (Snoozed folder, automatic return), unsnooze | 🔧 |
-| Single-click envelope actions, drag and drop to folders, move dialog | ✅ move, drag · 🔧 rest |
-| Dashboard widgets: unread mail, important mail (Ferrite's Home) | 🔧 |
-| Deep links to a message; `mailto:` handler | 🔧 |
-| Preferences stored per user; admin UI defaults | 🔧 |
+| Layouts: list, vertical split, horizontal split | ✅ |
+| Compact mode (no avatars or previews, checkboxes always shown) | ✅ |
+| Threaded or one-message-per-row display | ✅ |
+| Sort newest or oldest first (all accounts) | ✅ |
+| Favorites (starred) shown in their own section at the top; Starred view | ✅ |
+| All inboxes (unified across accounts) | ✅ |
+| Priority inbox: Important / Others sections, importance learned per account from the user's behaviour (read, replied, sent, marked important, subject), can be switched off; admin default | ✅ |
+| Tags: IMAP keywords with the defaults `$label1`–`$label5` (Important, Work, Personal, To Do, Later; renamable), custom tags with colours, rename/recolour/delete | ✅ |
+| Quick actions: user-defined one-click sequences (mark read/unread, favourite, important, spam, apply tag, move, delete), per account | ✅ |
+| Snooze a message or thread until a chosen time (Snoozed folder, automatic return), unsnooze | ✅ |
+| Single-click envelope actions, drag and drop to folders, move dialog | ✅ |
+| Dashboard widgets: unread mail, important mail (Ferrite's Home) | ✅ |
+| Deep links to a message; `mailto:` handler | ✅ |
+| Preferences stored per user; admin UI defaults | ✅ |
 
 ## Folders (mailboxes) — [inbox]
 
 | Feature | Status |
 |---|---|
 | Special-use detection (Inbox, Sent, Drafts, Trash, Archive, Junk) | ✅ |
-| Create, rename, delete, move folders and subfolders; subscribe/unsubscribe | 🔧 |
-| Mark all as read, empty (clear) a folder, folder statistics, repair/clear cache, manual refresh | 🔧 |
-| Shared folders (IMAP namespaces/ACL) shown with a shared marker | 🔧 |
-| Per-account default folders (Drafts, Sent, Trash, Archive, Junk, Snoozed) | 🔧 |
-| Trash retention: delete messages in Trash after N days | 🔧 |
-| Move junk-marked messages to the Junk folder automatically | 🔧 |
+| Create, rename, delete, move folders and subfolders; subscribe/unsubscribe | ✅ |
+| Mark all as read, empty (clear) a folder, folder statistics, repair/clear cache, manual refresh | ✅ |
+| Shared folders (IMAP namespaces/ACL) shown with a shared marker | ✅ |
+| Per-account default folders (Drafts, Sent, Trash, Archive, Junk, Snoozed) | ✅ |
+| Trash retention: delete messages in Trash after N days | ✅ |
+| Move junk-marked messages to the Junk folder automatically | ✅ |
 | Unread counts, live new mail (IDLE) | ✅ |
 
 ## Search — [inbox]
@@ -49,8 +49,8 @@ Status: ✅ in Ferrite · 🔧 being built (workstream in brackets).
 |---|---|
 | Global (unified) search including mail | ✅ |
 | Quick search in a folder (subject, sender, recipient) | ✅ |
-| Advanced search: from, to, cc, subject, body, date range, flags, tags, attachments | 🔧 |
-| Body search opt-in, also for unified folders | 🔧 |
+| Advanced search: from, to, cc, subject, body, date range, flags, tags, attachments | ✅ |
+| Body search opt-in, also for unified folders | ✅ |
 
 ## Reading — [security] and [integrations]
 
