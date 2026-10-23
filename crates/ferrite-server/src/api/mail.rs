@@ -139,19 +139,17 @@ struct HtmlQ {
 }
 
 /// The sanitized HTML of a message as a document for a sandboxed iframe. Its own CSP allows
-/// no scripts, forms or plugins, and remote images only when asked for.
+/// no scripts, forms or plugins, and images only from Ferrite itself: remote images, when
+/// asked for, come through the image proxy (`/api/mail/proxy`), never from the sender.
 async fn message_html(State(s): State<AppState>, auth: Auth, Path(id): Path<String>, Query(q): Query<HtmlQ>) -> ApiResult<Response> {
     scope(&auth)?;
     let doc = s.core.mail_message_html(&auth.user.id, &id, q.remote).await?;
-    let img = if q.remote { "'self' data: https: http:" } else { "'self' data:" };
-    let csp = format!(
-        "default-src 'none'; img-src {img}; style-src 'unsafe-inline'; font-src data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; \
-         sandbox allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-    );
+    let csp = "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; font-src data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; \
+         sandbox allow-same-origin allow-popups allow-popups-to-escape-sandbox";
     let mut resp = Response::new(Body::from(doc));
     let h = resp.headers_mut();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
-    h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_str(&csp).map_err(Error::internal)?);
+    h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(csp));
     h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"));

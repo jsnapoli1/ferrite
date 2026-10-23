@@ -163,6 +163,15 @@ pub async fn send(transport: &AsyncSmtpTransport<Tokio1Executor>, msg: Message) 
     Ok(id)
 }
 
+/// Sends prepared bytes (a signed or encrypted message) to the envelope's recipients.
+pub async fn send_raw(transport: &AsyncSmtpTransport<Tokio1Executor>, envelope: &lettre::address::Envelope, raw: &[u8]) -> Result<()> {
+    transport
+        .send_raw(envelope, raw)
+        .await
+        .map_err(|e| Error::Unavailable(format!("sending mail failed: {e}")))?;
+    Ok(())
+}
+
 impl Core {
     /// Whether the server can send its own mail (`[smtp]` is configured).
     pub fn mail_configured(&self) -> bool {

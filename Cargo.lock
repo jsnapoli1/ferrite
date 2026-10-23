@@ -1417,6 +1417,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "cms",
+ "crc32fast",
  "csv",
  "dashmap",
  "der 0.8.2",

@@ -51,6 +51,10 @@ pub struct Compose {
     /// A draft this replaces (deleted once the new version is saved or the mail is sent).
     #[serde(default)]
     pub draft_id: Option<String>,
+    /// S/MIME signing/encryption or PGP/MIME (Mailvelope) for this message; applied when
+    /// sending (drafts are stored as written). See `security::Core::mail_secure_outgoing`.
+    #[serde(default)]
+    pub security: super::security::OutgoingSecurity,
 }
 
 /// A prefilled composer: the compose fields plus attachment names for display.
@@ -437,7 +441,17 @@ impl Core {
         let a = self.mail_account(user_id, account_id).await?;
         let (msg, raw, message_id) = self.build_outgoing(user_id, &a, c, false).await?;
         let transport = mailer::transport(&self.smtp_settings(&a)?)?;
-        mailer::send(&transport, msg).await?;
+        // Security hook: signing/encrypting happens on the built message, before anything is
+        // sent; a missing certificate stops the send with a clear error.
+        let raw = if c.security.any() {
+            let recipients: Vec<String> = c.to.iter().chain(&c.cc).chain(&c.bcc).cloned().collect();
+            let (wire, copy) = self.mail_secure_outgoing(user_id, &a.id, &c.security, &recipients, &msg.formatted(), &raw).await?;
+            mailer::send_raw(&transport, msg.envelope(), &wire).await?;
+            copy
+        } else {
+            mailer::send(&transport, msg).await?;
+            raw
+        };
         // The mail is out: everything below is bookkeeping and must not report failure.
         if a.save_sent {
             if let Err(e) = self.file_copy(&a, "sent", "Sent", &raw, "(\\Seen)", &message_id).await {

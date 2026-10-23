@@ -1,5 +1,9 @@
 //! MCP tools for webmail (scope `mail`). Reading is read-only; drafting, sending, marking and
 //! moving change mail, so the assistant only uses them when the user allowed changes.
+//!
+//! Decrypted S/MIME mail is not shown to the assistant (its text and attachments are
+//! withheld, and it is left out of search results) unless the user allowed that in Mail's
+//! security settings.
 
 use crate::tools::UserCtx;
 use ferrite_core::mail::Account;
@@ -32,7 +36,7 @@ pub fn definitions() -> &'static Vec<Tool> {
             ("reply_all", "boolean", "With reply_to: also copy everyone else on the original", false),
             account,
         ];
-        vec![
+        let mut tools = vec![
             Tool::new(
                 "mail_accounts",
                 "Mail accounts",
@@ -115,7 +119,9 @@ pub fn definitions() -> &'static Vec<Tool> {
                 &[("message_ids", "string[]", "Message ids", true)],
             )
             .destructive(),
-        ]
+        ];
+        tools.extend(crate::mail_security_tools::definitions().iter().cloned());
+        tools
     })
 }
 
@@ -229,9 +235,18 @@ pub async fn dispatch(core: &Core, ctx: &UserCtx, name: &str, a: &Value) -> Resu
                 vec![id.to_string()]
             };
             let mut out = Vec::new();
+            let assistant_may_decrypt = core.mail_security_settings(uid).await?.assistant_decrypted;
             for id in ids {
                 let v = core.mail_message(uid, &id).await?;
                 let m = &v.summary;
+                if v.encrypted && !assistant_may_decrypt {
+                    out.push(json!({
+                        "id": m.id, "date": m.date, "from": m.from().display(), "subject": m.subject, "unread": !m.seen, "folder": v.folder_role,
+                        "encrypted": true,
+                        "text": "[This message is encrypted (S/MIME). Its content is not shared with the assistant; the user can allow that in Mail settings.]",
+                    }));
+                    continue;
+                }
                 let mut text = v.text.clone();
                 if text.len() > MAX_TEXT {
                     let mut end = MAX_TEXT;
@@ -264,7 +279,9 @@ pub async fn dispatch(core: &Core, ctx: &UserCtx, name: &str, a: &Value) -> Resu
             let found = core
                 .mail_search(uid, s(a, "query")?, acc.as_ref().map(|x| x.id.as_str()), folder.as_deref(), 30)
                 .await?;
-            Ok(ToolResult::json(json!({"messages": found.iter().map(summary).collect::<Vec<_>>()})))
+            // Matches on decrypted text would reveal it: encrypted messages are left out.
+            let hidden = core.mail_hidden_from_assistant(uid, &found.iter().map(|m| m.id.clone()).collect::<Vec<_>>()).await?;
+            Ok(ToolResult::json(json!({"messages": found.iter().filter(|m| !hidden.contains(&m.id)).map(summary).collect::<Vec<_>>()})))
         }
         "mail_draft" => {
             let (account_id, c) = compose(core, uid, a).await?;
@@ -306,6 +323,7 @@ pub async fn dispatch(core: &Core, ctx: &UserCtx, name: &str, a: &Value) -> Resu
             core.mail_delete(uid, &ids).await?;
             Ok(ToolResult::text(format!("Deleted {} message(s).", ids.len())))
         }
+        n if crate::mail_security_tools::handles(n) => crate::mail_security_tools::dispatch(core, ctx, n, a).await,
         other => Err(Error::bad(format!("unknown tool {other}"))),
     }
 }

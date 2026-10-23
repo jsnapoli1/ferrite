@@ -55,7 +55,7 @@ pub fn vector_from_bytes(b: &[u8]) -> Vec<f32> {
 }
 
 /// Turns free text into a safe FTS5 query: each word becomes a quoted prefix term.
-fn fts_query(q: &str) -> Option<String> {
+pub(crate) fn fts_query(q: &str) -> Option<String> {
     let terms: Vec<String> = q
         .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
         .filter(|t| !t.is_empty())

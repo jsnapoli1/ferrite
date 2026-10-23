@@ -8,6 +8,8 @@ pub mod error;
 pub mod external;
 pub mod groupdav;
 pub mod invitations;
+pub mod mail_fetch;
+pub mod mail_security_tools;
 pub mod mail_tools;
 pub mod mcp_http;
 pub mod oidc;

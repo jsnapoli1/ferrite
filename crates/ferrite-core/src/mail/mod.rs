@@ -12,7 +12,8 @@
 //! * `crypto`: passwords at rest. * `imap`: connections and pool. * `sync`: folder and
 //!   message sync, IDLE. * `store`: reading and acting on cached mail. * `compose`: replies,
 //!   drafts, sending. * `parse`: MIME, threading, sanitizing. * `autoconfig`: provider
-//!   settings from Thunderbird's ISPDB.
+//!   settings from Thunderbird's ISPDB. * `security`, `trust`, `phishing`, `dkim`, `smime`,
+//!   `smime_store`: what the reader shows about a message's trustworthiness, S/MIME and PGP.
 
 pub mod autoconfig;
 pub mod compose;
@@ -21,7 +22,9 @@ pub mod dkim;
 pub mod imap;
 pub mod parse;
 pub mod phishing;
+pub mod security;
 pub mod smime;
+pub mod smime_store;
 pub mod store;
 pub mod sync;
 pub mod trust;
@@ -156,6 +159,8 @@ pub struct MailState {
     folder_locks: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
     /// When a folder list or folder was last synced (debounces background refreshes).
     last_sync: DashMap<String, Instant>,
+    /// DKIM verifier (see `security`).
+    pub security: security::SecurityState,
 }
 
 impl MailState {

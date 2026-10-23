@@ -113,6 +113,9 @@ pub struct MessageView {
     /// Its HTML loads remote images or styles (blocked unless asked for).
     pub remote_content: bool,
     pub attachments: Vec<AttachmentInfo>,
+    /// The message was S/MIME encrypted: `text`, the HTML and attachments are the decrypted
+    /// content (or empty without a key). Not for the assistant unless the user allowed it.
+    pub encrypted: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -138,6 +141,7 @@ struct BodyRow {
     attachments: String,
     remote_content: bool,
     raw: Option<Vec<u8>>,
+    encrypted: bool,
 }
 
 fn truncate(s: &str, max: usize) -> &str {
@@ -322,7 +326,7 @@ impl Core {
 
     /// The cached body, fetching and caching it first if needed.
     async fn body(&self, a: &Account, m: &MessageSummary) -> Result<BodyRow> {
-        let cached: Option<BodyRow> = sqlx::query_as("SELECT text, html, attachments, remote_content, raw FROM mail_bodies WHERE message_id = ?")
+        let cached: Option<BodyRow> = sqlx::query_as("SELECT text, html, attachments, remote_content, raw, encrypted FROM mail_bodies WHERE message_id = ?")
             .bind(&m.id)
             .fetch_optional(&self.db)
             .await?;
@@ -335,7 +339,10 @@ impl Core {
             return Ok(b);
         }
         let raw = self.fetch_raw(a, m).await?;
-        let parsed = parse::parse_body(&raw);
+        // S/MIME layers are removed (decrypted with the user's keys) before parsing.
+        let readable = self.mail_unwrap(&a.user_id, &raw).await;
+        let encrypted = readable.encrypted;
+        let parsed = parse::parse_body(&readable.raw);
         let text = truncate(&parsed.text, TEXT_CAP).to_string();
         let html = parsed.html.as_deref().map(|h| truncate(h, HTML_CAP).to_string());
         let remote_content = html
@@ -345,7 +352,7 @@ impl Core {
         let bytes = text.len() + html.as_ref().map_or(0, String::len) + keep_raw.as_ref().map_or(0, Vec::len);
         let attachments = serde_json::to_string(&parsed.attachments)?;
         sqlx::query(
-            "INSERT INTO mail_bodies (message_id, account_id, text, html, attachments, remote_content, raw, bytes, accessed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO mail_bodies (message_id, account_id, text, html, attachments, remote_content, raw, bytes, accessed_at, encrypted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(message_id) DO NOTHING",
         )
         .bind(&m.id)
@@ -357,22 +364,29 @@ impl Core {
         .bind(&keep_raw)
         .bind(bytes as i64)
         .bind(now())
+        .bind(encrypted)
         .execute(&self.db)
         .await?;
         let has_attachments = parsed.attachments.iter().any(|x| !x.inline);
+        // Decrypted text stays out of previews and the shared index; the user may opt in to a
+        // separate Mail-only index.
+        let preview = if encrypted { String::new() } else { parsed.envelope.preview.clone() };
         sqlx::query("UPDATE mail_messages SET has_attachments = ?, preview = CASE WHEN ? = '' THEN preview ELSE ? END WHERE id = ?")
             .bind(has_attachments)
-            .bind(&parsed.envelope.preview)
-            .bind(&parsed.envelope.preview)
+            .bind(&preview)
+            .bind(&preview)
             .bind(&m.id)
             .execute(&self.db)
             .await?;
         // Index the full text now that it is known.
         sqlx::query("UPDATE fts SET body = ? WHERE rowid = (SELECT fts_rowid FROM mail_messages WHERE id = ?)")
-            .bind(index_text(&parsed.envelope, truncate(&text, INDEX_CAP)))
+            .bind(index_text(&parsed.envelope, if encrypted { "" } else { truncate(&text, INDEX_CAP) }))
             .bind(&m.id)
             .execute(&self.db)
             .await?;
+        if encrypted && !text.is_empty() {
+            self.mail_index_decrypted(&a.user_id, &m.id, truncate(&text, INDEX_CAP)).await?;
+        }
         self.trim_body_cache(&a.id).await?;
         Ok(BodyRow {
             text,
@@ -380,6 +394,7 @@ impl Core {
             attachments,
             remote_content,
             raw: keep_raw,
+            encrypted,
         })
     }
 
@@ -449,12 +464,14 @@ impl Core {
             has_html: body.html.is_some(),
             remote_content: body.remote_content,
             attachments: serde_json::from_str(&body.attachments).unwrap_or_default(),
+            encrypted: body.encrypted,
             summary: m,
         })
     }
 
     /// The sanitized HTML document of a message, for a sandboxed iframe. Remote images and
-    /// styles are removed unless `allow_remote`.
+    /// styles are removed unless `allow_remote`, and then load through the image proxy
+    /// (signed same-origin URLs), never from the sender's servers directly.
     pub async fn mail_message_html(&self, user_id: &str, id: &str, allow_remote: bool) -> Result<String> {
         let (a, m) = self.message_row(user_id, id).await?;
         let body = self.body(&a, &m).await?;
@@ -463,7 +480,14 @@ impl Core {
             None => format!("<pre>{}</pre>", ammonia::clean_text(&body.text)),
         };
         let msg_id = m.id.clone();
-        let s = parse::sanitize_html(&html, allow_remote, move |cid| {
+        let policy = if allow_remote {
+            let core = self.clone();
+            let uid = user_id.to_string();
+            parse::RemotePolicy::Proxy(std::sync::Arc::new(move |url: &str| core.mail_proxy_url(&uid, url)))
+        } else {
+            parse::RemotePolicy::Block
+        };
+        let s = parse::sanitize_html_with(&html, policy, move |cid| {
             let enc: String = cid
                 .bytes()
                 .map(|b| {
@@ -492,13 +516,13 @@ impl Core {
 
     /// One attachment: (file name, MIME type, bytes).
     pub async fn mail_attachment(&self, user_id: &str, id: &str, index: usize) -> Result<(String, String, Vec<u8>)> {
-        let (_, raw) = self.mail_raw(user_id, id).await?;
+        let (_, raw) = self.mail_readable_raw(user_id, id).await?;
         parse::attachment(&raw, index).ok_or(Error::NotFound)
     }
 
     /// The inline part a `cid:` URL refers to.
     pub async fn mail_inline_part(&self, user_id: &str, id: &str, cid: &str) -> Result<(String, String, Vec<u8>)> {
-        let (_, raw) = self.mail_raw(user_id, id).await?;
+        let (_, raw) = self.mail_readable_raw(user_id, id).await?;
         parse::attachment_by_cid(&raw, cid).ok_or(Error::NotFound)
     }
 
@@ -783,12 +807,17 @@ impl Core {
                 }
             };
             for f in folders {
+                if let Err(e) = self.mail_index_pending_encrypted(user_id, a, &f).await {
+                    tracing::debug!(account = %a.id, folder = %f.name, error = %e, "indexing encrypted mail failed");
+                }
                 match self.server_search(a, &f, q).await {
                     Ok(found) => ids.extend(found),
                     Err(e) => tracing::info!(account = %a.id, folder = %f.name, error = %e, "server-side mail search failed"),
                 }
             }
         }
+        // Decrypted S/MIME text (only indexed when the user opted in).
+        ids.extend(self.mail_search_decrypted(user_id, q).await?);
         let rows: Vec<MessageSummary> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {MSG_COLS} FROM mail_messages m JOIN mail_accounts a ON a.id = m.account_id
              WHERE a.user_id = ? AND m.id IN (SELECT value FROM json_each(?)) AND (? IS NULL OR m.account_id = ?) AND (? IS NULL OR m.folder_id = ?)
