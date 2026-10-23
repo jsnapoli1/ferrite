@@ -1,0 +1,48 @@
+# docs/bench/codec-cost.sh 120, two passes, 2026-10-23
+# Intel(R) Xeon(R) Processor @ 2.80GHz, 4 vCPU, Linux 6.18.44-fc-v153, ffmpeg version 6.1.1-3ubuntu5
+# libvpx 1.14.0-1ubuntu2.3, libaom 3.8.2-2ubuntu0.2, dav1d 1.4.1-1build1
+# enc_ms / dec_ms: CPU milliseconds per frame on one thread; *_fps/core = 1000 / ms
+
+## pass 1
+step      codec    kbit/s     enc_ms enc_fps/core      dec_ms dec_fps/core
+720p30    vp8        1520       18.0         56         2.1         480
+720p30    vp9        1520       15.7         64         3.5         282
+720p30    av1        1520       32.9         30         5.1         198
+1080p30   vp8        3091       24.5         41         4.2         240
+1080p30   vp9        3091       28.8         35         7.7         130
+1080p30   av1        3091       51.5         19        10.2          98
+1080p60   vp8        6183       22.6         44         3.1         320
+1080p60   vp9        6183       27.1         37         7.6         132
+1080p60   av1        6183       50.4         20        10.4          96
+2160p30   vp8       10398       74.3         13        12.5          80
+2160p30   vp9       10398      106.5          9        28.1          36
+2160p30   av1       10398      191.2          5        40.4          25
+2160p60   vp8       20797       89.7         11        12.4          80
+2160p60   vp9       20797       95.4         10        28.6          35
+2160p60   av1       20797      178.8          6        39.5          25
+
+## pass 2
+step      codec    kbit/s     enc_ms enc_fps/core      dec_ms dec_fps/core
+720p30    vp8        1520       17.9         56         2.2         455
+720p30    vp9        1520       16.4         61         4.0         253
+720p30    av1        1520       33.9         30         5.1         196
+1080p30   vp8        3091       23.4         43         4.0         247
+1080p30   vp9        3091       26.8         37         8.8         113
+1080p30   av1        3091       59.6         17        10.3          97
+1080p60   vp8        6183       22.8         44         3.4         299
+1080p60   vp9        6183       32.4         31         8.9         112
+1080p60   av1        6183       53.5         19        10.2          98
+2160p30   vp8       10398       79.3         13        12.8          78
+2160p30   vp9       10398      119.3          8        29.0          34
+2160p30   av1       10398      194.6          5        42.2          24
+2160p60   vp8       20797       86.3         12        10.9          92
+2160p60   vp9       20797       92.2         11        27.6          36
+2160p60   av1       20797      179.9          6        41.3          24
+
+## simulcast ladder, VP8 (pass 3; ms are CPU per frame per layer, quarter + half + full size)
+step      layers (VP8 enc ms/frame)     send_cores  upload_kbit/s
+720p30    1.4 + 4.8 + 16.5                    0.68           2106
+1080p30   2.6 + 10.1 + 23.6                   1.09           4283
+1080p60   2.7 + 9.9 + 22.3                    2.09           8567
+2160p30   9.9 + 24.3 + 85.7                   3.60          14408
+2160p60   10.1 + 23.1 + 95.6                  7.73          28818

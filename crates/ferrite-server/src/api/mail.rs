@@ -1,5 +1,6 @@
 //! Webmail API: accounts, folders, messages, actions, search and composing. Everything
-//! requires the `mail` scope and only ever touches the caller's own accounts.
+//! requires the `mail` scope and only ever touches accounts the caller owns or that were
+//! delegated to them, with the rights checked in core (`mail_access`).
 
 use super::files::{content_disposition, inline_safe};
 use crate::AppState;
@@ -12,9 +13,10 @@ use axum::response::Response;
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use ferrite_core::Error;
-use ferrite_core::mail::AccountInput;
+use ferrite_core::mail::antispam::Verdict;
 use ferrite_core::mail::compose::{Compose, ReplyMode};
 use ferrite_core::mail::store::FlagAction;
+use ferrite_core::mail::{AccountInput, MailRight};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -57,10 +59,11 @@ fn scope(auth: &Auth) -> Result<(), ApiError> {
 
 async fn accounts(State(s): State<AppState>, auth: Auth) -> ApiResult<Json<Value>> {
     scope(&auth)?;
-    let accounts = s.core.mail_accounts(&auth.user.id).await?;
+    // Own and delegated accounts, in the user's order.
+    let accounts = s.core.mail_accounts_for(&auth.user.id).await?;
     // Opening mail is the moment to start watching for new mail.
     s.core.ensure_mail_idle(&auth.user.id).await;
-    Ok(Json(json!({"accounts": accounts})))
+    Ok(Json(json!({"accounts": accounts, "can_add": s.core.mail_allow_user_accounts().await})))
 }
 
 async fn create_account(State(s): State<AppState>, auth: Auth, Json(input): Json<AccountInput>) -> ApiResult<Json<Value>> {
@@ -84,9 +87,16 @@ struct EmailQ {
     email: String,
 }
 
-async fn autoconfig(auth: Auth, Query(q): Query<EmailQ>) -> ApiResult<Json<Value>> {
+/// Server settings for an address: provider databases, the domain's own autoconfig or
+/// autodiscover, then its MX records.
+async fn autoconfig(State(s): State<AppState>, auth: Auth, Query(q): Query<EmailQ>) -> ApiResult<Json<Value>> {
     scope(&auth)?;
-    Ok(Json(json!({"config": ferrite_core::mail::autoconfig::lookup(&q.email).await})))
+    let found = s.core.mail_autoconfig(&q.email).await;
+    Ok(Json(json!({
+        "config": found.as_ref().map(|d| &d.config),
+        "source": found.as_ref().map(|d| d.source),
+        "mx": found.as_ref().and_then(|d| d.mx.clone()),
+    })))
 }
 
 async fn folders(State(s): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Json<Value>> {
@@ -102,7 +112,7 @@ struct SyncBody {
 /// Refreshes the folder list and (optionally) one folder now.
 async fn sync(State(s): State<AppState>, auth: Auth, Path(id): Path<String>, body: Option<Json<SyncBody>>) -> ApiResult<Json<Value>> {
     scope(&auth)?;
-    let a = s.core.mail_account(&auth.user.id, &id).await?;
+    let a = s.core.mail_access(&auth.user.id, &id, MailRight::Read).await?;
     s.core.sync_mail_folders(&a).await?;
     if let Some(folder) = body.and_then(|b| b.0.folder_id) {
         s.core.sync_mail_folder(&a, &folder).await?;
@@ -245,6 +255,10 @@ enum ActionKind {
     Move,
     Archive,
     Delete,
+    /// Report spam: forward to the configured address, move to Junk.
+    Spam,
+    /// Not spam: forward to the configured address, move to the Inbox.
+    NotSpam,
 }
 
 #[derive(Deserialize)]
@@ -270,6 +284,11 @@ async fn actions(State(s): State<AppState>, auth: Auth, Json(b): Json<ActionBody
         ActionKind::Unflag => s.core.mail_set_flags(uid, &b.ids, FlagAction::Unflag).await?,
         ActionKind::Archive => s.core.mail_archive(uid, &b.ids).await?,
         ActionKind::Delete => s.core.mail_delete(uid, &b.ids).await?,
+        ActionKind::Spam | ActionKind::NotSpam => {
+            let verdict = if matches!(b.action, ActionKind::Spam) { Verdict::Spam } else { Verdict::Ham };
+            let outcome = s.core.mail_report_spam(uid, &b.ids, verdict).await?;
+            return Ok(Json(json!({"ok": true, "reported": outcome.reported, "moved": outcome.moved})));
+        }
         ActionKind::Move => {
             let dest = b.folder_id.ok_or_else(|| ApiError(Error::bad("folder_id is required to move")))?;
             s.core.mail_move(uid, &b.ids, &dest).await?

@@ -139,7 +139,7 @@ impl Core {
 
     /// Unsubscribes by sending the list's `mailto:` request from the user's account.
     pub async fn mail_unsubscribe_by_mail(&self, user_id: &str, message_id: &str) -> Result<String> {
-        let (a, _) = self.message_row(user_id, message_id).await?;
+        let (a, _) = self.mail_message_access(user_id, message_id, super::delegation::MailRight::Send).await?;
         let info = self
             .mail_unsubscribe_info(user_id, message_id)
             .await?

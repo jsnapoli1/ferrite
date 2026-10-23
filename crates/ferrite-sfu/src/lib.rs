@@ -108,6 +108,30 @@ fn primary_ip() -> Option<IpAddr> {
     s.local_addr().ok().map(|a| a.ip()).filter(|ip| !ip.is_unspecified())
 }
 
+/// Socket buffer size asked of the kernel. High-resolution calls send bursts of packets per
+/// frame (a 1080p60 keyframe is ~100 packets, 4K several hundred); the Linux default of about
+/// 200 KiB drops some when the SFU thread is briefly busy. The kernel caps the request at
+/// `net.core.rmem_max` / `wmem_max`.
+const SOCKET_BUFFER: usize = 4 << 20;
+
+fn grow_buffers(socket: &UdpSocket) {
+    let s = socket2::SockRef::from(socket);
+    let _ = s.set_recv_buffer_size(SOCKET_BUFFER);
+    let _ = s.set_send_buffer_size(SOCKET_BUFFER);
+    let (recv, send) = (s.recv_buffer_size().unwrap_or(0), s.send_buffer_size().unwrap_or(0));
+    // Linux reports double the usable size (it counts bookkeeping).
+    if recv < SOCKET_BUFFER {
+        tracing::warn!(
+            recv,
+            send,
+            "SFU socket buffers are smaller than {} MiB; for 1080p and above raise net.core.rmem_max and net.core.wmem_max",
+            SOCKET_BUFFER >> 20
+        );
+    } else {
+        tracing::debug!(recv, send, "SFU socket buffers");
+    }
+}
+
 impl Sfu {
     pub fn start(cfg: SfuConfig) -> std::io::Result<Sfu> {
         // Install the pure-Rust crypto provider once per process.
@@ -115,6 +139,7 @@ impl Sfu {
         INSTALL.call_once(|| str0m::crypto::from_feature_flags().install_process_default());
 
         let socket = UdpSocket::bind(cfg.bind)?;
+        grow_buffers(&socket);
         let local = socket.local_addr()?;
         let mut ips = cfg.advertise.clone();
         if ips.is_empty() {

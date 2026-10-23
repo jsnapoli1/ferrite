@@ -162,9 +162,13 @@ impl Core {
         .await?)
     }
 
+    /// A pooled connection with fresh credentials (OAuth tokens are refreshed shortly before
+    /// they expire), under the admin's connection policy.
     pub(crate) async fn imap_conn(&self, a: &Account) -> Result<imap::PooledConn> {
-        let settings = self.imap_settings(a)?;
-        self.mail.pool(&a.id).get(&settings).await
+        let a = self.mail_fresh_credentials(a).await?;
+        let settings = self.imap_settings(&a)?;
+        let policy = self.mail_policy().await;
+        self.mail.pool(&a.id).get(&settings, policy).await
     }
 
     /// Refreshes the folder list (LIST) and every folder's counts (STATUS).
@@ -241,8 +245,20 @@ impl Core {
                 Err(e) => tracing::debug!(folder = %f.name, error = %e, "STATUS failed"),
             }
         }
-        self.hub
-            .publish([a.user_id.as_str()], &json!({"type": "mail.changed", "account_id": a.id, "what": "folders"}));
+        // Storage quota of the inbox's quota root (RFC 9208), where the server has one.
+        match conn.quota("INBOX").await {
+            Ok(q) => {
+                sqlx::query("UPDATE mail_accounts SET quota_used = ?, quota_limit = ? WHERE id = ?")
+                    .bind(q.map(|(used, _)| used as i64))
+                    .bind(q.map(|(_, limit)| limit as i64))
+                    .bind(&a.id)
+                    .execute(&self.db)
+                    .await?;
+            }
+            Err(e) if conn.is_broken() => return Err(e),
+            Err(e) => tracing::debug!(account = %a.id, error = %e, "GETQUOTAROOT failed"),
+        }
+        self.mail_publish(a, &json!({"type": "mail.changed", "account_id": a.id, "what": "folders"}));
         Ok(())
     }
 
@@ -438,8 +454,8 @@ impl Core {
         .execute(&self.db)
         .await?;
         if report.changed {
-            self.hub.publish(
-                [a.user_id.as_str()],
+            self.mail_publish(
+                a,
                 &json!({"type": "mail.changed", "account_id": a.id, "folder_id": folder.id, "what": "messages"}),
             );
         }
@@ -562,19 +578,27 @@ impl Core {
         Ok(out)
     }
 
-    /// Starts IDLE watchers for `user_id`'s accounts now (instead of at the next manager tick).
+    /// Starts IDLE watchers for the accounts `user_id` sees (own and delegated) now, instead
+    /// of at the next manager tick.
     pub async fn ensure_mail_idle(&self, user_id: &str) {
         if !self.hub.is_online(user_id) {
             return;
         }
-        let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM mail_accounts WHERE user_id = ?")
-            .bind(user_id)
-            .fetch_all(&self.db)
-            .await
-            .unwrap_or_default();
-        for id in ids {
-            self.start_idler(&id, user_id);
+        let ids: Vec<(String, String)> =
+            sqlx::query_as("SELECT id, user_id FROM mail_accounts WHERE user_id = ? OR id IN (SELECT account_id FROM mail_delegations WHERE user_id = ?)")
+                .bind(user_id)
+                .bind(user_id)
+                .fetch_all(&self.db)
+                .await
+                .unwrap_or_default();
+        for (id, owner) in ids {
+            self.start_idler(&id, &owner);
         }
+    }
+
+    /// Whether the owner or a delegate of an account is online.
+    fn audience_online(&self, account_id: &str, owner: &str) -> bool {
+        self.hub.is_online(owner) || self.mail.delegates.get(account_id).is_some_and(|d| d.iter().any(|u| self.hub.is_online(u)))
     }
 
     fn start_idler(&self, account_id: &str, user_id: &str) {
@@ -593,13 +617,14 @@ impl Core {
         );
     }
 
-    /// Starts watchers for accounts of online users and stops those of users gone offline.
+    /// Starts watchers for accounts of online users (owners or delegates) and stops those of
+    /// accounts nobody watches any more.
     pub(crate) async fn manage_idlers(&self) {
-        self.mail.idlers.retain(|_, t| {
+        self.mail.idlers.retain(|id, t| {
             if t.handle.is_finished() {
                 return false;
             }
-            if self.hub.is_online(&t.user_id) {
+            if self.audience_online(id, &t.user_id) {
                 t.offline_since = None;
                 return true;
             }
@@ -618,7 +643,7 @@ impl Core {
             }
         };
         for (id, user_id) in accounts {
-            if self.hub.is_online(&user_id) {
+            if self.audience_online(&id, &user_id) {
                 self.start_idler(&id, &user_id);
             }
         }
@@ -643,8 +668,9 @@ impl Core {
 
     async fn idle_session(&self, account_id: &str) -> Result<()> {
         let a = self.mail_account_by_id(account_id).await?;
+        let a = self.mail_fresh_credentials(&a).await?;
         let settings: ServerSettings = self.imap_settings(&a)?;
-        let mut conn = ImapConn::connect(&settings).await?;
+        let mut conn = ImapConn::connect_with(&settings, self.mail_policy().await).await?;
         if self.folder_by_role(&a.id, "inbox").await?.is_none() {
             self.sync_folders_on(&mut conn, &a).await?;
         }
@@ -669,7 +695,7 @@ impl Core {
         }
     }
 
-    async fn notify_new_mail(&self, a: &Account, report: &SyncReport) {
+    pub(crate) async fn notify_new_mail(&self, a: &Account, report: &SyncReport) {
         let unseen: Vec<&NewMail> = report.new.iter().filter(|m| !m.seen).collect();
         let result = match unseen.as_slice() {
             [] => Ok(()),

@@ -11,6 +11,7 @@ import { live } from '../ws.js';
 import { h, clear, icon, avatar, menu, toast, errorToast, confirmDialog, bytes, dateTime, spinner, emptyState, debounce } from '../ui.js';
 import { pickFolder } from './files-dialogs.js';
 import { accountDialog } from './mail-setup.js';
+import { shareDialog, quotaBar, startOAuth, PROVIDER_LABEL } from './mail-accounts.js';
 import { openComposer } from './mail-compose.js';
 import { decorateMessage, decorateThread, messageMenuItems, accountMenuItems, navExtras } from './mail-integrations.js';
 
@@ -63,6 +64,8 @@ export default async function render(root, ctx) {
     thread: [],
     pane: ctx.query.m ? 'reader' : 'list',
     openSeq: 0,
+    canAdd: true,
+    dragAccount: null,
   };
 
   const nav = h('aside.ml-nav', { 'aria-label': 'Mail folders' });
@@ -96,21 +99,44 @@ export default async function render(root, ctx) {
       h('h1', 'Mail'),
       state.accounts.length > 0 && h('button.btn.primary.sm.ml-compose-btn', { type: 'button', onclick: () => compose(), title: 'Compose (c)' }, icon('edit', 'sm'), h('span', 'Compose'))));
     const tree = h('div.ml-folders');
-    for (const a of state.accounts) {
-      const head = h('div.ml-account',
-        h('span.ml-account-name.ellipsis', { title: a.email }, a.email),
-        a.last_error && h('span.ml-account-error', { title: a.last_error }, icon('x', 'sm')),
-        h('button.btn.ghost.icon.sm', {
-          type: 'button', 'aria-label': `Account menu for ${a.email}`,
-          onclick: (e) => menu(e.currentTarget, [
-            { label: 'Refresh', icon: 'refresh', run: () => refreshAccount(a.id) },
-            { label: 'Edit account', icon: 'settings', run: () => editAccount(a) },
-            ...accountMenuItems(a, ctx),
-            'sep',
-            { label: 'Remove account', icon: 'trash', danger: true, run: () => removeAccount(a) },
-          ]),
-        }, icon('more', 'sm')));
+    const many = state.accounts.length > 1;
+    state.accounts.forEach((a, index) => {
+      const p = a.permissions || {};
+      const items = [
+        { label: 'Refresh', icon: 'refresh', run: () => refreshAccount(a.id) },
+        p.configure && { label: 'Edit account', icon: 'settings', run: () => editAccount(a) },
+        p.share && { label: 'Share…', icon: 'share', run: () => shareDialog(a).then(loadAccounts).catch(errorToast) },
+        ...accountMenuItems(a, ctx),
+        a.auth_method === 'xoauth2' && p.authenticate && { label: `Reconnect with ${PROVIDER_LABEL[a.oauth_provider] || 'the provider'}`, icon: 'key', run: () => startOAuth(a.oauth_provider, { email: a.email, accountId: a.id }).catch(errorToast) },
+        many && index > 0 && { label: 'Move up', icon: 'chevron-left', run: () => moveAccount(a.id, -1) },
+        many && index < state.accounts.length - 1 && { label: 'Move down', icon: 'chevron-down', run: () => moveAccount(a.id, 1) },
+        p.remove && 'sep',
+        p.remove && { label: 'Remove account', icon: 'trash', danger: true, run: () => removeAccount(a) },
+      ];
+      const head = h(`div.ml-account${a.delegated ? '.shared' : ''}`, {
+        dataset: { account: a.id }, draggable: many ? 'true' : null,
+        ondragstart: (e) => { state.dragAccount = a.id; e.dataTransfer.setData('application/x-ferrite-account', a.id); e.dataTransfer.effectAllowed = 'move'; },
+        ondragend: () => { state.dragAccount = null; },
+        ondragover: (e) => { if (state.dragAccount && state.dragAccount !== a.id) { e.preventDefault(); e.currentTarget.classList.add('drop'); } },
+        ondragleave: (e) => e.currentTarget.classList.remove('drop'),
+        ondrop: (e) => {
+          e.preventDefault();
+          e.currentTarget.classList.remove('drop');
+          const from = e.dataTransfer.getData('application/x-ferrite-account');
+          if (from && from !== a.id) reorderAccounts(from, a.id);
+        },
+      },
+      many && h('span.ml-account-grip', { 'aria-hidden': 'true', title: 'Drag to reorder' }, icon('grip', 'sm')),
+      h('span.ml-account-name.ellipsis', { title: a.delegated ? `${a.email}, shared by ${a.owner_name}` : a.email }, a.email),
+      a.delegated && h('span.ml-account-badge', { title: `Shared with you by ${a.owner_name}` }, icon('users', 'sm'), h('span.sr-only', `Shared by ${a.owner_name}`)),
+      a.provisioning_id && h('span.ml-account-badge', { title: 'Set up by your administrator' }, icon('lock', 'sm'), h('span.sr-only', 'Managed by your administrator')),
+      a.last_error && h('span.ml-account-error', { title: a.last_error }, icon('x', 'sm')),
+      h('button.btn.ghost.icon.sm', {
+        type: 'button', 'aria-label': `Account menu for ${a.email}`,
+        onclick: (e) => menu(e.currentTarget, items),
+      }, icon('more', 'sm')));
       tree.appendChild(head);
+      if (a.delegated) tree.appendChild(h('div.ml-account-owner.small.muted', `Shared by ${a.owner_name}`));
       if (a.last_error) tree.appendChild(h('div.ml-account-warning.small', a.last_error));
       for (const f of state.folders[a.id] || []) {
         const depth = f.delimiter ? f.name.split(f.delimiter).length - 1 : 0;
@@ -130,10 +156,34 @@ export default async function render(root, ctx) {
         }, icon(ROLE_ICONS[f.role] || 'folder', 'sm'), h('span.grow.ellipsis', f.display_name),
         f.unread > 0 && f.role !== 'sent' && f.role !== 'drafts' && f.role !== 'trash' && h('span.badge.ml-unread', String(f.unread))));
       }
-    }
+      const quota = quotaBar(a);
+      if (quota) tree.appendChild(quota);
+    });
     navExtras(tree, ctx, { openMessage, compose });
     nav.appendChild(tree);
-    nav.appendChild(h('div.ml-nav-foot', h('button.btn.ghost.sm', { type: 'button', onclick: addAccount }, icon('plus', 'sm'), 'Add account')));
+    if (state.canAdd) nav.appendChild(h('div.ml-nav-foot', h('button.btn.ghost.sm', { type: 'button', onclick: addAccount }, icon('plus', 'sm'), 'Add account')));
+  }
+
+  async function saveOrder(ids) {
+    const byId = new Map(state.accounts.map((a) => [a.id, a]));
+    state.accounts = ids.map((id) => byId.get(id));
+    drawNav();
+    try { await api.put('/api/mail/accounts/order', { ids }); } catch (e) { errorToast(e); loadAccounts(); }
+  }
+
+  function reorderAccounts(from, before) {
+    const ids = state.accounts.map((a) => a.id).filter((id) => id !== from);
+    ids.splice(ids.indexOf(before), 0, from);
+    saveOrder(ids);
+  }
+
+  function moveAccount(id, delta) {
+    const ids = state.accounts.map((a) => a.id);
+    const i = ids.indexOf(id);
+    const j = i + delta;
+    if (j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    saveOrder(ids);
   }
 
   // ---- message list -----------------------------------------------------------------------
@@ -151,6 +201,7 @@ export default async function render(root, ctx) {
         h('button.btn.ghost.icon.sm', { type: 'button', title: anyUnread ? 'Mark read' : 'Mark unread', 'aria-label': anyUnread ? 'Mark read' : 'Mark unread', onclick: () => act(anyUnread ? 'read' : 'unread', ids) }, icon(anyUnread ? 'eye' : 'mail', 'sm')),
         h('button.btn.ghost.icon.sm', { type: 'button', title: anyUnflagged ? 'Flag' : 'Unflag', 'aria-label': anyUnflagged ? 'Flag' : 'Unflag', onclick: () => act(anyUnflagged ? 'flag' : 'unflag', ids) }, icon('star', 'sm')),
         h('button.btn.ghost.icon.sm', { type: 'button', title: 'Move to…', 'aria-label': 'Move to folder', onclick: (e) => moveMenu(e.currentTarget, ids) }, icon('move', 'sm')),
+        h('button.btn.ghost.icon.sm', { type: 'button', title: f?.role === 'junk' ? 'Not spam' : 'Report spam', 'aria-label': f?.role === 'junk' ? 'Not spam' : 'Report spam', onclick: () => act(f?.role === 'junk' ? 'not_spam' : 'spam', ids) }, icon(f?.role === 'junk' ? 'mail' : 'junk', 'sm')),
         f?.role !== 'archive' && h('button.btn.ghost.icon.sm', { type: 'button', title: 'Archive (e)', 'aria-label': 'Archive', onclick: () => act('archive', ids) }, icon('archive', 'sm')),
         h('button.btn.ghost.icon.sm.danger', { type: 'button', title: 'Delete (#)', 'aria-label': 'Delete', onclick: () => remove(ids) }, icon('trash', 'sm'))));
       return;
@@ -300,6 +351,9 @@ export default async function render(root, ctx) {
         onclick: (e) => menu(e.currentTarget, [
           { label: current.seen ? 'Mark unread' : 'Mark read', icon: 'mail', run: () => act(current.seen ? 'unread' : 'read', [current.id]) },
           { label: current.flagged ? 'Unflag' : 'Flag', icon: 'star', run: () => act(current.flagged ? 'unflag' : 'flag', [current.id]) },
+          folder()?.role === 'junk'
+            ? { label: 'Not spam', icon: 'mail', run: () => act('not_spam', [current.id]) }
+            : { label: 'Report spam', icon: 'junk', run: () => act('spam', [current.id]) },
           { label: 'Download (.eml)', icon: 'download', run: () => { location.href = `/api/mail/messages/${encodeURIComponent(current.id)}/raw`; } },
           ...messageMenuItems(current, ctx, { accounts: state.accounts }),
         ]),
@@ -426,7 +480,7 @@ export default async function render(root, ctx) {
   // ---- actions ------------------------------------------------------------------------------
   async function act(action, ids, { folder_id, quiet = false } = {}) {
     if (!ids.length) return;
-    const leaving = ['archive', 'delete', 'move'].includes(action);
+    const leaving = ['archive', 'delete', 'move', 'spam', 'not_spam'].includes(action);
     // Optimistic update of the list; the server event refreshes it for real.
     const idx = state.messages.findIndex((m) => ids.includes(m.id));
     for (const m of state.messages) {
@@ -462,7 +516,7 @@ export default async function render(root, ctx) {
     try {
       await api.post('/api/mail/actions', { ids, action, folder_id });
       if (!quiet && leaving) {
-        const what = { archive: 'Archived', delete: deleteForGood ? 'Deleted' : 'Moved to Trash', move: 'Moved' }[action];
+        const what = { archive: 'Archived', delete: deleteForGood ? 'Deleted' : 'Moved to Trash', move: 'Moved', spam: 'Reported as spam:', not_spam: 'Moved to Inbox:' }[action];
         toast(`${what} ${ids.length === 1 ? '1 message' : `${ids.length} messages`}`, 'ok', { timeout: 2500 });
       }
       if (closedOpen) {
@@ -537,8 +591,9 @@ export default async function render(root, ctx) {
 
   // ---- loading ------------------------------------------------------------------------------
   async function loadAccounts() {
-    const { accounts } = await api.get('/api/mail/accounts');
+    const { accounts, can_add: canAdd } = await api.get('/api/mail/accounts');
     state.accounts = accounts;
+    state.canAdd = canAdd !== false;
     if (!accounts.some((a) => a.id === state.accountId)) state.accountId = accounts[0]?.id || null;
     await Promise.all(accounts.map(async (a) => {
       try {
@@ -560,13 +615,23 @@ export default async function render(root, ctx) {
       drawReaderEmpty();
       return;
     }
+    if (!state.messageId) drawReaderEmpty();
     await loadMessages();
   }
 
   async function reloadFolders() {
-    await Promise.all(state.accounts.map(async (a) => {
-      try { state.folders[a.id] = (await api.get(`/api/mail/accounts/${encodeURIComponent(a.id)}/folders`)).folders; } catch (_) { /* keep the last list */ }
-    }));
+    await Promise.all([
+      ...state.accounts.map(async (a) => {
+        try { state.folders[a.id] = (await api.get(`/api/mail/accounts/${encodeURIComponent(a.id)}/folders`)).folders; } catch (_) { /* keep the last list */ }
+      }),
+      // Quota and errors change with syncs.
+      api.get('/api/mail/accounts').then(({ accounts }) => {
+        for (const fresh of accounts) {
+          const a = state.accounts.find((x) => x.id === fresh.id);
+          if (a) Object.assign(a, { quota_used: fresh.quota_used, quota_limit: fresh.quota_limit, last_error: fresh.last_error });
+        }
+      }).catch(() => { /* keep the last state */ }),
+    ]);
     drawNav();
   }
 
@@ -701,6 +766,10 @@ export default async function render(root, ctx) {
   }
   if (state.messageId) openMessage(state.messageId);
   else if (ctx.query.compose) compose({ to: ctx.query.compose });
+  // Back from a provider's consent screen.
+  if (ctx.query.oauth === 'connected') toast('Account connected', 'ok');
+  if (ctx.query.oauth_error) toast(ctx.query.oauth_error, 'error', { timeout: 9000 });
+  if (ctx.query.oauth || ctx.query.oauth_error) setUrl();
 
   return () => {
     document.removeEventListener('keydown', onKey);

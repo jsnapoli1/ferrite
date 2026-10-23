@@ -25,7 +25,7 @@
 use axum::Json;
 use axum::routing::post;
 use ferrite_core::mail::ServerSettings;
-use ferrite_core::mail::imap::ImapConn;
+use ferrite_core::mail::imap::{ConnectPolicy, ImapConn};
 use ferrite_core::mail::managesieve::SieveConn;
 use ferrite_core::mailer::{SmtpSecurity, SmtpSettings};
 use ferrite_core::{Config, Core};
@@ -73,6 +73,7 @@ impl Target {
             security: SmtpSecurity::None,
             username: self.user.clone(),
             password: self.pass.clone(),
+            xoauth2: false,
         }
     }
 }
@@ -157,7 +158,9 @@ async fn reset(t: &Target) {
     }
     c.create("Reports").await.unwrap();
     c.logout().await;
-    let mut s = SieveConn::connect(&t.settings(t.sieve_port)).await.expect("ManageSieve login");
+    let mut s = SieveConn::connect(&t.settings(t.sieve_port), ConnectPolicy::default())
+        .await
+        .expect("ManageSieve login");
     s.set_active("").await.unwrap();
     for script in s.list_scripts().await.unwrap() {
         s.delete_script(&script.name).await.unwrap();
@@ -297,6 +300,8 @@ async fn mail_integrations_against_a_real_server() {
         .await;
     let user_id = setup["user"]["id"].as_str().unwrap().to_string();
     b.send(Method::PATCH, "/api/me", json!({"email": "alice@example.test"})).await;
+    // The test servers are on 127.0.0.1, which the admin has to allow.
+    b.send(Method::PATCH, "/api/admin/mail/settings", json!({"allow_local_servers": true})).await;
     let acc = b
         .post(
             "/api/mail/accounts",
@@ -393,7 +398,7 @@ async fn mail_integrations_against_a_real_server() {
         .send(Method::PUT, &format!("/api/mail/accounts/{acc}/sieve"), json!({"script": handwritten}))
         .await;
     assert_eq!(saved["name"], "ferrite", "a script is created and activated");
-    let mut sc = SieveConn::connect(&t.settings(t.sieve_port)).await.unwrap();
+    let mut sc = SieveConn::connect(&t.settings(t.sieve_port), ConnectPolicy::default()).await.unwrap();
     assert_eq!(sc.active_script().await.unwrap().as_deref(), Some("ferrite"));
     sc.logout().await;
 
@@ -425,6 +430,55 @@ async fn mail_integrations_against_a_real_server() {
         "{script}"
     );
     assert!(script.contains("fileinto \"Reports\";") && script.contains("addflag \"$label1\";"));
+
+    // A delegate edits filters and the invitation settings, but not the ManageSieve sign-in.
+    b.post(
+        "/api/admin/users",
+        json!({"username": "bob", "password": "bob-password", "email": "bob@example.test"}),
+    )
+    .await;
+    b.post(&format!("/api/mail/accounts/{acc}/delegations"), json!({"user": "bob"})).await;
+    let bob = Browser {
+        http: reqwest::Client::builder().cookie_store(true).build().unwrap(),
+        url: url.clone(),
+    };
+    bob.post("/api/auth/login", json!({"username": "bob", "password": "bob-password"})).await;
+    assert_eq!(
+        bob.get(&format!("/api/mail/accounts/{acc}/filters")).await["filters"].as_array().unwrap().len(),
+        2
+    );
+    let bi = bob
+        .send(
+            Method::PATCH,
+            &format!("/api/mail/accounts/{acc}/integrations"),
+            json!({"sieve_enabled": true, "sieve_port": t.sieve_port, "imip_auto_update": true}),
+        )
+        .await["integrations"]
+        .clone();
+    assert_eq!(bi["sieve_port"], t.sieve_port, "unchanged connection values are allowed");
+    for change in [
+        json!({"sieve_host": "sieve.example.org"}),
+        json!({"sieve_password": "x"}),
+        json!({"sieve_username": "bob"}),
+    ] {
+        let (s, v) = bob
+            .call(Method::PATCH, &format!("/api/mail/accounts/{acc}/integrations"), Some(change.clone()))
+            .await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "a delegate cannot change {change}: {v}");
+    }
+    let stranger = Browser {
+        http: reqwest::Client::builder().cookie_store(true).build().unwrap(),
+        url: url.clone(),
+    };
+    b.post("/api/admin/users", json!({"username": "mallory", "password": "mallory-password"})).await;
+    stranger
+        .post("/api/auth/login", json!({"username": "mallory", "password": "mallory-password"}))
+        .await;
+    for path in ["filters", "vacation", "sieve", "integrations"] {
+        let (s, _) = stranger.call(Method::GET, &format!("/api/mail/accounts/{acc}/{path}"), None).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{path} of someone else's account");
+    }
+
     // Mail really is filed and tagged on delivery, and the hand-written rule still works.
     deliver(
         &t,
@@ -1036,7 +1090,7 @@ async fn mail_integrations_against_a_real_server() {
     let rel = find("Release").await.unwrap();
     let (s, v) = b.call(Method::POST, &format!("/api/mail/messages/{rel}/ai/summary"), None).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "the administrator has not allowed AI for mail yet: {v}");
-    b.send(Method::PUT, "/api/admin/mail/ai", json!({"llm_processing": true})).await;
+    b.send(Method::PATCH, "/api/admin/mail/settings", json!({"llm_processing": true})).await;
     assert_eq!(b.get("/api/mail/ai/status").await["enabled"], true);
     let sum = b.post(&format!("/api/mail/messages/{rel}/ai/summary"), json!({})).await;
     assert_eq!(

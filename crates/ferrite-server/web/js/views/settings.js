@@ -7,6 +7,7 @@ import { refreshMe } from '../app.js';
 import { card, field, codeBlock, pill } from './settings-common.js';
 import { aiTab, mcpServersTab } from './settings-ai.js';
 import { adminTab } from './settings-admin.js';
+import { mailAdminTab } from './settings-mail-admin.js';
 import { securityTab } from './settings-security.js';
 import { notificationsTab } from './settings-notifications.js';
 import { availabilityCard } from './settings-availability.js';
@@ -21,6 +22,7 @@ const TABS = [
   ['mcp', 'MCP servers', 'plug'],
   ['craft', 'Craft apps', 'craft'],
   ['admin', 'Administration', 'users', true],
+  ['admin-mail', 'Mail admin', 'mail', true],
   ['about', 'About', 'activity'],
 ];
 
@@ -41,7 +43,7 @@ export default async function render(root, ctx) {
     }, icon(ic, 'sm'), l))),
     body));
 
-  const fn = { profile: profileTab, security: securityTab, notifications: notificationsTab, ai: aiTab, tokens: tokensTab, mcp: mcpServersTab, craft: craftTab, admin: adminTab, about: aboutTab }[tab];
+  const fn = { profile: profileTab, security: securityTab, notifications: notificationsTab, ai: aiTab, tokens: tokensTab, mcp: mcpServersTab, craft: craftTab, admin: adminTab, 'admin-mail': mailAdminTab, about: aboutTab }[tab];
   const host = h('div.set-stack');
   const cleanup = await fn(host, ctx);
   clear(body).appendChild(host);

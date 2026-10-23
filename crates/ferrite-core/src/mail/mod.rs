@@ -9,30 +9,50 @@
 //! Connections are bounded: at most [`imap::POOL_SIZE`] pooled command connections per
 //! account (closed after two idle minutes) plus the IDLE connection while the owner is online.
 //!
+//! Every operation on an account, its folders or messages is checked by
+//! [`Core::mail_access`] (owner or delegate, with the right the operation needs; see
+//! `delegation`).
+//!
 //! * `crypto`: passwords at rest. * `imap`: connections and pool. * `sync`: folder and
 //!   message sync, IDLE. * `store`: reading and acting on cached mail. * `compose`: replies,
-//!   drafts, sending. * `parse`: MIME, threading, sanitizing. * `autoconfig`: provider
-//!   settings from Thunderbird's ISPDB. * `managesieve`, `sieve`, `filters`: Sieve filters
-//!   and the autoresponder. * `imip`: meeting invitations. * `itinerary`: travel reservations.
-//!   * `unsubscribe`: List-Unsubscribe. * `people`: contacts for senders and recipients.
-//!   * `integrations`: their per-account settings.
+//!   drafts, sending. * `parse`: MIME, threading, sanitizing.
+//! * `autoconfig` and `dns`: provider settings (ISPDB, the provider's own
+//!   autoconfig/autodiscover, MX records).
+//! * `delegation`: the access check and sharing accounts. * `oauth`: Google and Microsoft
+//!   (XOAUTH2). * `provisioning`: admin templates. * `settings`: admin settings.
+//! * `abuse`: sending alerts. * `antispam`: report spam / not spam. * `background`: periodic
+//!   sync of every account.
+//! * `managesieve`, `sieve`, `filters`: Sieve filters and the autoresponder. * `imip`:
+//!   meeting invitations. * `itinerary`: travel reservations. * `unsubscribe`:
+//!   List-Unsubscribe. * `people`: contacts for senders and recipients. * `agenda`:
+//!   events and tasks from a message. * `integrations`: their per-account settings.
 
+pub mod abuse;
 pub mod agenda;
+pub mod antispam;
 pub mod autoconfig;
+pub mod background;
 pub mod compose;
 pub mod crypto;
+pub mod delegation;
+pub mod dns;
 pub mod filters;
 pub mod imap;
 pub mod imip;
 pub mod integrations;
 pub mod itinerary;
 pub mod managesieve;
+pub mod oauth;
 pub mod parse;
 pub mod people;
+pub mod provisioning;
+pub mod settings;
 pub mod sieve;
 pub mod store;
 pub mod sync;
 pub mod unsubscribe;
+
+pub use delegation::{MailRight, MailRole};
 
 use crate::mailer::{SmtpSecurity, SmtpSettings};
 use crate::util::{new_id, now};
@@ -50,7 +70,10 @@ pub struct ServerSettings {
     pub port: u16,
     pub security: SmtpSecurity,
     pub username: String,
+    /// The password, or the OAuth access token when `xoauth2`.
     pub password: String,
+    /// Sign in with SASL XOAUTH2 (OAuth accounts) instead of LOGIN.
+    pub xoauth2: bool,
 }
 
 impl std::fmt::Debug for ServerSettings {
@@ -61,11 +84,14 @@ impl std::fmt::Debug for ServerSettings {
             .field("security", &self.security)
             .field("username", &self.username)
             .field("password", &"<redacted>")
+            .field("xoauth2", &self.xoauth2)
             .finish()
     }
 }
 
-/// A connected mail account. Passwords are sealed and never serialized.
+/// A connected mail account. Passwords and tokens are sealed and never serialized. The
+/// viewer-dependent fields (`role`, `delegated`, `owner_name`, `permissions`) are filled by
+/// [`Core::mail_access`] and [`Core::mail_accounts_for`].
 #[derive(Clone, Serialize, sqlx::FromRow)]
 pub struct Account {
     pub id: String,
@@ -90,10 +116,34 @@ pub struct Account {
     pub last_error: Option<String>,
     pub synced_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    /// `password` or `xoauth2`.
+    pub auth_method: String,
+    /// `google` or `microsoft` for OAuth accounts.
+    pub oauth_provider: Option<String>,
+    #[serde(skip)]
+    pub oauth_refresh: Option<String>,
+    #[serde(skip)]
+    pub oauth_expires_at: Option<DateTime<Utc>>,
+    /// The provisioning template that created the account (it is managed by the admin).
+    pub provisioning_id: Option<String>,
+    /// Storage used and allowed in bytes (IMAP QUOTA), when the server reports it.
+    pub quota_used: Option<i64>,
+    pub quota_limit: Option<i64>,
+    #[sqlx(skip)]
+    pub role: Option<MailRole>,
+    /// Shared with the viewer by its owner.
+    #[sqlx(skip)]
+    pub delegated: bool,
+    /// The owner's display name, on delegated accounts.
+    #[sqlx(skip)]
+    pub owner_name: Option<String>,
+    #[sqlx(skip)]
+    pub permissions: delegation::AccountPermissions,
 }
 
-const ACCOUNT_COLS: &str = "id, user_id, name, email, imap_host, imap_port, imap_security, imap_username, smtp_host, smtp_port, smtp_security, \
-     smtp_username, password, smtp_password, save_sent, signature, last_error, synced_at, created_at";
+pub(crate) const ACCOUNT_COLS: &str = "id, user_id, name, email, imap_host, imap_port, imap_security, imap_username, smtp_host, smtp_port, smtp_security, \
+     smtp_username, password, smtp_password, save_sent, signature, last_error, synced_at, created_at, auth_method, oauth_provider, oauth_refresh, \
+     oauth_expires_at, provisioning_id, quota_used, quota_limit";
 
 impl Account {
     /// `Name <email>` for From headers.
@@ -131,7 +181,32 @@ pub struct AccountInput {
     pub signature: Option<String>,
 }
 
-fn security_str(s: SmtpSecurity) -> &'static str {
+/// A row to insert into `mail_accounts` (user-added, OAuth or provisioned). Secrets are
+/// plain here and sealed on insert.
+pub(crate) struct NewAccount {
+    pub user_id: String,
+    pub name: String,
+    pub email: String,
+    pub imap_host: String,
+    pub imap_port: u16,
+    pub imap_security: SmtpSecurity,
+    pub imap_username: String,
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub smtp_security: SmtpSecurity,
+    pub smtp_username: String,
+    pub password: String,
+    pub smtp_password: Option<String>,
+    pub save_sent: bool,
+    pub signature: String,
+    pub auth_method: &'static str,
+    pub oauth_provider: Option<String>,
+    pub oauth_refresh: Option<String>,
+    pub oauth_expires_at: Option<DateTime<Utc>>,
+    pub provisioning_id: Option<String>,
+}
+
+pub(crate) fn security_str(s: SmtpSecurity) -> &'static str {
     match s {
         SmtpSecurity::Tls => "tls",
         SmtpSecurity::Starttls => "starttls",
@@ -139,7 +214,7 @@ fn security_str(s: SmtpSecurity) -> &'static str {
     }
 }
 
-fn parse_security(s: &str) -> SmtpSecurity {
+pub(crate) fn parse_security(s: &str) -> SmtpSecurity {
     match s {
         "tls" => SmtpSecurity::Tls,
         "none" => SmtpSecurity::None,
@@ -164,6 +239,20 @@ pub struct MailState {
     folder_locks: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
     /// When a folder list or folder was last synced (debounces background refreshes).
     last_sync: DashMap<String, Instant>,
+    /// Delegates per account (who else receives the account's live events).
+    delegates: DashMap<String, Vec<String>>,
+    /// The admin settings, loaded on first use.
+    settings: parking_lot::RwLock<Option<Arc<settings::MailSettings>>>,
+    settings_write: tokio::sync::Mutex<()>,
+    /// One OAuth token refresh per account at a time.
+    refresh_locks: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
+    /// HTTP clients for OAuth and autoconfig: public addresses only, or any address.
+    http_public: std::sync::OnceLock<reqwest::Client>,
+    http_local: std::sync::OnceLock<reqwest::Client>,
+    /// A background sync round is running.
+    background_running: std::sync::atomic::AtomicBool,
+    /// One provisioning reconcile at a time.
+    provisioning: tokio::sync::Mutex<()>,
 }
 
 impl MailState {
@@ -177,7 +266,7 @@ impl MailState {
 
     /// Drops pooled connections and the IDLE watcher of an account (settings changed or
     /// account removed).
-    fn forget(&self, account_id: &str) {
+    pub(crate) fn forget(&self, account_id: &str) {
         if let Some((_, p)) = self.pools.remove(account_id) {
             p.close_all();
         }
@@ -213,25 +302,24 @@ impl Core {
         crypto::SecretBox::new(&self.secret)
     }
 
+    /// The accounts `user_id` owns (not those delegated to them: see [`Core::mail_accounts_for`]).
     pub async fn mail_accounts(&self, user_id: &str) -> Result<Vec<Account>> {
-        Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        let rows: Vec<Account> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {ACCOUNT_COLS} FROM mail_accounts WHERE user_id = ? ORDER BY created_at"
         )))
         .bind(user_id)
         .fetch_all(&self.db)
-        .await?)
+        .await?;
+        Ok(rows.into_iter().map(|a| a.for_viewer(MailRole::Owner, None)).collect())
     }
 
-    /// An account of `user_id` (NotFound for anyone else's).
+    /// An account `user_id` owns (NotFound for anyone else's, delegates included).
+    ///
+    /// Kept for code written before delegation: a thin wrapper around the central check with
+    /// [`MailRight::Owner`]. New code calls [`Core::mail_access`] with the right it needs, which
+    /// also lets delegates in where they belong.
     pub async fn mail_account(&self, user_id: &str, id: &str) -> Result<Account> {
-        sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT {ACCOUNT_COLS} FROM mail_accounts WHERE id = ? AND user_id = ?"
-        )))
-        .bind(id)
-        .bind(user_id)
-        .fetch_optional(&self.db)
-        .await?
-        .ok_or(Error::NotFound)
+        self.mail_access(user_id, id, MailRight::Owner).await
     }
 
     pub(crate) async fn mail_account_by_id(&self, id: &str) -> Result<Account> {
@@ -250,7 +338,37 @@ impl Core {
             security: parse_security(&a.imap_security),
             username: a.imap_username.clone(),
             password: self.secret_box().open(&a.id, &a.password)?,
+            xoauth2: a.auth_method == "xoauth2",
         })
+    }
+
+    /// How mail connections may be made (admin settings: TLS verification, local servers).
+    pub async fn mail_policy(&self) -> imap::ConnectPolicy {
+        let s = self.mail_settings().await;
+        imap::ConnectPolicy {
+            verify_tls: s.verify_tls,
+            allow_local: s.allow_local_servers,
+        }
+    }
+
+    /// An SMTP transport for an account: its fresh credentials (XOAUTH2 for OAuth accounts)
+    /// under the admin's connection policy.
+    pub async fn mail_smtp_transport(&self, a: &Account) -> Result<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>> {
+        let a = self.mail_fresh_credentials(a).await?;
+        let settings = self.smtp_settings(&a)?;
+        self.mail_transport(&settings, a.auth_method == "xoauth2").await
+    }
+
+    async fn mail_transport(&self, smtp: &SmtpSettings, xoauth2: bool) -> Result<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>> {
+        let policy = self.mail_policy().await;
+        crate::net::resolve(&smtp.host, smtp.port, policy.allow_local).await?;
+        crate::mailer::transport_with(
+            smtp,
+            &crate::mailer::TransportOptions {
+                xoauth2,
+                accept_invalid_certs: !policy.verify_tls,
+            },
+        )
     }
 
     /// SMTP settings with the decrypted password (the IMAP one unless a separate one is set).
@@ -270,9 +388,25 @@ impl Core {
     /// Logs in to IMAP and connects (and authenticates) to SMTP, so bad settings are caught
     /// when they are saved.
     pub async fn test_mail_settings(&self, imap: &ServerSettings, smtp: &SmtpSettings) -> Result<()> {
-        let conn = imap::ImapConn::connect(imap).await?;
+        self.test_mail_connection(imap, smtp, imap.xoauth2).await
+    }
+
+    /// [`Core::test_mail_settings`] with the SMTP mechanism given (XOAUTH2 or the default).
+    pub async fn test_mail_connection(&self, imap: &ServerSettings, smtp: &SmtpSettings, smtp_xoauth2: bool) -> Result<()> {
+        self.test_imap(imap).await?;
+        self.test_smtp(smtp, smtp_xoauth2).await
+    }
+
+    /// Connects and logs in to IMAP under the admin's policy.
+    pub async fn test_imap(&self, imap: &ServerSettings) -> Result<()> {
+        let conn = imap::ImapConn::connect_with(imap, self.mail_policy().await).await?;
         conn.logout().await;
-        let transport = crate::mailer::transport(smtp)?;
+        Ok(())
+    }
+
+    /// Connects (and authenticates, when credentials are given) to SMTP.
+    pub async fn test_smtp(&self, smtp: &SmtpSettings, xoauth2: bool) -> Result<()> {
+        let transport = self.mail_transport(smtp, xoauth2).await?;
         match tokio::time::timeout(Duration::from_secs(30), transport.test_connection()).await {
             Ok(Ok(true)) => Ok(()),
             Ok(Ok(false)) => Err(Error::bad(format!("the SMTP server {}:{} did not accept the connection", smtp.host, smtp.port))),
@@ -281,8 +415,67 @@ impl Core {
         }
     }
 
+    /// Inserts an account row (sealing its secrets); returns its id.
+    pub(crate) async fn insert_mail_account(&self, n: &NewAccount) -> Result<String> {
+        let id = new_id();
+        let sb = self.secret_box();
+        let sealed = sb.seal(&id, &n.password)?;
+        let sealed_smtp = n.smtp_password.as_deref().map(|p| sb.seal(&id, p)).transpose()?;
+        let sealed_refresh = n.oauth_refresh.as_deref().map(|p| sb.seal(&id, p)).transpose()?;
+        sqlx::query(
+            "INSERT INTO mail_accounts (id, user_id, name, email, imap_host, imap_port, imap_security, imap_username, smtp_host, smtp_port,
+             smtp_security, smtp_username, password, smtp_password, save_sent, signature, created_at, auth_method, oauth_provider, oauth_refresh,
+             oauth_expires_at, provisioning_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(&n.user_id)
+        .bind(&n.name)
+        .bind(&n.email)
+        .bind(&n.imap_host)
+        .bind(n.imap_port as i64)
+        .bind(security_str(n.imap_security))
+        .bind(&n.imap_username)
+        .bind(&n.smtp_host)
+        .bind(n.smtp_port as i64)
+        .bind(security_str(n.smtp_security))
+        .bind(&n.smtp_username)
+        .bind(&sealed)
+        .bind(&sealed_smtp)
+        .bind(n.save_sent)
+        .bind(&n.signature)
+        .bind(now())
+        .bind(n.auth_method)
+        .bind(&n.oauth_provider)
+        .bind(&sealed_refresh)
+        .bind(n.oauth_expires_at)
+        .bind(&n.provisioning_id)
+        .execute(&self.db)
+        .await?;
+        Ok(id)
+    }
+
+    /// After an account was added: start syncing its folders in the background and tell the
+    /// owner's open tabs.
+    pub(crate) async fn after_account_added(&self, user_id: &str, id: &str) -> Result<Account> {
+        let account = self.mail_access(user_id, id, MailRight::Read).await?;
+        let core = self.clone();
+        let acc = account.clone();
+        tokio::spawn(async move {
+            if let Err(e) = core.sync_mail_folders(&acc).await {
+                tracing::warn!(account = %acc.id, error = %e, "initial mail folder sync failed");
+            }
+            core.ensure_mail_idle(&acc.user_id).await;
+        });
+        self.hub
+            .publish([user_id], &serde_json::json!({"type": "mail.changed", "account_id": id, "what": "accounts"}));
+        Ok(account)
+    }
+
     /// Adds an account after testing it, then starts syncing its folders in the background.
     pub async fn create_mail_account(&self, user_id: &str, input: &AccountInput) -> Result<Account> {
+        if !self.mail_allow_user_accounts().await {
+            return Err(Error::bad("adding mail accounts is turned off on this server"));
+        }
         let email = required(&input.email, "email address")?;
         if parse::Addr::parse(&email).is_none() {
             return Err(Error::bad(format!("{email:?} is not an email address")));
@@ -323,6 +516,7 @@ impl Core {
             security: imap_security,
             username: imap_username.clone(),
             password: password.clone(),
+            xoauth2: false,
         };
         let smtp_auth = !smtp_username.is_empty();
         let smtp = SmtpSettings {
@@ -334,52 +528,41 @@ impl Core {
             from: email.clone(),
         };
         self.test_mail_settings(&imap, &smtp).await?;
-        let id = new_id();
-        let sb = self.secret_box();
-        let sealed = sb.seal(&id, &password)?;
-        let sealed_smtp = smtp_password.as_deref().map(|p| sb.seal(&id, p)).transpose()?;
         let save_sent = input.save_sent.unwrap_or_else(|| !provider_saves_sent(&smtp_host));
-        sqlx::query(
-            "INSERT INTO mail_accounts (id, user_id, name, email, imap_host, imap_port, imap_security, imap_username, smtp_host, smtp_port,
-             smtp_security, smtp_username, password, smtp_password, save_sent, signature, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&id)
-        .bind(user_id)
-        .bind(&name)
-        .bind(&email)
-        .bind(&imap_host)
-        .bind(imap_port as i64)
-        .bind(security_str(imap_security))
-        .bind(&imap_username)
-        .bind(&smtp_host)
-        .bind(smtp_port as i64)
-        .bind(security_str(smtp_security))
-        .bind(&smtp_username)
-        .bind(&sealed)
-        .bind(&sealed_smtp)
-        .bind(save_sent)
-        .bind(input.signature.as_deref().unwrap_or(""))
-        .bind(now())
-        .execute(&self.db)
-        .await?;
-        let account = self.mail_account(user_id, &id).await?;
-        let core = self.clone();
-        let acc = account.clone();
-        tokio::spawn(async move {
-            if let Err(e) = core.sync_mail_folders(&acc).await {
-                tracing::warn!(account = %acc.id, error = %e, "initial mail folder sync failed");
-            }
-            core.ensure_mail_idle(&acc.user_id).await;
-        });
-        self.hub
-            .publish([user_id], &serde_json::json!({"type": "mail.changed", "account_id": id, "what": "accounts"}));
-        Ok(account)
+        let id = self
+            .insert_mail_account(&NewAccount {
+                user_id: user_id.to_string(),
+                name,
+                email,
+                imap_host,
+                imap_port,
+                imap_security,
+                imap_username,
+                smtp_host,
+                smtp_port,
+                smtp_security,
+                smtp_username,
+                password,
+                smtp_password,
+                save_sent,
+                signature: input.signature.clone().unwrap_or_default(),
+                auth_method: "password",
+                oauth_provider: None,
+                oauth_refresh: None,
+                oauth_expires_at: None,
+                provisioning_id: None,
+            })
+            .await?;
+        self.after_account_added(user_id, &id).await
     }
 
-    /// Changes an account. Connection changes (servers, usernames, passwords) are tested
-    /// first and reset the account's connections.
+    /// Changes an account. Connection changes (servers, usernames, passwords, the address)
+    /// need [`MailRight::Authenticate`] (the owner of an account they added themselves); the
+    /// sender name, signature and Sent copy need [`MailRight::Configure`] (delegates and
+    /// provisioned accounts too). Connection changes are tested first and reset the account's
+    /// connections.
     pub async fn update_mail_account(&self, user_id: &str, id: &str, input: &AccountInput) -> Result<Account> {
-        let cur = self.mail_account(user_id, id).await?;
+        let cur = self.mail_access(user_id, id, MailRight::Configure).await?;
         let pick = |v: &Option<String>, old: &str| {
             v.as_deref()
                 .map(str::trim)
@@ -438,9 +621,18 @@ impl Core {
             || next.smtp_port != cur.smtp_port
             || next.smtp_security != cur.smtp_security
             || next.smtp_username != cur.smtp_username
+            || next.email != cur.email
             || new_password.is_some()
-            || new_smtp_password.is_some();
+            || new_smtp_password.as_deref().is_some_and(|p| !p.is_empty() || cur.smtp_password.is_some());
         if connection_changed {
+            let role = cur.role.unwrap_or(MailRole::Delegate);
+            if !delegation::allowed(role, cur.provisioning_id.is_some(), MailRight::Authenticate) {
+                return Err(Error::Forbidden);
+            }
+            if cur.auth_method == "xoauth2" {
+                // The address and servers of OAuth accounts come from the provider.
+                return Err(Error::bad("this account signs in with OAuth; reconnect it to change how it signs in"));
+            }
             self.test_mail_settings(&self.imap_settings(&next)?, &self.smtp_settings(&next)?).await?;
         }
         sqlx::query(
@@ -466,20 +658,29 @@ impl Core {
         .await?;
         if connection_changed {
             self.mail.forget(id);
-            self.ensure_mail_idle(user_id).await;
+            self.ensure_mail_idle(&cur.user_id).await;
         }
-        self.hub
-            .publish([user_id], &serde_json::json!({"type": "mail.changed", "account_id": id, "what": "accounts"}));
-        self.mail_account(user_id, id).await
+        self.mail_publish(&cur, &serde_json::json!({"type": "mail.changed", "account_id": id, "what": "accounts"}));
+        self.mail_access(user_id, id, MailRight::Read).await
     }
 
-    /// Removes an account and its cache (the mail stays on the server).
+    /// Removes an account and its cache (the mail stays on the server). Owner only, and not
+    /// for provisioned accounts (the administrator removes those).
     pub async fn delete_mail_account(&self, user_id: &str, id: &str) -> Result<()> {
-        let a = self.mail_account(user_id, id).await?;
+        let a = self.mail_access(user_id, id, MailRight::Remove).await?;
+        self.remove_mail_account_row(&a).await
+    }
+
+    /// Drops an account (no access check: the caller decided).
+    pub(crate) async fn remove_mail_account_row(&self, a: &Account) -> Result<()> {
+        let audience = self.mail_audience(a);
         self.mail.forget(&a.id);
         sqlx::query("DELETE FROM mail_accounts WHERE id = ?").bind(&a.id).execute(&self.db).await?;
-        self.hub
-            .publish([user_id], &serde_json::json!({"type": "mail.changed", "account_id": id, "what": "accounts"}));
+        self.mail.delegates.remove(&a.id);
+        self.hub.publish(
+            audience.iter().map(String::as_str),
+            &serde_json::json!({"type": "mail.changed", "account_id": a.id, "what": "accounts"}),
+        );
         Ok(())
     }
 
@@ -494,8 +695,10 @@ impl Core {
     }
 
     /// Runs mail housekeeping for the life of the process: IDLE watchers for online users,
-    /// closing idle pooled connections, expiring composer uploads.
+    /// closing idle pooled connections, expiring composer uploads, and (see `background`) the
+    /// periodic sync of every account with provisioning.
     pub fn spawn_mail_background(&self) {
+        self.spawn_mail_sync_all();
         let core = self.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(15));
@@ -516,6 +719,7 @@ impl Core {
                     {
                         tracing::warn!(error = %e, "expiring mail uploads failed");
                     }
+                    core.mail_prune_send_log().await;
                 }
             }
         });

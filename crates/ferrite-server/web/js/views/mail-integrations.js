@@ -282,6 +282,8 @@ export function messageMenuItems(message, ctx, { accounts }) {
 
 /** Entries for an account's menu in the folder pane. */
 export function accountMenuItems(account, ctx) {
+  // Filters are edited by whoever may configure the account (its owner, or a delegate with that right).
+  if (account.permissions && !account.permissions.configure) return [];
   return [{ label: 'Filters and autoresponder', icon: 'settings', run: () => filtersDialog(ctx, account) }];
 }
 

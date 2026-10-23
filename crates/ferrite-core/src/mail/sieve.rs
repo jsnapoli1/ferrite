@@ -6,6 +6,7 @@
 //! autoresponder) cannot overwrite each other's half of the script.
 
 use super::Account;
+use super::delegation::MailRight;
 use super::filters::{self, Filter, Vacation};
 use super::managesieve::SieveConn;
 use crate::{Core, Error, Result};
@@ -63,7 +64,7 @@ async fn write_active(conn: &mut SieveConn, name: Option<&str>, script: &str) ->
 impl Core {
     /// The account's active Sieve script.
     pub async fn sieve_script(&self, user_id: &str, account_id: &str) -> Result<ActiveScript> {
-        let a = self.mail_account(user_id, account_id).await?;
+        let a = self.mail_access(user_id, account_id, MailRight::Configure).await?;
         let mut conn = self.sieve_conn(&a).await?;
         let (name, script) = read_active(&mut conn).await?;
         let caps = conn.caps.clone();
@@ -82,7 +83,7 @@ impl Core {
         if script.len() > 1024 * 1024 {
             return Err(Error::bad("the script is too long"));
         }
-        let a = self.mail_account(user_id, account_id).await?;
+        let a = self.mail_access(user_id, account_id, MailRight::Configure).await?;
         // The hand-written text may contain filter and autoresponder sections; reject broken ones.
         filters::parse_filters(script)?;
         filters::parse_vacation(script)?;
@@ -113,7 +114,7 @@ impl Core {
 
     /// The account's visual filters, in order.
     pub async fn mail_filters(&self, user_id: &str, account_id: &str) -> Result<Vec<Filter>> {
-        let a = self.mail_account(user_id, account_id).await?;
+        let a = self.mail_access(user_id, account_id, MailRight::Read).await?;
         let mut conn = self.sieve_conn(&a).await?;
         let (_, script) = read_active(&mut conn).await?;
         conn.logout().await;
@@ -123,7 +124,7 @@ impl Core {
     /// Replaces the account's visual filters (in the given order), keeping the rest of the
     /// script. Folder names are checked against the account's folders.
     pub async fn set_mail_filters(&self, user_id: &str, account_id: &str, list: &[Filter]) -> Result<Vec<Filter>> {
-        let a = self.mail_account(user_id, account_id).await?;
+        let a = self.mail_access(user_id, account_id, MailRight::Configure).await?;
         let folders = self.mail_folders(user_id, &a.id).await?;
         let names: Vec<String> = folders
             .iter()
@@ -155,7 +156,7 @@ impl Core {
 
     /// The account's autoresponder (disabled defaults when the script has none).
     pub async fn mail_vacation(&self, user_id: &str, account_id: &str) -> Result<VacationView> {
-        let a = self.mail_account(user_id, account_id).await?;
+        let a = self.mail_access(user_id, account_id, MailRight::Read).await?;
         let settings = self.integrations_of(&a).await?;
         let mut conn = self.sieve_conn(&a).await?;
         let (_, script) = read_active(&mut conn).await?;
@@ -173,7 +174,7 @@ impl Core {
 
     /// Sets the account's autoresponder by hand. Not allowed while it follows the absence.
     pub async fn set_mail_vacation(&self, user_id: &str, account_id: &str, v: &Vacation) -> Result<VacationView> {
-        let a = self.mail_account(user_id, account_id).await?;
+        let a = self.mail_access(user_id, account_id, MailRight::Configure).await?;
         if self.integrations_of(&a).await?.ooo_follows_absence {
             return Err(Error::bad(
                 "this autoresponder follows your absence in Settings → Profile; change the absence there or stop following it",

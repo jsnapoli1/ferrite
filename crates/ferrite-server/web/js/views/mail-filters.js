@@ -296,10 +296,14 @@ function settingsTab(account, onChange) {
         save.disabled = true;
         status.textContent = enabled.checked ? 'Testing the connection…' : '';
         const body = {
-          sieve_enabled: enabled.checked, sieve_host: host.value.trim(), sieve_port: Number(port.value) || 4190, sieve_security: security.value,
-          sieve_username: user.value.trim(), ooo_follows_absence: follow.checked, imip_auto_update: update.checked, imip_auto_create: create.checked,
+          sieve_enabled: enabled.checked, ooo_follows_absence: follow.checked, imip_auto_update: update.checked, imip_auto_create: create.checked,
           followup_enabled: followups.checked,
         };
+        // The connection is sent only when it changed (changing it needs the right to change
+        // how the account signs in).
+        const conn = { sieve_host: host.value.trim(), sieve_port: Number(port.value) || 4190, sieve_security: security.value, sieve_username: user.value.trim() };
+        const was = { sieve_host: i.sieve_host, sieve_port: i.sieve_port, sieve_security: i.sieve_security, sieve_username: i.sieve_username || '' };
+        for (const k of Object.keys(conn)) if (conn[k] !== was[k]) body[k] = conn[k];
         if (pass.value) body.sieve_password = pass.value;
         try {
           const r = await api.patch(`/api/mail/accounts/${enc(account.id)}/integrations`, body);
@@ -308,10 +312,13 @@ function settingsTab(account, onChange) {
         } catch (e) { err.textContent = e.message; } finally { save.disabled = false; status.textContent = ''; }
       },
     }, 'Save settings');
-    const server = h('fieldset.mf-server', { disabled: !enabled.checked },
+    // Delegates and administrator-provisioned accounts cannot change the sign-in.
+    const locked = account.permissions ? !account.permissions.authenticate : false;
+    const server = h('fieldset.mf-server', { disabled: locked || !enabled.checked },
       h('div.mf-grid3', h('div.field', h('label', 'Server'), host), h('div.field', h('label', 'Port'), port), h('div.field', h('label', 'Security'), security)),
-      h('div.mf-grid', h('div.field', h('label', 'User name'), user), h('div.field', h('label', 'Password'), pass)));
-    enabled.addEventListener('change', () => { server.disabled = !enabled.checked; });
+      h('div.mf-grid', h('div.field', h('label', 'User name'), user), h('div.field', h('label', 'Password'), pass)),
+      (locked || i.sieve_provisioned) && h('p.small.muted', i.sieve_provisioned ? 'The Sieve server was set up by your administrator.' : 'Only the account owner can change the Sieve server and sign-in.'));
+    enabled.addEventListener('change', () => { server.disabled = locked || !enabled.checked; });
     clear(el).append(
       h('h4', 'Filters on the mail server (Sieve)'),
       h('label.check', enabled, 'Manage filters and the autoresponder for this account'),

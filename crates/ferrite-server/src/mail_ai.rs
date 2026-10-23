@@ -2,8 +2,8 @@
 //! more messages), smart reply suggestions, translation, event suggestions from a thread, and
 //! follow-up reminders for sent mail that expects an answer.
 //!
-//! Nothing runs unless the administrator allows AI processing of mail (`mail.llm_processing`,
-//! off by default as in Nextcloud), a model is configured, and the user turned on the
+//! Nothing runs unless the administrator allows AI processing of mail ("LLM processing" in
+//! the Mail admin settings, off by default as in Nextcloud), a model is configured, and the user turned on the
 //! assistant for themselves. Results are cached by a hash of their input, so opening a
 //! conversation again costs nothing; the web app asks for them after the message is shown, so
 //! reading never waits for a model.
@@ -19,8 +19,6 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::time::Duration;
 
-/// Key of the admin switch in `kv`.
-pub const LLM_PROCESSING_KEY: &str = "mail.llm_processing";
 /// Text per message sent to the model, and per request in total.
 const MESSAGE_CHARS: usize = 6000;
 const TOTAL_CHARS: usize = 24000;
@@ -31,13 +29,9 @@ const FOLLOW_UP_WINDOW_DAYS: i64 = 30;
 /// Messages classified per account and run.
 const FOLLOW_UP_BATCH: i64 = 10;
 
-/// Whether the administrator allows AI processing of mail.
+/// Whether the administrator allows AI processing of mail (Mail admin settings).
 pub async fn llm_processing(core: &Core) -> Result<bool> {
-    Ok(core.kv_get(LLM_PROCESSING_KEY).await?.as_deref() == Some("1"))
-}
-
-pub async fn set_llm_processing(core: &Core, on: bool) -> Result<()> {
-    core.kv_set(LLM_PROCESSING_KEY, if on { "1" } else { "0" }).await
+    Ok(core.mail_llm_processing().await)
 }
 
 /// What the mail UI needs to know about AI.

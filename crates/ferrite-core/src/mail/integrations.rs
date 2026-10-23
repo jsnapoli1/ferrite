@@ -1,7 +1,13 @@
 //! Per-account settings of the mail integrations: the ManageSieve connection (by default the
 //! IMAP host, user name and password), whether the autoresponder follows the user's absence,
 //! automatic handling of meeting invitations, and AI follow-up reminders.
+//!
+//! An account set up from an admin provisioning template with a Sieve server starts with
+//! that server. Reading the settings needs [`MailRight::Read`]; changing the ManageSieve
+//! connection (it holds credentials) needs [`MailRight::Authenticate`], everything else
+//! [`MailRight::Configure`].
 
+use super::delegation::MailRight;
 use super::managesieve::SieveConn;
 use super::{Account, ServerSettings, parse_security, security_str};
 use crate::mailer::SmtpSecurity;
@@ -46,6 +52,8 @@ pub struct AccountIntegrations {
     pub imip_auto_create: bool,
     /// Sent mail is checked for replies the AI expects (when AI is available).
     pub followup_enabled: bool,
+    /// The Sieve server comes from the administrator's provisioning template.
+    pub sieve_provisioned: bool,
     #[serde(skip)]
     sealed_password: Option<String>,
 }
@@ -82,6 +90,7 @@ impl AccountIntegrations {
             imip_auto_update: true,
             imip_auto_create: false,
             followup_enabled: false,
+            sieve_provisioned: false,
             sealed_password: None,
         }
     }
@@ -102,6 +111,8 @@ impl Core {
         .fetch_optional(&self.db)
         .await?;
         let default_security = if a.imap_security == "none" { "none" } else { "starttls" };
+        let provisioned = self.mail_provisioned_sieve(&a.id).await?;
+        let sieve_provisioned = provisioned.is_some();
         Ok(match row {
             Some(r) => AccountIntegrations {
                 account_id: a.id.clone(),
@@ -115,33 +126,37 @@ impl Core {
                 imip_auto_update: r.imip_auto_update,
                 imip_auto_create: r.imip_auto_create,
                 followup_enabled: r.followup_enabled,
+                sieve_provisioned,
                 sealed_password: r.sieve_password,
             },
             None => AccountIntegrations {
                 account_id: a.id.clone(),
-                sieve_enabled: false,
-                sieve_host: String::new(),
-                sieve_port: DEFAULT_SIEVE_PORT,
-                sieve_security: default_security.into(),
-                sieve_username: None,
+                sieve_enabled: sieve_provisioned,
+                sieve_host: provisioned.as_ref().map(|p| p.host.clone()).unwrap_or_default(),
+                sieve_port: provisioned.as_ref().map_or(DEFAULT_SIEVE_PORT, |p| p.port),
+                sieve_security: provisioned.as_ref().map_or(default_security, |p| security_str(p.security)).into(),
+                sieve_username: provisioned.as_ref().map(|p| p.username.clone()),
                 sieve_custom_password: false,
                 ooo_follows_absence: false,
                 imip_auto_update: true,
                 imip_auto_create: false,
                 followup_enabled: true,
+                sieve_provisioned,
                 sealed_password: None,
             },
         })
     }
 
     pub async fn mail_integrations(&self, user_id: &str, account_id: &str) -> Result<AccountIntegrations> {
-        let a = self.mail_account(user_id, account_id).await?;
+        let a = self.mail_access(user_id, account_id, MailRight::Read).await?;
         self.integrations_of(&a).await
     }
 
-    /// The ManageSieve connection of an account, with the password decrypted.
+    /// The ManageSieve connection of an account, with the password decrypted. Without a
+    /// separate ManageSieve password, an OAuth account signs in with its access token.
     pub(crate) fn sieve_settings(&self, a: &Account, s: &AccountIntegrations) -> Result<ServerSettings> {
         let imap = self.imap_settings(a)?;
+        let xoauth2 = imap.xoauth2 && s.sealed_password.is_none();
         let password = match &s.sealed_password {
             Some(sealed) => self.secret_box().open(&sieve_context(&a.id), sealed)?,
             None => imap.password,
@@ -156,6 +171,7 @@ impl Core {
             security: parse_security(&s.sieve_security),
             username: s.sieve_username.clone().filter(|u| !u.trim().is_empty()).unwrap_or(imap.username),
             password,
+            xoauth2,
         })
     }
 
@@ -165,13 +181,19 @@ impl Core {
         if !s.sieve_enabled {
             return Err(Error::bad("filters are not turned on for this account (enable Sieve in its filter settings)"));
         }
-        SieveConn::connect(&self.sieve_settings(a, &s)?).await
+        self.sieve_connect(a, &s).await
+    }
+
+    /// Logs in to ManageSieve with fresh credentials, under the admin's connection policy.
+    async fn sieve_connect(&self, a: &Account, s: &AccountIntegrations) -> Result<SieveConn> {
+        let a = self.mail_fresh_credentials(a).await?;
+        SieveConn::connect(&self.sieve_settings(&a, s)?, self.mail_policy().await).await
     }
 
     /// Saves settings. Turning Sieve on or changing its connection is tested first; turning on
     /// "follow my absence" applies the absence right away.
     pub async fn set_mail_integrations(&self, user_id: &str, account_id: &str, input: &IntegrationsInput) -> Result<AccountIntegrations> {
-        let a = self.mail_account(user_id, account_id).await?;
+        let a = self.mail_access(user_id, account_id, MailRight::Configure).await?;
         let cur = self.integrations_of(&a).await?;
         let mut next = cur.clone();
         if let Some(v) = input.sieve_enabled {
@@ -219,8 +241,12 @@ impl Core {
             || next.sieve_security != cur.sieve_security
             || next.sieve_username != cur.sieve_username
             || input.sieve_password.is_some();
+        if connection_changed {
+            // The connection holds credentials: only who may change how the account signs in.
+            self.mail_access(user_id, account_id, MailRight::Authenticate).await?;
+        }
         if next.sieve_enabled && (!cur.sieve_enabled || connection_changed) {
-            let conn = SieveConn::connect(&self.sieve_settings(&a, &next)?).await?;
+            let conn = self.sieve_connect(&a, &next).await?;
             conn.logout().await;
         }
         sqlx::query(
@@ -246,7 +272,8 @@ impl Core {
         .execute(&self.db)
         .await?;
         if next.ooo_follows_absence && next.sieve_enabled && (!cur.ooo_follows_absence || !cur.sieve_enabled) {
-            self.apply_absence_to_account(user_id, &a).await?;
+            // The account owner's absence, also when a delegate turns this on.
+            self.apply_absence_to_account(&a.user_id, &a).await?;
         }
         self.integrations_of(&a).await
     }

@@ -1,4 +1,5 @@
-//! A ManageSieve client (RFC 5804): capabilities, STARTTLS (or implicit TLS), SASL PLAIN,
+//! A ManageSieve client (RFC 5804): capabilities, STARTTLS (or implicit TLS), SASL PLAIN
+//! (or XOAUTH2 for OAuth accounts),
 //! and the script commands (LISTSCRIPTS, GETSCRIPT, CHECKSCRIPT, PUTSCRIPT, SETACTIVE,
 //! DELETESCRIPT). Every network step has a timeout, like the IMAP client.
 //!
@@ -8,7 +9,7 @@
 //! twelve octets); the client always sends scripts as non-synchronizing literals (`{12+}`).
 
 use super::ServerSettings;
-use super::imap::{MailStream, tls_wrap};
+use super::imap::{ConnectPolicy, MailStream, tls_wrap};
 use crate::mailer::SmtpSecurity;
 use crate::{Error, Result};
 use base64::Engine;
@@ -190,17 +191,19 @@ pub struct SieveConn {
 }
 
 impl SieveConn {
-    /// Connects, secures the connection as configured (STARTTLS is required, not
-    /// opportunistic) and logs in with SASL PLAIN.
-    pub async fn connect(s: &ServerSettings) -> Result<SieveConn> {
+    /// Connects under the admin's connection policy, secures the connection as configured
+    /// (STARTTLS is required, not opportunistic) and logs in with SASL PLAIN, or XOAUTH2 when
+    /// `s.xoauth2` (the password is then the OAuth access token).
+    pub async fn connect(s: &ServerSettings, policy: ConnectPolicy) -> Result<SieveConn> {
         let host = s.host.trim();
-        let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, s.port)))
+        let addrs = crate::net::resolve(host, s.port, policy.allow_local).await?;
+        let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addrs.as_slice()))
             .await
             .map_err(|_| Error::Unavailable(format!("connecting to {host}:{} timed out", s.port)))?
             .map_err(|e| Error::Unavailable(format!("cannot connect to {host}:{}: {e}", s.port)))?;
         let _ = tcp.set_nodelay(true);
         let stream = match s.security {
-            SmtpSecurity::Tls => tls_wrap(host, tcp).await?,
+            SmtpSecurity::Tls => tls_wrap(host, tcp, policy.verify_tls).await?,
             _ => MailStream::Plain(tcp),
         };
         let mut conn = SieveConn {
@@ -219,13 +222,13 @@ impl SieveConn {
                 return Err(Error::internal("STARTTLS on a TLS connection"));
             };
             conn = SieveConn {
-                io: BufReader::new(tls_wrap(host, tcp).await?),
+                io: BufReader::new(tls_wrap(host, tcp, policy.verify_tls).await?),
                 caps: Capabilities::default(),
             };
             // RFC 5804 §2.2: the server sends its capabilities again after the handshake.
             conn.read_capabilities().await?;
         }
-        conn.authenticate(&s.username, &s.password).await?;
+        conn.authenticate(&s.username, &s.password, s.xoauth2).await?;
         Ok(conn)
     }
 
@@ -238,15 +241,21 @@ impl SieveConn {
         Ok(())
     }
 
-    async fn authenticate(&mut self, user: &str, pass: &str) -> Result<()> {
-        if !self.caps.sasl.iter().any(|m| m == "PLAIN") {
+    async fn authenticate(&mut self, user: &str, pass: &str, xoauth2: bool) -> Result<()> {
+        let mechanism = if xoauth2 { "XOAUTH2" } else { "PLAIN" };
+        if !self.caps.sasl.iter().any(|m| m == mechanism) {
             return Err(Error::bad(format!(
-                "the ManageSieve server does not offer SASL PLAIN (it offers: {})",
+                "the ManageSieve server does not offer SASL {mechanism} (it offers: {})",
                 self.caps.sasl.join(", ")
             )));
         }
-        let token = base64::engine::general_purpose::STANDARD.encode(format!("\0{user}\0{pass}"));
-        self.send(&format!("AUTHENTICATE \"PLAIN\" \"{token}\"\r\n")).await?;
+        let initial = if xoauth2 {
+            super::oauth::xoauth2(user, pass)
+        } else {
+            format!("\0{user}\0{pass}")
+        };
+        let token = base64::engine::general_purpose::STANDARD.encode(initial);
+        self.send(&format!("AUTHENTICATE \"{mechanism}\" \"{token}\"\r\n")).await?;
         let (_, st) = self.response("AUTHENTICATE").await?;
         match st.outcome {
             Outcome::Ok => Ok(()),
@@ -486,6 +495,7 @@ mod tests {
             security,
             username: "alice@example.test".into(),
             password: "pw".into(),
+            xoauth2: false,
         }
     }
 
@@ -507,7 +517,7 @@ mod tests {
             ],
         )
         .await;
-        let mut c = SieveConn::connect(&settings(port, SmtpSecurity::None)).await.unwrap();
+        let mut c = SieveConn::connect(&settings(port, SmtpSecurity::None), ConnectPolicy::default()).await.unwrap();
         assert_eq!(c.caps.implementation, "Fake Sieve");
         assert!(c.caps.sieve.contains(&"vacation".to_string()) && c.caps.version.is_some() && !c.caps.starttls);
         assert_eq!(
@@ -550,10 +560,16 @@ mod tests {
     #[tokio::test]
     async fn login_failures_and_missing_mechanisms() {
         let (port, _s) = fake(GREETING, vec!["NO \"Authentication failed.\"\r\n"]).await;
-        let e = SieveConn::connect(&settings(port, SmtpSecurity::None)).await.err().unwrap();
+        let e = SieveConn::connect(&settings(port, SmtpSecurity::None), ConnectPolicy::default())
+            .await
+            .err()
+            .unwrap();
         assert!(e.to_string().contains("ManageSieve login failed: Authentication failed."), "{e}");
         let (port, _s) = fake("\"SASL\" \"LOGIN\"\r\nOK\r\n", vec![]).await;
-        let e = SieveConn::connect(&settings(port, SmtpSecurity::None)).await.err().unwrap();
+        let e = SieveConn::connect(&settings(port, SmtpSecurity::None), ConnectPolicy::default())
+            .await
+            .err()
+            .unwrap();
         assert!(e.to_string().contains("does not offer SASL PLAIN"), "{e}");
     }
 
@@ -561,7 +577,10 @@ mod tests {
     async fn starttls_is_required_and_negotiated() {
         // No STARTTLS offered: refuse rather than send the password in the clear.
         let (port, _s) = fake(GREETING, vec![]).await;
-        let e = SieveConn::connect(&settings(port, SmtpSecurity::Starttls)).await.err().unwrap();
+        let e = SieveConn::connect(&settings(port, SmtpSecurity::Starttls), ConnectPolicy::default())
+            .await
+            .err()
+            .unwrap();
         assert!(e.to_string().contains("does not offer STARTTLS"), "{e}");
         // Offered: the client sends STARTTLS and starts a TLS handshake (which this plain
         // fake cannot complete), never the credentials.
@@ -570,7 +589,10 @@ mod tests {
             vec!["OK \"Begin TLS negotiation now.\"\r\n"],
         )
         .await;
-        let e = SieveConn::connect(&settings(port, SmtpSecurity::Starttls)).await.err().unwrap();
+        let e = SieveConn::connect(&settings(port, SmtpSecurity::Starttls), ConnectPolicy::default())
+            .await
+            .err()
+            .unwrap();
         assert!(e.to_string().contains("TLS"), "{e}");
         let sent = server.await.unwrap();
         assert_eq!(sent[0], "STARTTLS\r\n");

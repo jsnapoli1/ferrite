@@ -44,6 +44,7 @@ tokio-stream = "0.1.19"
 tokio-util = { version = "0.7.20", features = ["io"] }
 toml = "1.1.8"
 tracing = "0.1.44"
+url = "2.5.8"
 uuid = { version = "1.28.0", features = ["v7", "serde"] }
 webpki-roots = "1.0.10"
 yrs = { version = "0.28.0", features = ["sync"] }

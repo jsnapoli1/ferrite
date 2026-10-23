@@ -48,7 +48,6 @@ pub fn router() -> Router<AppState> {
         .route("/api/mail/follow-ups", get(follow_ups))
         .route("/api/mail/follow-ups/disable", post(disable_follow_up))
         .route("/api/mail/follow-ups/check", post(check_follow_ups))
-        .route("/api/admin/mail/ai", get(admin_ai).put(set_admin_ai))
 }
 
 fn mail(auth: &Auth) -> Result<(), ApiError> {
@@ -436,20 +435,4 @@ async fn disable_follow_up(State(s): State<AppState>, auth: Auth, Json(b): Json<
     mail(&auth)?;
     mail_ai::disable_follow_up(&s.core, &auth.user.id, &b.account_id, &b.message_id).await?;
     Ok(Json(json!({"ok": true})))
-}
-
-async fn admin_ai(State(s): State<AppState>, auth: Auth) -> ApiResult<Json<Value>> {
-    auth.require_admin()?;
-    Ok(Json(json!({"llm_processing": mail_ai::llm_processing(&s.core).await?})))
-}
-
-#[derive(Deserialize)]
-struct AdminAiBody {
-    llm_processing: bool,
-}
-
-async fn set_admin_ai(State(s): State<AppState>, auth: Auth, Json(b): Json<AdminAiBody>) -> ApiResult<Json<Value>> {
-    auth.require_admin()?;
-    mail_ai::set_llm_processing(&s.core, b.llm_processing).await?;
-    Ok(Json(json!({"llm_processing": b.llm_processing})))
 }

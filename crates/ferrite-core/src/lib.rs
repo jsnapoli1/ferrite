@@ -20,6 +20,7 @@ pub mod groupware;
 pub mod itip;
 pub mod mail;
 pub mod mailer;
+pub mod net;
 pub mod notify;
 pub mod push;
 pub mod recur;
@@ -84,7 +85,7 @@ impl Core {
             }
         };
         let (message_events, _) = broadcast::channel(1024);
-        Ok(Core(Arc::new(Inner {
+        let core = Core(Arc::new(Inner {
             db,
             config: Arc::new(config),
             blobs,
@@ -96,7 +97,9 @@ impl Core {
             smtp_transport: tokio::sync::OnceCell::new(),
             push: push::PushQueue::default(),
             mail: mail::MailState::default(),
-        })))
+        }));
+        core.mail_load_delegations().await?;
+        Ok(core)
     }
 
     pub async fn kv_get(&self, key: &str) -> Result<Option<String>> {

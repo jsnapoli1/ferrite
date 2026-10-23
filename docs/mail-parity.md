@@ -67,14 +67,14 @@ Status: ✅ in Ferrite · 🔧 being built (workstream in brackets).
 | Attachments: download, save to Files | ✅ |
 | Encrypted mail: S/MIME (verify signatures, decrypt) | 🔧 [security] |
 | Encrypted mail: PGP through the Mailvelope browser extension | 🔧 [security] |
-| Meeting invitations (iMIP): show the event, accept / tentative / decline, import .ics; replies from external guests update Ferrite events; optional automatic tentative entries and updates | 🔧 [integrations] |
-| Travel itineraries (schema.org reservations in mail) shown as cards, add to calendar | 🔧 [integrations] |
-| Create a calendar event or a task from a message (AI-suggested when AI is configured) | 🔧 [integrations] |
-| Add sender to contacts / new contact; recipient info pane | 🔧 [integrations] |
-| One-click unsubscribe (List-Unsubscribe, RFC 8058) | 🔧 [integrations] |
+| Meeting invitations (iMIP): show the event, accept / tentative / decline, import .ics; replies from external guests update Ferrite events; optional automatic tentative entries and updates | ✅ (REQUEST, CANCEL, REPLY, COUNTER; times in the viewer's zone, conflicts; replies sent from the user's account; propose a new time) |
+| Travel itineraries (schema.org reservations in mail) shown as cards, add to calendar | ✅ (JSON-LD and microdata: flight, lodging, train, bus, event, rental car, restaurant) |
+| Create a calendar event or a task from a message (AI-suggested when AI is configured) | ✅ (tasks are VTODO) |
+| Add sender to contacts / new contact; recipient info pane | ✅ (contact match in the reader, `GET /api/mail/contact-info`, a Ferrite user's absence) |
+| One-click unsubscribe (List-Unsubscribe, RFC 8058) | ✅ (HTTPS POST that never reaches private addresses, or mailto sent from the account) |
 | Read receipts (MDN): ask the user to send one when a sender requests it | 🔧 [compose] |
 | Print a message | 🔧 [compose] |
-| AI: thread summary (3+ messages), smart replies, translation, follow-up reminders for unanswered sent mail | 🔧 [integrations] |
+| AI: thread summary (3+ messages), smart replies, translation, follow-up reminders for unanswered sent mail | ✅ (needs the admin's AI processing switch and the user's consent; cached, never blocks reading) |
 
 ## Composing and sending — [compose]
 
@@ -103,21 +103,21 @@ Status: ✅ in Ferrite · 🔧 being built (workstream in brackets).
 
 | Feature | Status |
 |---|---|
-| Sieve: enable per account (ManageSieve host, port, credentials) | 🔧 |
-| Sieve script editor | 🔧 |
-| Visual filters: conditions on subject, sender, recipient (is, contains, matches); actions file into folder, add flag/tag, stop; create a filter from a message | 🔧 |
-| Autoresponder (out of office) through Sieve vacation; manual or following a user-level absence setting | 🔧 |
+| Sieve: enable per account (ManageSieve host, port, credentials) | ✅ (STARTTLS or TLS, SASL PLAIN or XOAUTH2; defaults to the IMAP server and login, or the provisioning template's server) |
+| Sieve script editor | ✅ (the server's CHECKSCRIPT errors shown) |
+| Visual filters: conditions on subject, sender, recipient (is, contains, matches); actions file into folder, add flag/tag, stop; create a filter from a message | ✅ (Nextcloud's script format, so hand-written parts and Nextcloud's own filters survive) |
+| Autoresponder (out of office) through Sieve vacation; manual or following a user-level absence setting | ✅ (absence in Settings → Profile, shown to other users) |
 
 ## Accounts, delegation and admin — [accounts]
 
 | Feature | Status |
 |---|---|
 | IMAP/SMTP accounts, encrypted passwords, connection test, provider database autoconfig | ✅ |
-| Autoconfig from MX records | 🔧 |
-| Google and Microsoft accounts with OAuth 2.0 (XOAUTH2), admin-configured client | 🔧 |
-| Account order; quota display | 🔧 |
-| Account delegation: share an account with other users (read, send, delete; not remove or re-authenticate), revocable | 🔧 |
-| Provisioning: admin-defined account templates created for users automatically | 🔧 |
-| Admin settings: allow users to add accounts, anti-spam report addresses (report spam/not spam), attachment size limit, anti-abuse alerts (recipient count, message rate), background sync interval, AI processing on/off, importance classification default, UI defaults | 🔧 |
-| Background sync of all accounts (not only while online) | 🔧 |
-| Assistant (MCP) tools for the new features | 🔧 (each) |
+| Autoconfig from MX records | ✅ (also the provider's autoconfig/autodiscover URLs; connection test) |
+| Google and Microsoft accounts with OAuth 2.0 (XOAUTH2), admin-configured client | ✅ |
+| Account order; quota display | ✅ |
+| Account delegation: share an account with other users (read, send, delete; not remove or re-authenticate), revocable | ✅ |
+| Provisioning: admin-defined account templates created for users automatically | ✅ |
+| Admin settings: allow users to add accounts, anti-spam report addresses (report spam/not spam), attachment size limit, anti-abuse alerts (recipient count, message rate), background sync interval, AI processing on/off, importance classification default, UI defaults | ✅ (settings and spam actions; the other features read them through `mail/settings.rs`) |
+| Background sync of all accounts (not only while online) | ✅ |
+| Assistant (MCP) tools for the new features | ✅ accounts (delegation, report spam, provisioning) · ✅ integrations (filters, out of office, invitations, thread summary, unsubscribe) · 🔧 (each) |

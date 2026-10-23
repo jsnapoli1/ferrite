@@ -135,7 +135,10 @@ async fn handle_client_event(s: &AppState, actor: &Actor, conn: u64, v: Value) -
                     s.recordings.note_member(&room.id, &session, &actor.name);
                 }
                 let can_record = s.sfu.is_some() && crate::recording::can_record(s, actor, &room).await?;
-                Ok(Some(json!({"type": "call.self", "room_id": room.id, "room": room.token, "session": session, "members": members, "ice_servers": s.core.config.ice_servers, "sfu": s.sfu.is_some(), "recording": recording, "can_record": can_record})))
+                // Validated when the configuration was loaded.
+                let (height, fps) = s.core.config.calls.quality().unwrap_or((720, 30));
+                let quality = json!({"height": height, "fps": fps});
+                Ok(Some(json!({"type": "call.self", "room_id": room.id, "room": room.token, "session": session, "members": members, "ice_servers": s.core.config.ice_servers, "sfu": s.sfu.is_some(), "recording": recording, "can_record": can_record, "quality": quality})))
             }
             "call.leave" => {
                 let (room_id, session) = (str_of("room_id"), str_of("session"));

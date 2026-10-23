@@ -26,6 +26,7 @@
 //! are ignored. Each message is processed once (by Message-ID).
 
 use super::Account;
+use super::delegation::MailRight;
 use crate::groupware::{Collection, DavObject, EventInput, KIND_CALENDAR};
 use crate::itip::{self, Component, Party, Prop};
 use crate::mailer::{self, CalendarPart, OutgoingMail};
@@ -380,8 +381,9 @@ impl Core {
     }
 
     /// The message's iTIP part, its raw bytes' senders, and the key it is logged under.
-    async fn imip_of(&self, user_id: &str, message_id: &str) -> Result<(Account, String, ItipPart, Senders)> {
-        let (a, m) = self.message_row(user_id, message_id).await?;
+    /// A message's account (checked for `right`), its key, iTIP part and senders.
+    async fn imip_of(&self, user_id: &str, message_id: &str, right: MailRight) -> Result<(Account, String, ItipPart, Senders)> {
+        let (a, m) = self.mail_message_access(user_id, message_id, right).await?;
         let (_, raw) = self.mail_raw(user_id, message_id).await?;
         let part = itip_parts(&raw)
             .into_iter()
@@ -591,7 +593,7 @@ impl Core {
         if !crate::scheduling::RESPONSES.contains(&partstat) {
             return Err(Error::bad("answer accepted, tentative or declined"));
         }
-        let (a, key, part, _) = self.imip_of(user_id, message_id).await?;
+        let (a, key, part, _) = self.imip_of(user_id, message_id, MailRight::Send).await?;
         if part.method != "REQUEST" {
             return Err(Error::bad("only invitations can be answered"));
         }
@@ -671,7 +673,7 @@ impl Core {
         if end <= start {
             return Err(Error::bad("the proposed end must be after its start"));
         }
-        let (a, key, part, _) = self.imip_of(user_id, message_id).await?;
+        let (a, key, part, _) = self.imip_of(user_id, message_id, MailRight::Send).await?;
         if part.method != "REQUEST" {
             return Err(Error::bad("a new time can only be proposed for an invitation"));
         }
@@ -742,7 +744,7 @@ impl Core {
     /// The organizer's decision on a proposed time: accepting moves the event (attendees are
     /// updated through scheduling); declining sends DECLINECOUNTER to the attendee.
     pub async fn mail_imip_counter_decision(&self, user_id: &str, message_id: &str, accept: bool) -> Result<ImipOutcome> {
-        let (a, key, part, _) = self.imip_of(user_id, message_id).await?;
+        let (a, key, part, _) = self.imip_of(user_id, message_id, MailRight::Send).await?;
         if part.method != "COUNTER" {
             return Err(Error::bad("this message does not propose a new time"));
         }
@@ -826,7 +828,7 @@ impl Core {
     /// Applies a REPLY, CANCEL or REQUEST update from a message now. `force` applies it even
     /// when the sender is not the party the method requires (the user checked it).
     pub async fn mail_imip_apply(&self, user_id: &str, message_id: &str, force: bool) -> Result<ImipOutcome> {
-        let (a, key, part, from) = self.imip_of(user_id, message_id).await?;
+        let (a, key, part, from) = self.imip_of(user_id, message_id, MailRight::Modify).await?;
         let settings = super::integrations::AccountIntegrations::manual();
         let outcome = self.apply_itip(&a, &part, &from, force, &settings).await?;
         self.record_imip(&a, &key, &part, &outcome).await?;
@@ -1076,7 +1078,7 @@ impl Core {
         };
         let settings = self.integrations_of(a).await?;
         for (id, uid) in rows.iter().filter(|(_, u)| with_cal.contains(&(*u as u32))) {
-            let (key, part, from) = match self.imip_of(&a.user_id, id).await {
+            let (key, part, from) = match self.imip_of(&a.user_id, id, MailRight::Read).await {
                 Ok((_, key, part, from)) => (key, part, from),
                 Err(e) => {
                     tracing::debug!(message = %id, uid, error = %e, "not an iMIP message");

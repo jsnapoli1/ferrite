@@ -188,6 +188,8 @@ try {
   current = page;
   await page.api('POST', '/api/setup', { username: 'alice', display_name: 'Alice Archer', password: 'alice-password' });
   await page.api('PATCH', '/api/me', { email: 'alice@example.test' });
+  // The test servers are on 127.0.0.1, which the admin has to allow.
+  await page.api('PATCH', '/api/admin/mail/settings', { allow_local_servers: true });
   const { account } = await page.api('POST', '/api/mail/accounts', {
     email: 'alice@example.test', name: 'Alice Archer', password: 'alice-mail-pw', imap_host: '127.0.0.1', imap_port: IMAP_PORT, imap_security: 'none',
     smtp_host: '127.0.0.1', smtp_port: SINK_PORT, smtp_security: 'none', smtp_auth: false,
@@ -351,7 +353,7 @@ try {
   const { id: providerId } = await page.api('POST', '/api/ai/providers', { name: 'Local', kind: 'openai', base_url: `http://127.0.0.1:${LLM_PORT}/v1` });
   await page.api('PUT', '/api/ai/roles', { role: 'chat', provider_id: providerId, model: 'mock' });
   await page.api('PATCH', '/api/me', { ai_consent: true });
-  await page.api('PUT', '/api/admin/mail/ai', { llm_processing: true });
+  await page.api('PATCH', '/api/admin/mail/settings', { llm_processing: true });
   deliver(plain('Bob <bob@example.test>', 'Release', 'rel-0@e2e.test', '', 'Shall we release on Friday?'));
   deliver(plain('Carol Chen <carol@example.test>', 'Re: Release', 'rel-1@e2e.test', 'In-Reply-To: <rel-0@e2e.test>\nReferences: <rel-0@e2e.test>\n', 'Yes, Friday works.'));
   deliver(plain('Bob <bob@example.test>', 'Re: Release', 'rel-2@e2e.test', 'In-Reply-To: <rel-1@e2e.test>\nReferences: <rel-0@e2e.test> <rel-1@e2e.test>\n', 'I will write the release notes.'));

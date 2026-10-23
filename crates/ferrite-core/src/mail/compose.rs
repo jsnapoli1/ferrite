@@ -121,7 +121,7 @@ impl Core {
     /// A prefilled reply, reply-all or forward of a message (quoting it), or a draft to edit.
     pub async fn mail_compose_template(&self, user_id: &str, id: &str, mode: ReplyMode) -> Result<ComposeTemplate> {
         let view = self.mail_message(user_id, id).await?;
-        let a = self.mail_account(user_id, &view.summary.account_id).await?;
+        let a = self.mail_access(user_id, &view.summary.account_id, super::MailRight::Read).await?;
         let m = &view.summary;
         let from = m.from();
         let from_label = from.display();
@@ -388,10 +388,7 @@ impl Core {
         conn.expunge(&set).await?;
         drop(conn);
         sqlx::query("DELETE FROM mail_messages WHERE id = ?").bind(&m.id).execute(&self.db).await?;
-        self.hub.publish(
-            [a.user_id.as_str()],
-            &json!({"type": "mail.changed", "account_id": a.id, "folder_id": f.id, "what": "messages"}),
-        );
+        self.mail_publish(&a, &json!({"type": "mail.changed", "account_id": a.id, "folder_id": f.id, "what": "messages"}));
         Ok(())
     }
 
@@ -416,7 +413,7 @@ impl Core {
 
     /// Saves a draft in the Drafts folder (replacing `draft_id`); returns the new draft's id.
     pub async fn mail_save_draft(&self, user_id: &str, account_id: &str, c: &Compose) -> Result<String> {
-        let a = self.mail_account(user_id, account_id).await?;
+        let a = self.mail_access(user_id, account_id, super::MailRight::Modify).await?;
         let (_, raw, message_id) = self.build_outgoing(user_id, &a, c, true).await?;
         let id = self
             .file_copy(&a, "drafts", "Drafts", &raw, "(\\Draft \\Seen)", &message_id)
@@ -434,10 +431,12 @@ impl Core {
     /// account says the provider does), marks the replied-to message answered and removes the
     /// draft it came from. Returns the Message-ID.
     pub async fn mail_send(&self, user_id: &str, account_id: &str, c: &Compose) -> Result<String> {
-        let a = self.mail_account(user_id, account_id).await?;
+        let a = self.mail_access(user_id, account_id, super::MailRight::Send).await?;
         let (msg, raw, message_id) = self.build_outgoing(user_id, &a, c, false).await?;
-        let transport = mailer::transport(&self.smtp_settings(&a)?)?;
+        let recipients = msg.envelope().to().len() as u32;
+        let transport = self.mail_smtp_transport(&a).await?;
         mailer::send(&transport, msg).await?;
+        self.mail_record_send(user_id, recipients).await;
         // The mail is out: everything below is bookkeeping and must not report failure.
         if a.save_sent {
             if let Err(e) = self.file_copy(&a, "sent", "Sent", &raw, "(\\Seen)", &message_id).await {
@@ -484,8 +483,7 @@ impl Core {
                 .execute(&self.db)
                 .await;
         }
-        self.hub
-            .publish([user_id], &json!({"type": "mail.changed", "account_id": a.id, "what": "sent"}));
+        self.mail_publish(&a, &json!({"type": "mail.changed", "account_id": a.id, "what": "sent"}));
         Ok(message_id)
     }
 }

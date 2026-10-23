@@ -69,27 +69,97 @@ impl AsyncWrite for MailStream {
 
 pub type Session = async_imap::Session<MailStream>;
 
-fn tls_config() -> Arc<rustls::ClientConfig> {
-    static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
-    CONFIG
-        .get_or_init(|| {
+/// How a connection may be made, from the administrator's settings. The default (used by
+/// [`ImapConn::connect`], which takes explicit settings) verifies certificates and allows any
+/// address; mail accounts connect with the policy of the Mail admin settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConnectPolicy {
+    /// Verify the server's TLS certificate (off only for self-signed servers the admin trusts).
+    pub verify_tls: bool,
+    /// Allow servers on loopback, private and link-local addresses.
+    pub allow_local: bool,
+}
+
+impl Default for ConnectPolicy {
+    fn default() -> Self {
+        ConnectPolicy {
+            verify_tls: true,
+            allow_local: true,
+        }
+    }
+}
+
+fn tls_config(verify: bool) -> Arc<rustls::ClientConfig> {
+    static VERIFIED: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    static UNVERIFIED: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    let build = || {
+        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+        let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
+            .with_safe_default_protocol_versions()
+            .expect("the default provider supports the safe protocol versions");
+        let config = if verify {
             let roots = rustls::RootCertStore {
                 roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
             };
-            let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-            let config = rustls::ClientConfig::builder_with_provider(provider)
-                .with_safe_default_protocol_versions()
-                .expect("the default provider supports the safe protocol versions")
-                .with_root_certificates(roots)
-                .with_no_client_auth();
-            Arc::new(config)
-        })
-        .clone()
+            builder.with_root_certificates(roots).with_no_client_auth()
+        } else {
+            builder
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(AnyCertificate(provider)))
+                .with_no_client_auth()
+        };
+        Arc::new(config)
+    };
+    if verify {
+        VERIFIED.get_or_init(build).clone()
+    } else {
+        UNVERIFIED.get_or_init(build).clone()
+    }
 }
 
-pub(crate) async fn tls_wrap(host: &str, tcp: TcpStream) -> Result<MailStream> {
+/// Accepts any certificate (the administrator turned verification off), while still checking
+/// that the handshake is signed by the key of the certificate the server sent.
+#[derive(Debug)]
+struct AnyCertificate(Arc<rustls::crypto::CryptoProvider>);
+
+impl rustls::client::danger::ServerCertVerifier for AnyCertificate {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls_pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls_pki_types::CertificateDer<'_>],
+        _server_name: &rustls_pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls_pki_types::UnixTime,
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls_pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.0.signature_verification_algorithms)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls_pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.0.signature_verification_algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+pub(crate) async fn tls_wrap(host: &str, tcp: TcpStream, verify: bool) -> Result<MailStream> {
     let name = rustls_pki_types::ServerName::try_from(host.to_string()).map_err(|_| Error::bad(format!("invalid IMAP host name {host:?}")))?;
-    let tls = tokio::time::timeout(CONNECT_TIMEOUT, tokio_rustls::TlsConnector::from(tls_config()).connect(name, tcp))
+    let tls = tokio::time::timeout(CONNECT_TIMEOUT, tokio_rustls::TlsConnector::from(tls_config(verify)).connect(name, tcp))
         .await
         .map_err(|_| Error::Unavailable(format!("TLS handshake with {host} timed out")))?
         .map_err(|e| Error::Unavailable(format!("TLS with {host} failed: {e}")))?;
@@ -119,6 +189,8 @@ pub struct Caps {
     pub mv: bool,
     pub uidplus: bool,
     pub condstore: bool,
+    /// RFC 9208 (or RFC 2087) QUOTA.
+    pub quota: bool,
 }
 
 /// One message as fetched, owned.
@@ -274,18 +346,50 @@ async fn timed<T>(what: &str, f: impl std::future::Future<Output = std::result::
     }
 }
 
+/// SASL XOAUTH2 (Google's and Microsoft's OAuth 2.0 for IMAP and SMTP): the initial response,
+/// then an empty line when the server answers a failure with a JSON challenge.
+struct XOAuth2<'a> {
+    user: &'a str,
+    token: &'a str,
+    sent: bool,
+}
+
+impl async_imap::Authenticator for XOAuth2<'_> {
+    type Response = Vec<u8>;
+
+    fn process(&mut self, _challenge: &[u8]) -> Vec<u8> {
+        if self.sent {
+            return Vec::new();
+        }
+        self.sent = true;
+        super::oauth::xoauth2(self.user, self.token).into_bytes()
+    }
+}
+
 impl ImapConn {
-    /// Connects and logs in.
+    /// Connects and logs in, verifying certificates and allowing any address.
     pub async fn connect(s: &ServerSettings) -> Result<ImapConn> {
+        Self::connect_with(s, ConnectPolicy::default()).await
+    }
+
+    /// Connects under `policy` and logs in (with the password, or XOAUTH2 for OAuth accounts).
+    pub async fn connect_with(s: &ServerSettings, policy: ConnectPolicy) -> Result<ImapConn> {
+        let client = Self::open(s, policy).await?;
+        Self::login(client, s).await
+    }
+
+    /// Connects, secures and reads the greeting.
+    async fn open(s: &ServerSettings, policy: ConnectPolicy) -> Result<async_imap::Client<MailStream>> {
         let host = s.host.trim();
-        let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, s.port)))
+        let addrs = crate::net::resolve(host, s.port, policy.allow_local).await?;
+        let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addrs.as_slice()))
             .await
             .map_err(|_| Error::Unavailable(format!("connecting to {host}:{} timed out", s.port)))?
             .map_err(|e| Error::Unavailable(format!("cannot connect to {host}:{}: {e}", s.port)))?;
         let _ = tcp.set_nodelay(true);
         let greeting_timeout = |_| Error::Unavailable(format!("{host} sent no IMAP greeting"));
         let stream = match s.security {
-            SmtpSecurity::Tls => tls_wrap(host, tcp).await?,
+            SmtpSecurity::Tls => tls_wrap(host, tcp, policy.verify_tls).await?,
             SmtpSecurity::None => MailStream::Plain(tcp),
             SmtpSecurity::Starttls => {
                 let mut client = async_imap::Client::new(MailStream::Plain(tcp));
@@ -298,7 +402,7 @@ impl ImapConn {
                 let MailStream::Plain(tcp) = client.into_inner() else {
                     unreachable!("the stream is plain before STARTTLS")
                 };
-                tls_wrap(host, tcp).await?
+                tls_wrap(host, tcp, policy.verify_tls).await?
             }
         };
         let mut client = async_imap::Client::new(stream);
@@ -309,7 +413,31 @@ impl ImapConn {
                 .map_err(|e| Error::Unavailable(format!("IMAP greeting: {e}")))?
                 .ok_or_else(|| Error::Unavailable(format!("{host} closed the connection")))?;
         }
-        let session = match tokio::time::timeout(IO_TIMEOUT, client.login(&s.username, &s.password)).await {
+        Ok(client)
+    }
+
+    /// Checks that an IMAP server answers on `s` (connection, TLS or STARTTLS, greeting)
+    /// without logging in.
+    pub async fn probe(s: &ServerSettings, policy: ConnectPolicy) -> Result<()> {
+        let mut client = Self::open(s, policy).await?;
+        let _ = tokio::time::timeout(Duration::from_secs(5), client.run_command_and_check_ok("LOGOUT", None)).await;
+        Ok(())
+    }
+
+    async fn login(client: async_imap::Client<MailStream>, s: &ServerSettings) -> Result<ImapConn> {
+        let login = async {
+            if s.xoauth2 {
+                let auth = XOAuth2 {
+                    user: &s.username,
+                    token: &s.password,
+                    sent: false,
+                };
+                client.authenticate("XOAUTH2", auth).await
+            } else {
+                client.login(&s.username, &s.password).await
+            }
+        };
+        let session = match tokio::time::timeout(IO_TIMEOUT, login).await {
             Ok(Ok(session)) => session,
             Ok(Err((e, _))) => {
                 return Err(match e {
@@ -331,6 +459,10 @@ impl ImapConn {
             mv: caps.has_str("MOVE"),
             uidplus: caps.has_str("UIDPLUS"),
             condstore: caps.has_str("CONDSTORE"),
+            quota: caps.has_str("QUOTA")
+                || caps
+                    .iter()
+                    .any(|c| matches!(c, async_imap::types::Capability::Atom(a) if a.starts_with("QUOTA="))),
         };
         Ok(conn)
     }
@@ -588,6 +720,18 @@ impl ImapConn {
         Ok(())
     }
 
+    /// Storage use and limit in bytes of the quota root of `mailbox` (GETQUOTAROOT, RFC 9208);
+    /// `None` when the server has no QUOTA or no storage limit for it.
+    pub async fn quota(&mut self, mailbox: &str) -> Result<Option<(u64, u64)>> {
+        if !self.caps.quota {
+            return Ok(None);
+        }
+        let mb = mailbox.to_string();
+        let (_, quotas) = self.run("GETQUOTAROOT", |s| Box::pin(async move { s.get_quota_root(&mb).await })).await?;
+        self.drain();
+        Ok(storage_quota(&quotas))
+    }
+
     pub async fn logout(mut self) {
         let _ = tokio::time::timeout(Duration::from_secs(5), self.session.logout()).await;
     }
@@ -627,6 +771,14 @@ fn has_calendar_part(bs: &async_imap::imap_proto::BodyStructure<'_>) -> bool {
         B::Message { body, .. } => has_calendar_part(body),
         B::Multipart { bodies, .. } => bodies.iter().any(has_calendar_part),
     }
+}
+
+/// The STORAGE resource (KiB on the wire) of the first quota that limits it, in bytes.
+pub fn storage_quota(quotas: &[async_imap::types::Quota]) -> Option<(u64, u64)> {
+    quotas.iter().flat_map(|q| q.resources.iter()).find_map(|r| match r.name {
+        async_imap::types::QuotaResourceName::Storage if r.limit > 0 => Some((r.usage.saturating_mul(1024), r.limit.saturating_mul(1024))),
+        _ => None,
+    })
 }
 
 fn owned_fetch(f: &Fetch) -> Option<Fetched> {
@@ -689,7 +841,7 @@ impl Drop for PooledConn {
 impl Pool {
     /// Borrows a connection, reusing an idle one (checked with NOOP when it sat for a while)
     /// or connecting a new one. Waits while all [`POOL_SIZE`] are busy.
-    pub async fn get(self: &Arc<Self>, settings: &ServerSettings) -> Result<PooledConn> {
+    pub async fn get(self: &Arc<Self>, settings: &ServerSettings, policy: ConnectPolicy) -> Result<PooledConn> {
         let permit = tokio::time::timeout(IO_TIMEOUT, self.slots.clone().acquire_owned())
             .await
             .map_err(|_| Error::Unavailable("all connections to the mail server are busy".into()))?
@@ -705,7 +857,7 @@ impl Pool {
                 });
             }
         }
-        let conn = ImapConn::connect(settings).await?;
+        let conn = ImapConn::connect_with(settings, policy).await?;
         Ok(PooledConn {
             conn: Some(conn),
             pool: self.clone(),
@@ -743,6 +895,23 @@ mod tests {
         assert_eq!(uid_set(&[5, 1, 2, 3, 9, 11, 12, 3]), "1:3,5,9,11:12");
         assert_eq!(uid_set(&[7]), "7");
         assert_eq!(uid_set(&[]), "");
+    }
+
+    #[test]
+    fn storage_quota_in_bytes() {
+        use async_imap::types::{Quota, QuotaResource, QuotaResourceName};
+        let q = |name, usage, limit| QuotaResource { name, usage, limit };
+        let quotas = vec![Quota {
+            root_name: "User quota".into(),
+            resources: vec![q(QuotaResourceName::Message, 10, 1000), q(QuotaResourceName::Storage, 512, 10240)],
+        }];
+        assert_eq!(storage_quota(&quotas), Some((512 * 1024, 10240 * 1024)));
+        let unlimited = vec![Quota {
+            root_name: "".into(),
+            resources: vec![q(QuotaResourceName::Storage, 5, 0)],
+        }];
+        assert_eq!(storage_quota(&unlimited), None);
+        assert_eq!(storage_quota(&[]), None);
     }
 
     #[test]

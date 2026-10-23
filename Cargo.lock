@@ -1265,6 +1265,7 @@ dependencies = [
  "tokio-util",
  "toml",
  "tracing",
+ "url",
  "uuid",
  "webpki-roots",
  "yrs",
@@ -1333,6 +1334,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "socket2",
  "str0m",
  "tracing",
 ]
