@@ -18,20 +18,43 @@ import { h, icon, avatar, toast, errorToast } from '../ui.js';
 
 const KINDS = ['audio', 'video'];
 
-// Cameras and screens are captured at up to 720p30. What is actually sent adapts per path:
+// Cameras and screens are captured up to the server's quality ceiling (`[calls]` in
+// ferrite.toml, sent in call.self; 720p30 by default). What is actually sent adapts per path:
 // through the SFU as three simulcast layers (receivers get the one their tile needs), in a
 // mesh as one stream per peer, scaled down once there are several peers.
-const VIDEO_CONSTRAINTS = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } };
-const SCREEN_CONSTRAINTS = { video: { frameRate: { ideal: 30, max: 30 } }, audio: false };
-const MAX_FPS = 30;
+const DEFAULT_QUALITY = { height: 720, fps: 30 };
 
-// Simulcast layers sent to the SFU, lowest first (rids match the SFU's): every layer keeps
-// the full frame rate; the encoder drops the top layers first when bandwidth or CPU is short.
-const SIMULCAST = [
-  { rid: 'l', scaleResolutionDownBy: 4, maxBitrate: 150_000, maxFramerate: MAX_FPS },
-  { rid: 'm', scaleResolutionDownBy: 2, maxBitrate: 500_000, maxFramerate: MAX_FPS },
-  { rid: 'h', scaleResolutionDownBy: 1, maxBitrate: 1_500_000, maxFramerate: MAX_FPS },
-];
+/** Camera constraints for a quality ceiling (16:9). */
+function videoConstraints(q) {
+  return { width: { ideal: Math.round((q.height * 16) / 9) }, height: { ideal: q.height }, frameRate: { ideal: q.fps, max: q.fps } };
+}
+
+function screenConstraints(q) {
+  return { video: { height: { max: q.height }, frameRate: { ideal: q.fps, max: q.fps } }, audio: false };
+}
+
+/**
+ * VP8 bitrate for a size and frame rate: about 0.055 bits per pixel per frame at 720p
+ * (1.5 Mb/s for 720p30), a little more per pixel at small sizes, where VP8 needs it.
+ */
+function bitrateFor(height, fps) {
+  const bpp = 0.055 * Math.pow(720 / height, 0.25);
+  return Math.round((((height * height * 16) / 9) * fps * bpp) / 1000) * 1000;
+}
+
+// Simulcast layer ids, lowest first; they match the SFU's.
+const LAYERS = ['l', 'm', 'h'];
+
+/**
+ * Simulcast layers sent to the SFU, lowest first: quarter, half and full size, each at the
+ * full frame rate; the encoder drops the top layers first when bandwidth or CPU is short.
+ */
+function simulcast(q) {
+  return LAYERS.map((rid, i) => {
+    const scale = 2 ** (LAYERS.length - 1 - i);
+    return { rid, scaleResolutionDownBy: scale, maxBitrate: bitrateFor(q.height / scale, q.fps), maxFramerate: q.fps };
+  });
+}
 
 /**
  * Encoder hints for the track a video sender carries: cameras keep their frame rate under
@@ -39,7 +62,7 @@ const SIMULCAST = [
  * stays readable. `extra(encoding, index)` adjusts each encoding. Best effort: browsers
  * without these parameters keep their defaults.
  */
-async function tuneVideoSender(sender, extra) {
+async function tuneVideoSender(sender, q, extra) {
   if (!sender || !sender.getParameters) return;
   try {
     const params = sender.getParameters();
@@ -48,7 +71,7 @@ async function tuneVideoSender(sender, extra) {
     const screen = !!track && (track.contentHint === 'detail' || track.contentHint === 'text');
     params.degradationPreference = screen ? 'balanced' : 'maintain-framerate';
     params.encodings.forEach((e, i) => {
-      e.maxFramerate = MAX_FPS;
+      e.maxFramerate = q.fps;
       if (extra) extra(e, i);
     });
     await sender.setParameters(params);
@@ -59,10 +82,11 @@ async function tuneVideoSender(sender, extra) {
 
 export class MeshTransport {
   /** @param {{roomId: string, session: string, iceServers: RTCIceServer[]}} opts */
-  constructor({ roomId, session, iceServers }) {
+  constructor({ roomId, session, iceServers, quality }) {
     this.roomId = roomId;
     this.session = session;
     this.iceServers = iceServers || [];
+    this.quality = quality || DEFAULT_QUALITY;
     /** session -> peer record ({pc, stream, polite, makingOffer, ignoreOffer, chain}) */
     this.peers = new Map();
     this.tracks = { audio: null, video: null };
@@ -108,9 +132,10 @@ export class MeshTransport {
   tune(p) {
     const t = this.transceiver(p.pc, 'video');
     const several = this.peers.size > 1;
-    return tuneVideoSender(t && t.sender, (e) => {
+    const q = this.quality;
+    return tuneVideoSender(t && t.sender, q, (e) => {
       e.scaleResolutionDownBy = several ? 2 : 1;
-      e.maxBitrate = several ? 600_000 : 1_500_000;
+      e.maxBitrate = bitrateFor(several ? q.height / 2 : q.height, q.fps);
     });
   }
 
@@ -231,11 +256,12 @@ export class MeshTransport {
  * The server labels each forwarded track's stream with the sender's call session.
  */
 export class SfuTransport {
-  /** @param {{roomId: string, session: string, iceServers: RTCIceServer[]}} opts */
-  constructor({ roomId, session, iceServers }) {
+  /** @param {{roomId: string, session: string, iceServers: RTCIceServer[], quality: {height: number, fps: number}}} opts */
+  constructor({ roomId, session, iceServers, quality }) {
     this.roomId = roomId;
     this.session = session;
     this.iceServers = iceServers || [];
+    this.quality = quality || DEFAULT_QUALITY;
     this.pc = null;
     this.channel = null;
     /** remote session -> {session, pc, stream}; every entry shares the one connection. */
@@ -260,7 +286,7 @@ export class SfuTransport {
     for (const kind of KINDS) {
       const track = (kind === 'audio' ? localStream.getAudioTracks() : localStream.getVideoTracks())[0];
       const init = { direction: 'sendonly' };
-      if (kind === 'video') init.sendEncodings = SIMULCAST.map((e) => ({ ...e }));
+      if (kind === 'video') init.sendEncodings = simulcast(this.quality);
       this.senders[kind] = pc.addTransceiver(track || kind, init).sender;
     }
     // Tell the SFU which layer to send for each person once the channel opens.
@@ -290,8 +316,8 @@ export class SfuTransport {
 
   /** Applies encoder hints, sending only the layers up to the one someone wants. */
   tuneVideo() {
-    const top = this.publishTop ?? SIMULCAST.length - 1;
-    return tuneVideoSender(this.senders.video, (e, i) => {
+    const top = this.publishTop ?? LAYERS.length - 1;
+    return tuneVideoSender(this.senders.video, this.quality, (e, i) => {
       e.active = i <= top;
     });
   }
@@ -338,7 +364,7 @@ export class SfuTransport {
     }
     // The highest simulcast layer anyone watches: pause the layers above it.
     if (desc && desc.type === 'publish') {
-      this.publishTop = Math.max(0, SIMULCAST.findIndex((e) => e.rid === desc.max));
+      this.publishTop = Math.max(0, LAYERS.indexOf(desc.max));
       this.tuneVideo();
       return;
     }
@@ -398,13 +424,13 @@ export function createTransport(opts) {
  * Gets the best local media available: requested audio/video, else audio only, else nothing
  * (receive-only). Returns {stream, note}.
  */
-async function acquireMedia(audio, video) {
+async function acquireMedia(audio, video, quality) {
   const md = navigator.mediaDevices;
   if (!md || !md.getUserMedia || (!audio && !video)) return { stream: new MediaStream(), note: md ? null : 'Media devices unavailable: joining receive-only.' };
   const attempts = [];
-  attempts.push({ audio, video: video ? VIDEO_CONSTRAINTS : false });
+  attempts.push({ audio, video: video ? videoConstraints(quality) : false });
   if (audio && video) attempts.push({ audio: true, video: false });
-  if (audio && video) attempts.push({ audio: false, video: VIDEO_CONSTRAINTS });
+  if (audio && video) attempts.push({ audio: false, video: videoConstraints(quality) });
   for (const [i, c] of attempts.entries()) {
     try {
       const stream = await md.getUserMedia(c);
@@ -430,6 +456,8 @@ export class Call {
     this.session = null;
     this.transport = null;
     this.stream = null;
+    /** Quality ceiling; the server's arrives with call.self. */
+    this.quality = DEFAULT_QUALITY;
     this.camTrack = null;
     this.screenTrack = null;
     this.state = { audio: false, video: false, screen: false, hand: false };
@@ -454,7 +482,7 @@ export class Call {
   // ---- lifecycle --------------------------------------------------------------------
 
   async join({ audio = true, video = false } = {}) {
-    const { stream, note } = await acquireMedia(audio, video);
+    const { stream, note } = await acquireMedia(audio, video, this.quality);
     if (this.ended) { stream.getTracks().forEach((t) => t.stop()); return; }
     this.stream = stream;
     this.camTrack = stream.getVideoTracks()[0] || null;
@@ -496,10 +524,15 @@ export class Call {
     this.roomId = res.room_id;
     this.session = res.session;
     this.recording = !!res.recording;
+    if (res.quality && (res.quality.height !== this.quality.height || res.quality.fps !== this.quality.fps)) {
+      this.quality = { height: res.quality.height, fps: res.quality.fps };
+      // The camera was opened before the server's ceiling was known.
+      if (this.camTrack) await this.camTrack.applyConstraints(videoConstraints(this.quality)).catch((e) => console.warn('camera constraints', e));
+    }
     this.canRecord = !!res.can_record;
     this.paintControls();
     const iceServers = (res.ice_servers && res.ice_servers.length ? res.ice_servers : this.config.ice_servers) || [];
-    this.transport = createTransport({ roomId: this.roomId, session: this.session, iceServers, sfu: !!res.sfu });
+    this.transport = createTransport({ roomId: this.roomId, session: this.session, iceServers, sfu: !!res.sfu, quality: this.quality });
     this.transport.onRemoteStream = (s, st) => this.attachRemote(s, st);
     this.transport.onPeerClosed = (s) => this.removeMember(s);
     this.transport.onConnectionState = (s, st) => {
@@ -633,7 +666,7 @@ export class Call {
       this.state.video = false;
     } else {
       try {
-        const s = await navigator.mediaDevices.getUserMedia({ video: VIDEO_CONSTRAINTS });
+        const s = await navigator.mediaDevices.getUserMedia({ video: videoConstraints(this.quality) });
         this.camTrack = s.getVideoTracks()[0];
         this.camTrack.contentHint = 'motion';
         this.state.video = true;
@@ -650,7 +683,7 @@ export class Call {
   async toggleScreen() {
     if (this.state.screen) return this.stopScreen();
     try {
-      const s = await navigator.mediaDevices.getDisplayMedia(SCREEN_CONSTRAINTS);
+      const s = await navigator.mediaDevices.getDisplayMedia(screenConstraints(this.quality));
       this.screenTrack = s.getVideoTracks()[0];
       this.screenTrack.contentHint = 'detail';
     } catch (e) {

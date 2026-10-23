@@ -243,6 +243,10 @@ enabled = true
 udp_bind = "0.0.0.0:10000"                  # open this UDP port
 advertise = ["203.0.113.7"]                 # public IP(s) browsers should reach; default: this machine's IP
 
+[calls]                                     # see "Call quality" below for what each step needs
+max_resolution = "720p"                     # 360p, 480p, 720p, 1080p, 1440p or 2160p (4k)
+max_fps = 30                                # 15 to 60
+
 [[ice_servers]]                             # only needed across NATs
 urls = ["turn:turn.example.org:3478"]
 username = "ferrite"
