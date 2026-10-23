@@ -809,14 +809,18 @@ export class Call {
     this.layerTimer = setTimeout(() => this.updateLayers(), 250);
   }
 
-  /** Picks a simulcast layer per remote tile from its size on screen (in device pixels). */
+  /**
+   * Picks a simulcast layer per remote tile from its size on screen (in device pixels),
+   * relative to the quality ceiling: at 720p the top layer from 480 px, the middle from 200.
+   */
   updateLayers() {
     if (!this.transport || !this.transport.setLayers) return;
+    const top = this.quality.height;
     const want = {};
     for (const [session, t] of this.tiles) {
       if (session === 'local') continue;
       const px = t.el.clientHeight * (window.devicePixelRatio || 1);
-      want[session] = document.hidden ? 'l' : px >= 480 ? 'h' : px >= 200 ? 'm' : 'l';
+      want[session] = document.hidden ? 'l' : px >= (top * 2) / 3 ? 'h' : px >= top * 0.28 ? 'm' : 'l';
     }
     this.transport.setLayers(want);
   }
