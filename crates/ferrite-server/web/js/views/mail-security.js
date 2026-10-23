@@ -339,7 +339,7 @@ function certificatesPane(accounts) {
         h('div.grow',
           h('div.ms-cert-name', h('strong', c.name || c.emails[0] || c.subject), pill(kindLabel[c.kind] || c.kind, c.kind === 'own' ? 'info' : ''), status),
           h('div.small.muted.ellipsis', { title: c.subject }, c.emails.join(', ') || c.subject),
-          h('div.small.muted.ellipsis', { title: c.issuer }, `Issued by ${c.issuer} · valid until ${new Date(c.not_after).toLocaleDateString()}${c.source === 'collected' ? ' · from signed mail' : ''}`)),
+          h('div.small.muted.ms-cert-meta', { title: c.issuer }, `Issued by ${c.issuer} · valid until ${new Date(c.not_after).toLocaleDateString()}${c.source === 'collected' ? ' · from signed mail' : ''}`)),
         h('a.btn.ghost.icon.sm', { href: `/api/mail/smime/certificates/${enc(c.id)}/pem`, download: '', title: 'Download the certificate', 'aria-label': `Download the certificate of ${c.emails[0] || c.subject}` }, icon('download', 'sm')),
         h('button.btn.ghost.icon.sm.danger', {
           type: 'button', title: 'Delete', 'aria-label': `Delete the certificate of ${c.emails[0] || c.subject}`,

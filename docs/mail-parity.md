@@ -57,16 +57,16 @@ Status: ✅ in Ferrite · 🔧 being built (workstream in brackets).
 | Feature | Status |
 |---|---|
 | Plain text and sanitized HTML, sandboxed, remote content blocked | ✅ |
-| Blocked-content warning; trusted senders (address or domain) list and management | 🔧 [security] |
-| Remote images through a server-side proxy (sender never sees the reader's IP) | 🔧 [security] |
-| Sender avatars: contacts' photos, then site favicon (privacy-preserving, cached) | 🔧 [security] |
-| Phishing warnings: sender name/address mismatch with contacts, custom-address mismatch, future date, misleading links, Reply-To mismatch, server phishing flag | 🔧 [security] |
-| Internal addresses: warn about senders/recipients outside an allowed list of addresses or domains | 🔧 [security] |
-| DKIM verification result | 🔧 [security] |
-| View message source; export as .eml; download all attachments as .zip | ✅ .eml · 🔧 rest [security] |
+| Blocked-content warning; trusted senders (address or domain) list and management | ✅ |
+| Remote images through a server-side proxy (sender never sees the reader's IP) | ✅ |
+| Sender avatars: contacts' photos, then site favicon (privacy-preserving, cached) | ✅ |
+| Phishing warnings: sender name/address mismatch with contacts, custom-address mismatch, future date, misleading links, Reply-To mismatch, server phishing flag | ✅ |
+| Internal addresses: warn about senders/recipients outside an allowed list of addresses or domains | ✅ |
+| DKIM verification result | ✅ |
+| View message source; export as .eml; download all attachments as .zip | ✅ |
 | Attachments: download, save to Files | ✅ |
-| Encrypted mail: S/MIME (verify signatures, decrypt) | 🔧 [security] |
-| Encrypted mail: PGP through the Mailvelope browser extension | 🔧 [security] |
+| Encrypted mail: S/MIME (verify signatures, decrypt) | ✅ |
+| Encrypted mail: PGP through the Mailvelope browser extension | ✅ |
 | Meeting invitations (iMIP): show the event, accept / tentative / decline, import .ics; replies from external guests update Ferrite events; optional automatic tentative entries and updates | 🔧 [integrations] |
 | Travel itineraries (schema.org reservations in mail) shown as cards, add to calendar | 🔧 [integrations] |
 | Create a calendar event or a task from a message (AI-suggested when AI is configured) | 🔧 [integrations] |
@@ -95,9 +95,9 @@ Status: ✅ in Ferrite · 🔧 being built (workstream in brackets).
 | Large attachments as Files share links (admin attachment size limit) | 🔧 |
 | Forward as attachment | 🔧 |
 | Sending to a Ferrite group address expands to its members | 🔧 |
-| Internal-address warnings when sending | 🔧 [security] |
-| S/MIME: certificate management (PKCS#12 / PEM import), sign and/or encrypt | 🔧 [security] |
-| PGP via Mailvelope (compose) | 🔧 [security] |
+| Internal-address warnings when sending | ✅ |
+| S/MIME: certificate management (PKCS#12 / PEM import), sign and/or encrypt | ✅ |
+| PGP via Mailvelope (compose) | ✅ |
 
 ## Filters and autoresponder — [integrations]
 

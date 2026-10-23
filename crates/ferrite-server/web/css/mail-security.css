@@ -31,6 +31,7 @@
 .ms-links { list-style: none; padding-left: 0 !important; font-size: 12.5px; }
 .ms-links code { font-family: var(--mono); font-size: 12px; color: var(--danger); overflow-wrap: anywhere; }
 .ms-remote { flex-wrap: wrap; row-gap: 6px; }
+.ms-remote > .grow { flex: 1 1 220px; }
 .ms-remote-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .ms-mailvelope { width: 100%; height: 460px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); overflow: hidden; }
 .ms-mailvelope iframe { width: 100%; height: 100%; border: 0; }
@@ -41,6 +42,9 @@
 .ms-zip { margin-right: 2px; }
 
 /* ---------- settings ---------- */
+/* The backdrop is a grid that sizes to content: cap the dialog to the viewport so the tab bar scrolls instead of widening it. */
+.modal:has(.ms-settings) { max-width: calc(100vw - 32px); }
+.ms-settings { min-width: 0; }
 .ms-settings .tabs { margin-bottom: 12px; }
 .ms-settings-body { min-height: 300px; }
 .ms-pane > p:first-child { margin-top: 0; }
@@ -55,6 +59,7 @@
 .ms-cert { align-items: flex-start; }
 .ms-cert > .icon { margin-top: 3px; }
 .ms-cert .grow { min-width: 0; }
+.ms-cert-meta { overflow-wrap: anywhere; }
 .ms-cert-name { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; overflow-wrap: anywhere; }
 .ms-import { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
 .ms-import-row { display: flex; flex-direction: column; gap: 3px; }
@@ -67,7 +72,7 @@
 .ms-identity:last-child { border-bottom: 0; }
 .ms-identity-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .ms-identity-head strong { flex: 1; min-width: 160px; }
-.ms-identity-head select { flex: 1; min-width: 200px; }
+.ms-identity-head select { flex: 1 1 200px; min-width: 0; max-width: 100%; }
 .ms-identity-opts { display: flex; gap: 18px; flex-wrap: wrap; }
 .ms-identity-opts .check { margin: 6px 0 0; font-size: 13px; }
 .ms-mailvelope-status .icon { color: var(--ok); vertical-align: -2px; }

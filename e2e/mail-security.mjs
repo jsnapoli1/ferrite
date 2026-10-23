@@ -492,6 +492,11 @@ try {
   await dark.screenshot({ path: `${shots}/security-dark.png` });
   await open(dark, 'Autumn sale');
   await card(dark).locator('.ms-chip', { hasText: 'Images allowed' }).waitFor({ timeout: 15000 });
+  await dark.waitForFunction(() => {
+    const f = document.querySelector('.ml-card.expanded iframe');
+    const img = f?.contentDocument?.querySelector('img');
+    return img?.complete && img.naturalWidth > 0 && f.offsetHeight >= f.contentDocument.documentElement.scrollHeight;
+  }, null, { timeout: 15000 });
   await dark.screenshot({ path: `${shots}/security-dark-images.png` });
   await dark.getByRole('button', { name: 'Privacy and security' }).click();
   await dark.locator('.modal').getByRole('tab', { name: 'Certificates' }).click();
@@ -516,6 +521,7 @@ try {
   await phone.locator('.modal').getByRole('tab', { name: 'Certificates' }).click();
   await phone.locator('.ms-cert').first().waitFor();
   assert(await phone.evaluate(() => document.documentElement.scrollWidth <= 390), 'no horizontal scroll in the dialog');
+  assert(await phone.evaluate(() => { const r = document.querySelector('.modal').getBoundingClientRect(); return r.left >= 0 && r.right <= 390; }), 'the dialog fits the phone screen');
   await phone.screenshot({ path: `${shots}/security-phone-settings.png` });
   await phone.context().close();
 
