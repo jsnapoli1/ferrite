@@ -121,6 +121,7 @@ pub fn reconcile(cached: &[(u32, Flags)], server: &[(u32, Flags)]) -> (Vec<u32>,
 #[derive(Debug, Clone)]
 pub struct NewMail {
     pub id: String,
+    pub message_id: Option<String>,
     pub from: String,
     pub subject: String,
     pub seen: bool,
@@ -241,6 +242,7 @@ impl Core {
                 Err(e) => tracing::debug!(folder = %f.name, error = %e, "STATUS failed"),
             }
         }
+        self.apply_folder_meta(conn, a).await?;
         self.hub
             .publish([a.user_id.as_str()], &json!({"type": "mail.changed", "account_id": a.id, "what": "folders"}));
         Ok(())
@@ -359,13 +361,10 @@ impl Core {
                 })
                 .collect();
             let min = cached_flags.iter().map(|c| c.0).min().unwrap_or(1);
-            let server: Vec<(u32, Flags)> = conn
-                .uid_fetch(&format!("{min}:{}", cached.max_uid.max(min)), "(UID FLAGS)")
-                .await?
-                .into_iter()
-                .map(|f| (f.uid, f.flags))
-                .collect();
+            let fetched_flags = conn.uid_fetch(&format!("{min}:{}", cached.max_uid.max(min)), "(UID FLAGS)").await?;
+            let server: Vec<(u32, Flags)> = fetched_flags.iter().map(|f| (f.uid, f.flags)).collect();
             let (removed, changed) = reconcile(&cached_flags, &server);
+            let keyword_changes = super::tags::changed_keywords(&self.db, &folder.id, &fetched_flags).await?;
             let mut tx = self.mail_tx().await?;
             for uid in &removed {
                 sqlx::query("DELETE FROM mail_messages WHERE folder_id = ? AND uid = ?")
@@ -385,8 +384,16 @@ impl Core {
                     .execute(&mut *tx)
                     .await?;
             }
+            for (uid, column) in &keyword_changes {
+                sqlx::query("UPDATE mail_messages SET keywords = ? WHERE folder_id = ? AND uid = ?")
+                    .bind(column)
+                    .bind(&folder.id)
+                    .bind(*uid as i64)
+                    .execute(&mut *tx)
+                    .await?;
+            }
             tx.commit().await?;
-            report.changed |= !removed.is_empty() || !changed.is_empty();
+            report.changed |= !removed.is_empty() || !changed.is_empty() || !keyword_changes.is_empty();
         }
         // A fresh window: everything from its oldest UID up is cached, and the folder is
         // complete when the window holds every message.
@@ -418,6 +425,9 @@ impl Core {
         if !fetched.is_empty() {
             report.new = self.store_envelopes(a, &folder, fetched).await?;
             report.changed = true;
+            if matches!(p.fetch, FetchNew::From(_)) {
+                self.classify_new_mail_soon(a, &folder, &report.new);
+            }
         }
         let unread = conn.count_unseen().await?;
         report.changed |= unread as i64 != folder.unread || sel.exists as i64 != folder.total;
@@ -504,8 +514,8 @@ impl Core {
             let from = env.from.clone().unwrap_or_default();
             let inserted = sqlx::query(
                 "INSERT INTO mail_messages (id, account_id, folder_id, uid, message_id, in_reply_to, refs, thread_id, subject, from_name, from_addr,
-                 to_addrs, cc_addrs, date, size, seen, flagged, answered, draft, has_attachments, preview)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(folder_id, uid) DO NOTHING",
+                 to_addrs, cc_addrs, date, size, seen, flagged, answered, draft, has_attachments, preview, keywords)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(folder_id, uid) DO NOTHING",
             )
             .bind(&id)
             .bind(&a.id)
@@ -528,6 +538,7 @@ impl Core {
             .bind(f.flags.draft)
             .bind(env.has_attachments)
             .bind(&env.preview)
+            .bind(super::tags::keyword_column(&f.keywords))
             .execute(&mut *tx)
             .await?;
             if inserted.rows_affected() == 0 {
@@ -547,6 +558,7 @@ impl Core {
                 .execute(&mut *tx)
                 .await?;
             out.push(NewMail {
+                message_id: env.message_id.clone(),
                 id,
                 from: from.label().to_string(),
                 subject: env.subject.clone(),
@@ -671,12 +683,26 @@ impl Core {
             [one] => {
                 let title = format!("New mail from {}", one.from);
                 let subject = if one.subject.is_empty() { "(no subject)" } else { one.subject.as_str() };
-                self.notify(&a.user_id, "mail", &title, subject, &format!("/mail?m={}", one.id)).await
+                self.notify(
+                    &a.user_id,
+                    "mail",
+                    &title,
+                    subject,
+                    &super::views::message_link(&one.id, one.message_id.as_deref()),
+                )
+                .await
             }
             many => {
                 let title = format!("{} new messages in {}", many.len(), a.email);
                 let body = many.iter().take(3).map(|m| m.from.as_str()).collect::<Vec<_>>().join(", ");
-                self.notify(&a.user_id, "mail", &title, &body, &format!("/mail?m={}", many[0].id)).await
+                self.notify(
+                    &a.user_id,
+                    "mail",
+                    &title,
+                    &body,
+                    &super::views::message_link(&many[0].id, many[0].message_id.as_deref()),
+                )
+                .await
             }
         };
         if let Err(e) = result {

@@ -87,7 +87,7 @@ fn tls_config() -> Arc<rustls::ClientConfig> {
         .clone()
 }
 
-async fn tls_wrap(host: &str, tcp: TcpStream) -> Result<MailStream> {
+pub(crate) async fn tls_wrap(host: &str, tcp: TcpStream) -> Result<MailStream> {
     let name = rustls_pki_types::ServerName::try_from(host.to_string()).map_err(|_| Error::bad(format!("invalid IMAP host name {host:?}")))?;
     let tls = tokio::time::timeout(CONNECT_TIMEOUT, tokio_rustls::TlsConnector::from(tls_config()).connect(name, tcp))
         .await
@@ -119,6 +119,8 @@ pub struct Caps {
     pub mv: bool,
     pub uidplus: bool,
     pub condstore: bool,
+    /// SORT (RFC 5256).
+    pub sort: bool,
 }
 
 /// One message as fetched, owned.
@@ -131,6 +133,8 @@ pub struct Fetched {
     pub header: Vec<u8>,
     pub text_prefix: Vec<u8>,
     pub body: Option<Vec<u8>>,
+    /// Keywords (`$label1`, `$Junk`, …), lowercased: IMAP keywords are case-insensitive.
+    pub keywords: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -331,6 +335,7 @@ impl ImapConn {
             mv: caps.has_str("MOVE"),
             uidplus: caps.has_str("UIDPLUS"),
             condstore: caps.has_str("CONDSTORE"),
+            sort: caps.has_str("SORT"),
         };
         Ok(conn)
     }
@@ -481,6 +486,43 @@ impl ImapConn {
         Ok(v)
     }
 
+    /// `UID SORT (keys) UTF-8 criteria` in the selected mailbox (RFC 5256), or None when the
+    /// server can't sort.
+    pub async fn uid_sort(&mut self, keys: &str, criteria: &str) -> Result<Option<Vec<u32>>> {
+        use async_imap::imap_proto::{MailboxDatum, Response, Status as St};
+        if !self.caps.sort {
+            return Ok(None);
+        }
+        let cmd = format!("UID SORT ({keys}) UTF-8 {criteria}");
+        let sorted = self
+            .run("SORT", |s| {
+                Box::pin(async move {
+                    let id = s.run_command(&cmd).await?;
+                    let mut out = Vec::new();
+                    loop {
+                        let Some(resp) = s.read_response().await? else {
+                            return Err(async_imap::error::Error::ConnectionLost);
+                        };
+                        match resp.parsed() {
+                            Response::MailboxData(MailboxDatum::Sort(v)) => out.extend(v.iter().copied()),
+                            Response::Done { tag, status, information, .. } if *tag == id => {
+                                let info = information.as_deref().unwrap_or("").to_string();
+                                return match status {
+                                    St::Ok => Ok(out),
+                                    St::No => Err(async_imap::error::Error::No(info)),
+                                    _ => Err(async_imap::error::Error::Bad(info)),
+                                };
+                            }
+                            _ => {}
+                        }
+                    }
+                })
+            })
+            .await?;
+        self.drain();
+        Ok(Some(sorted))
+    }
+
     /// Number of unseen messages in the selected mailbox.
     pub async fn count_unseen(&mut self) -> Result<u32> {
         let found = self.run("SEARCH", |s| Box::pin(s.search("UNSEEN"))).await?;
@@ -560,12 +602,62 @@ impl ImapConn {
     /// Deletes a mailbox (and its messages).
     pub async fn delete(&mut self, folder: &str) -> Result<()> {
         let f = folder.to_string();
-        if self.selected.as_ref().is_some_and(|(n, _)| n == folder) {
-            self.selected = None;
-        }
+        self.step_out_of(folder).await?;
         self.run("DELETE", |s| Box::pin(s.delete(f))).await?;
         self.drain();
         Ok(())
+    }
+
+    /// Renames (or moves) a mailbox; the server moves its children along.
+    pub async fn rename(&mut self, from: &str, to: &str) -> Result<()> {
+        let (f, t) = (from.to_string(), to.to_string());
+        self.step_out_of(from).await?;
+        self.run("RENAME", |s| Box::pin(s.rename(f, t))).await?;
+        self.drain();
+        Ok(())
+    }
+
+    /// Selects the inbox instead when `folder` (or one below it) is selected: servers end a
+    /// session whose selected mailbox is deleted or renamed (Dovecot does).
+    async fn step_out_of(&mut self, folder: &str) -> Result<()> {
+        let inside = self
+            .selected
+            .as_ref()
+            .is_some_and(|(n, _)| n == folder || (n.starts_with(folder) && n[folder.len()..].starts_with(|c: char| !c.is_alphanumeric())));
+        if inside {
+            self.select("INBOX").await?;
+        }
+        Ok(())
+    }
+
+    pub async fn subscribe(&mut self, folder: &str, on: bool) -> Result<()> {
+        let f = folder.to_string();
+        if on {
+            self.run("SUBSCRIBE", |s| Box::pin(s.subscribe(f))).await?;
+        } else {
+            self.run("UNSUBSCRIBE", |s| Box::pin(s.unsubscribe(f))).await?;
+        }
+        self.drain();
+        Ok(())
+    }
+
+    /// Names of the subscribed mailboxes (LSUB).
+    pub async fn lsub(&mut self) -> Result<Vec<String>> {
+        let names = self
+            .run("LSUB", |s| {
+                Box::pin(async move {
+                    let stream = s.lsub(Some(""), Some("*")).await?;
+                    stream.try_collect::<Vec<_>>().await
+                })
+            })
+            .await?;
+        self.drain();
+        Ok(names.iter().map(|n| n.name().to_string()).collect())
+    }
+
+    /// Forgets which mailbox is selected (after it was renamed or deleted elsewhere).
+    pub fn deselect(&mut self) {
+        self.selected = None;
     }
 
     pub async fn logout(mut self) {
@@ -604,7 +696,17 @@ fn owned_fetch(f: &Fetch) -> Option<Fetched> {
         header: f.header().map(<[u8]>::to_vec).unwrap_or_default(),
         text_prefix: f.text().map(<[u8]>::to_vec).unwrap_or_default(),
         body: f.body().map(<[u8]>::to_vec),
+        keywords: keywords_of(f),
     })
+}
+
+fn keywords_of(f: &Fetch) -> Vec<String> {
+    f.flags()
+        .filter_map(|flag| match flag {
+            Flag::Custom(k) if !k.starts_with('\\') => Some(k.to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Pooled connections of one account.

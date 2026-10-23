@@ -24,8 +24,7 @@ pub const ACCOUNT_CACHE_CAP: i64 = 64 * 1024 * 1024;
 /// Text indexed for search per message.
 const INDEX_CAP: usize = 32 * 1024;
 
-pub(crate) const FOLDER_COLS: &str =
-    "id, account_id, name, display_name, delimiter, role, selectable, uidvalidity, uidnext, modseq, total, unread, window_uid, complete, synced_at";
+pub(crate) const FOLDER_COLS: &str = "id, account_id, name, display_name, delimiter, role, selectable, uidvalidity, uidnext, modseq, total, unread, window_uid, complete, synced_at, subscribed, shared";
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct Folder {
@@ -49,10 +48,14 @@ pub struct Folder {
     #[serde(skip)]
     pub complete: bool,
     pub synced_at: Option<DateTime<Utc>>,
+    /// In the server's subscription list.
+    pub subscribed: bool,
+    /// In another user's or a shared namespace.
+    pub shared: bool,
 }
 
-const MSG_COLS: &str = "m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.in_reply_to, m.refs, m.thread_id, m.subject, m.from_name, m.from_addr, \
-     m.to_addrs, m.cc_addrs, m.date, m.size, m.seen, m.flagged, m.answered, m.draft, m.has_attachments, m.preview, \
+pub(crate) const MSG_COLS: &str = "m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.in_reply_to, m.refs, m.thread_id, m.subject, m.from_name, m.from_addr, \
+     m.to_addrs, m.cc_addrs, m.date, m.size, m.seen, m.flagged, m.answered, m.draft, m.has_attachments, m.preview, m.keywords, \
      (SELECT COUNT(*) FROM mail_messages t WHERE t.account_id = m.account_id AND t.thread_id = m.thread_id) AS thread_size";
 
 /// A cached message as lists show it.
@@ -86,6 +89,9 @@ pub struct MessageSummary {
     pub draft: bool,
     pub has_attachments: bool,
     pub preview: String,
+    /// IMAP keywords (tags), stored space-padded; serialized as a list.
+    #[serde(serialize_with = "super::tags::serialize_keywords")]
+    pub keywords: String,
     /// Messages in this conversation (across folders).
     pub thread_size: i64,
 }
@@ -188,7 +194,8 @@ impl Core {
             Some("archive") => 3,
             Some("junk") => 4,
             Some("trash") => 5,
-            _ => 6,
+            Some("snoozed") => 6,
+            _ => 7,
         };
         folders.sort_by(|x, y| rank(x).cmp(&rank(y)).then_with(|| x.name.to_lowercase().cmp(&y.name.to_lowercase())));
         Ok(folders)
@@ -569,7 +576,7 @@ impl Core {
     }
 
     /// Cached messages by id, grouped per (account, folder), all owned by `user_id`.
-    async fn group_messages(&self, user_id: &str, ids: &[String]) -> Result<Vec<(Account, super::store::Folder, Vec<MessageSummary>)>> {
+    pub(crate) async fn group_messages(&self, user_id: &str, ids: &[String]) -> Result<Vec<(Account, super::store::Folder, Vec<MessageSummary>)>> {
         let mut groups: Vec<(Account, Folder, Vec<MessageSummary>)> = Vec::new();
         for id in ids {
             let (a, m) = self.message_row(user_id, id).await?;
@@ -584,7 +591,7 @@ impl Core {
         Ok(groups)
     }
 
-    fn mail_changed(&self, a: &Account, folder_ids: &[&str]) {
+    pub(crate) fn mail_changed(&self, a: &Account, folder_ids: &[&str]) {
         for f in folder_ids {
             self.hub.publish(
                 [a.user_id.as_str()],
@@ -683,7 +690,7 @@ impl Core {
         Ok(())
     }
 
-    async fn move_group(&self, a: &Account, from: &Folder, msgs: &[MessageSummary], dest: &Folder) -> Result<()> {
+    pub(crate) async fn move_group(&self, a: &Account, from: &Folder, msgs: &[MessageSummary], dest: &Folder) -> Result<()> {
         let uids: Vec<u32> = msgs.iter().map(|m| m.uid as u32).collect();
         let mut conn = self.imap_conn(a).await?;
         conn.ensure_selected(&from.name).await?;
@@ -702,7 +709,7 @@ impl Core {
     }
 
     /// Drops messages from the cache and fixes the folder's counters.
-    async fn forget_messages(&self, f: &Folder, msgs: &[MessageSummary]) -> Result<()> {
+    pub(crate) async fn forget_messages(&self, f: &Folder, msgs: &[MessageSummary]) -> Result<()> {
         let ids: Vec<&String> = msgs.iter().map(|m| &m.id).collect();
         let unread = msgs.iter().filter(|m| !m.seen).count() as i64;
         sqlx::query("DELETE FROM mail_messages WHERE id IN (SELECT value FROM json_each(?))")

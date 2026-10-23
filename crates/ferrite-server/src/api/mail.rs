@@ -116,10 +116,21 @@ struct ListQ {
     #[serde(default)]
     unread: bool,
     limit: Option<i64>,
+    /// "oldest" pages from the oldest message (with `offset`).
+    sort: Option<ferrite_core::mail::prefs::Sort>,
+    #[serde(default)]
+    offset: usize,
 }
 
 async fn messages(State(s): State<AppState>, auth: Auth, Path(id): Path<String>, Query(q): Query<ListQ>) -> ApiResult<Json<Value>> {
     scope(&auth)?;
+    if q.sort == Some(ferrite_core::mail::prefs::Sort::Oldest) {
+        let page = s
+            .core
+            .mail_messages_oldest(&auth.user.id, &id, q.offset, q.unread, q.limit.unwrap_or(50))
+            .await?;
+        return Ok(Json(json!(page)));
+    }
     let page = s
         .core
         .mail_messages(&auth.user.id, &id, q.before.as_deref(), q.unread, q.limit.unwrap_or(50))

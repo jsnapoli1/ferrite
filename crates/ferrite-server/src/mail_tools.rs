@@ -32,7 +32,7 @@ pub fn definitions() -> &'static Vec<Tool> {
             ("reply_all", "boolean", "With reply_to: also copy everyone else on the original", false),
             account,
         ];
-        vec![
+        let mut defs = vec![
             Tool::new(
                 "mail_accounts",
                 "Mail accounts",
@@ -115,36 +115,39 @@ pub fn definitions() -> &'static Vec<Tool> {
                 &[("message_ids", "string[]", "Message ids", true)],
             )
             .destructive(),
-        ]
+        ];
+        defs.extend(crate::mail_inbox_tools::definitions());
+        defs
     })
 }
 
-fn s<'a>(a: &'a Value, k: &str) -> Result<&'a str, Error> {
+pub(crate) fn s<'a>(a: &'a Value, k: &str) -> Result<&'a str, Error> {
     a.get(k)
         .and_then(Value::as_str)
         .filter(|v| !v.is_empty())
         .ok_or_else(|| Error::bad(format!("`{k}` is required")))
 }
 
-fn opt<'a>(a: &'a Value, k: &str) -> Option<&'a str> {
+pub(crate) fn opt<'a>(a: &'a Value, k: &str) -> Option<&'a str> {
     a.get(k).and_then(Value::as_str).filter(|v| !v.is_empty())
 }
 
-fn strings(a: &Value, k: &str) -> Vec<String> {
+pub(crate) fn strings(a: &Value, k: &str) -> Vec<String> {
     a.get(k)
         .and_then(Value::as_array)
         .map(|v| v.iter().filter_map(|x| x.as_str().map(String::from)).collect())
         .unwrap_or_default()
 }
 
-fn summary(m: &MessageSummary) -> Value {
+pub(crate) fn summary(m: &MessageSummary) -> Value {
     json!({
         "id": m.id, "date": m.date, "from": m.from().display(), "subject": m.subject, "preview": m.preview,
         "unread": !m.seen, "flagged": m.flagged, "attachments": m.has_attachments, "thread_size": m.thread_size,
+        "tags": ferrite_core::mail::tags::keyword_list(&m.keywords),
     })
 }
 
-async fn account(core: &Core, uid: &str, which: Option<&str>) -> Result<Account, Error> {
+pub(crate) async fn account(core: &Core, uid: &str, which: Option<&str>) -> Result<Account, Error> {
     let accounts = core.mail_accounts(uid).await?;
     match which {
         Some(w) => accounts
@@ -306,6 +309,6 @@ pub async fn dispatch(core: &Core, ctx: &UserCtx, name: &str, a: &Value) -> Resu
             core.mail_delete(uid, &ids).await?;
             Ok(ToolResult::text(format!("Deleted {} message(s).", ids.len())))
         }
-        other => Err(Error::bad(format!("unknown tool {other}"))),
+        other => crate::mail_inbox_tools::dispatch(core, ctx, other, a).await,
     }
 }

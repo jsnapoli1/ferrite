@@ -13,14 +13,25 @@
 //!   message sync, IDLE. * `store`: reading and acting on cached mail. * `compose`: replies,
 //!   drafts, sending. * `parse`: MIME, threading, sanitizing. * `autoconfig`: provider
 //!   settings from Thunderbird's ISPDB.
+//! * Inbox management (see `inbox`): `prefs`, `tags`, `classify`, `snooze`, `folders`,
+//!   `views` (unified views, advanced search, deep links), `quick_actions`, `mailto`.
 
 pub mod autoconfig;
+pub mod classify;
 pub mod compose;
 pub mod crypto;
+pub mod folders;
 pub mod imap;
+pub mod inbox;
+pub mod mailto;
 pub mod parse;
+pub mod prefs;
+pub mod quick_actions;
+pub mod snooze;
 pub mod store;
 pub mod sync;
+pub mod tags;
+pub mod views;
 
 use crate::mailer::{SmtpSecurity, SmtpSettings};
 use crate::util::{new_id, now};
@@ -484,6 +495,7 @@ impl Core {
     /// Runs mail housekeeping for the life of the process: IDLE watchers for online users,
     /// closing idle pooled connections, expiring composer uploads.
     pub fn spawn_mail_background(&self) {
+        self.spawn_inbox_background();
         let core = self.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(15));

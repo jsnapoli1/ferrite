@@ -11,7 +11,10 @@
 # Several isolated instances can run at once: give each its own DIR and ports, and set
 # POSTFIX=0 for all but one (Postfix runs as the single system instance). SIEVE=1 adds
 # Sieve filtering on delivery and a ManageSieve server on $SIEVE_PORT (4190). EXTRA_USERS
-# ("carol dave") adds more mailboxes, each with password <name>-mail-pw.
+# ("carol dave") adds more mailboxes, each with password <name>-mail-pw. SHARED=1 adds ACLs
+# and a shared namespace ("shared/<user>/..."): folders another user may read (e.g.
+# `doveadm -c DIR/dovecot.conf acl set -u carol@example.test INBOX user=alice@example.test
+# lookup read`) show up in that user's folder list.
 #
 # Mailboxes (domain example.test): alice@example.test / alice-mail-pw, bob@example.test /
 # bob-mail-pw. Ports: IMAP $IMAP_PORT (3143), SMTP $SMTP_PORT (3587). Then, for the Rust
@@ -32,6 +35,7 @@ AUTH_PORT=${AUTH_PORT:-3012}
 SIEVE_PORT=${SIEVE_PORT:-4190}
 POSTFIX=${POSTFIX:-1}
 SIEVE=${SIEVE:-0}
+SHARED=${SHARED:-0}
 EXTRA_USERS=${EXTRA_USERS:-}
 
 need_root() {
@@ -129,6 +133,25 @@ protocol imap {
   mail_max_userip_connections = 100
 }
 EOF
+  if [ "$SHARED" = 1 ]; then
+    # ACLs, and other users' folders under shared/<user>/ (with private \Seen flags).
+    sed -i 's/^mail_plugins = \$mail_plugins$/mail_plugins = $mail_plugins acl/' "$DIR/dovecot.conf"
+    sed -i 's/^protocol imap {$/protocol imap {\n  mail_plugins = $mail_plugins acl imap_acl/' "$DIR/dovecot.conf"
+    cat >>"$DIR/dovecot.conf" <<EOF
+namespace shared {
+  type = shared
+  separator = /
+  prefix = shared/%%u/
+  location = maildir:$DIR/mail/%%d/%%n/Maildir:INDEXPVT=$DIR/mail/%d/%n/shared/%%d/%%n
+  subscriptions = no
+  list = children
+}
+plugin {
+  acl = vfile
+  acl_shared_dict = file:$DIR/mail/shared-mailboxes.db
+}
+EOF
+  fi
   if [ "$SIEVE" = 1 ]; then
     cat >>"$DIR/dovecot.conf" <<EOF
 protocol lmtp {
