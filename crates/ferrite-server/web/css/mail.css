@@ -155,3 +155,31 @@
   .ml-server-row { flex-wrap: wrap; }
   .ml-body-input { height: 34vh; min-height: 200px; }
 }
+
+/* ---------- accounts: order, sharing, quota, OAuth, connection test ---------- */
+.ml-account[draggable="true"] { cursor: grab; }
+.ml-account.drop { box-shadow: inset 0 2px 0 var(--accent); }
+.ml-account-grip { display: inline-flex; margin-left: -8px; color: var(--text-3); opacity: .5; }
+.ml-account:hover .ml-account-grip { opacity: 1; }
+.ml-account-badge { display: inline-flex; color: var(--info); }
+.ml-account-owner { margin: -2px 6px 4px 10px; }
+.ml-quota { margin: 6px 10px 2px; }
+.ml-quota .progress { height: 4px; margin-bottom: 3px; }
+.ml-quota.full .progress > div { background: var(--danger); }
+.ml-notice { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; margin-bottom: 10px; border-radius: var(--radius-sm); background: var(--info-soft); color: var(--text-2); }
+.ml-notice .icon { flex: none; margin-top: 2px; color: var(--info); }
+.ml-oauth { display: flex; flex-direction: column; gap: 6px; margin: 2px 0 10px; }
+.ml-oauth-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.ml-oauth-btn { flex: 1 1 180px; justify-content: center; }
+.ml-server-summary { margin: 2px 0 10px; overflow-wrap: anywhere; }
+.ml-test-row { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; margin: 4px 0 6px; }
+.ml-test { flex: 1; min-width: 200px; }
+.ml-test-line { display: flex; gap: 6px; align-items: flex-start; overflow-wrap: anywhere; }
+.ml-test-line .icon { flex: none; margin-top: 2px; }
+.ml-test-line.ok { color: var(--ok); }
+.ml-test-line.bad { color: var(--danger); }
+.ml-share .list { margin: 10px 0; }
+.ml-share-form input { flex: 1; min-width: 0; }
+@media (max-width: 760px) {
+  .ml-share-row .btn span { display: none; }
+}

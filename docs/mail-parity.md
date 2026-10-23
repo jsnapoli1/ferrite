@@ -113,11 +113,11 @@ Status: ✅ in Ferrite · 🔧 being built (workstream in brackets).
 | Feature | Status |
 |---|---|
 | IMAP/SMTP accounts, encrypted passwords, connection test, provider database autoconfig | ✅ |
-| Autoconfig from MX records | 🔧 |
-| Google and Microsoft accounts with OAuth 2.0 (XOAUTH2), admin-configured client | 🔧 |
-| Account order; quota display | 🔧 |
-| Account delegation: share an account with other users (read, send, delete; not remove or re-authenticate), revocable | 🔧 |
-| Provisioning: admin-defined account templates created for users automatically | 🔧 |
-| Admin settings: allow users to add accounts, anti-spam report addresses (report spam/not spam), attachment size limit, anti-abuse alerts (recipient count, message rate), background sync interval, AI processing on/off, importance classification default, UI defaults | 🔧 |
-| Background sync of all accounts (not only while online) | 🔧 |
-| Assistant (MCP) tools for the new features | 🔧 (each) |
+| Autoconfig from MX records | ✅ (also the provider's autoconfig/autodiscover URLs; connection test) |
+| Google and Microsoft accounts with OAuth 2.0 (XOAUTH2), admin-configured client | ✅ |
+| Account order; quota display | ✅ |
+| Account delegation: share an account with other users (read, send, delete; not remove or re-authenticate), revocable | ✅ |
+| Provisioning: admin-defined account templates created for users automatically | ✅ |
+| Admin settings: allow users to add accounts, anti-spam report addresses (report spam/not spam), attachment size limit, anti-abuse alerts (recipient count, message rate), background sync interval, AI processing on/off, importance classification default, UI defaults | ✅ (settings and spam actions; the other features read them through `mail/settings.rs`) |
+| Background sync of all accounts (not only while online) | ✅ |
+| Assistant (MCP) tools for the new features | ✅ accounts (delegation, report spam, provisioning) · 🔧 (each) |

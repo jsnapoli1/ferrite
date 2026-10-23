@@ -57,6 +57,7 @@ impl Target {
             security: SmtpSecurity::None,
             username: self.user.clone(),
             password: self.pass.clone(),
+            xoauth2: false,
         }
     }
 }
@@ -207,6 +208,11 @@ async fn webmail_against_a_real_imap_server() {
         )
         .await;
     let user_id = setup["user"]["id"].as_str().unwrap().to_string();
+    // The test mail server is on localhost, which a fresh server refuses by default.
+    let (s, v) = b
+        .call(Method::PATCH, "/api/admin/mail/settings", Some(json!({"allow_local_servers": true})))
+        .await;
+    assert!(s.is_success(), "{v}");
 
     // SMTP: the real server's, or a sink.
     let (smtp_host, smtp_port, smtp_auth, mut sink) = match &t.smtp {

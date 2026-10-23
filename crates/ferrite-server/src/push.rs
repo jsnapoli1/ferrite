@@ -9,11 +9,10 @@
 
 pub mod crypto;
 
-use anyhow::anyhow;
 use ferrite_core::push::{Category, PushMessage, PushSubscription};
 use ferrite_core::{Core, Error, Result};
 use reqwest::{StatusCode, Url};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{OnceCell, Semaphore, mpsc};
@@ -283,68 +282,9 @@ pub async fn check_endpoint(raw: &str, allow_insecure: bool) -> Result<Url> {
     Ok(url)
 }
 
-/// True for globally routable unicast addresses: not loopback, private, link-local, CGNAT,
-/// unique-local, multicast, documentation, benchmarking or reserved ranges.
-pub fn is_public(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => is_public_v4(v4),
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return is_public_v4(v4);
-            }
-            let s = v6.segments();
-            // NAT64 (64:ff9b::/96) embeds an IPv4 address.
-            if s[0] == 0x64 && s[1] == 0xff9b && s[2..6] == [0, 0, 0, 0] {
-                let [a, b] = s[6].to_be_bytes();
-                let [c, d] = s[7].to_be_bytes();
-                return is_public_v4(Ipv4Addr::new(a, b, c, d));
-            }
-            !(v6.is_unspecified()
-                || v6.is_loopback()
-                || v6.is_multicast()
-                || (s[0] & 0xfe00) == 0xfc00 // unique local fc00::/7
-                || (s[0] & 0xffc0) == 0xfe80 // link local fe80::/10
-                || (s[0] & 0xffc0) == 0xfec0 // site local fec0::/10
-                || (s[0] == 0x2001 && s[1] == 0x0db8) // documentation
-                || (s[0] == 0x2001 && s[1] < 0x0200) // IETF protocol assignments (Teredo, ORCHID, …)
-                || s[0] == 0x2002 // 6to4 tunnels to arbitrary IPv4
-                || s[0..6] == [0, 0, 0, 0, 0, 0]) // IPv4-compatible (deprecated)
-        }
-    }
-}
-
-fn is_public_v4(ip: Ipv4Addr) -> bool {
-    let [a, b, c, _] = ip.octets();
-    !(ip.is_unspecified()
-        || ip.is_loopback()
-        || ip.is_private()
-        || ip.is_link_local()
-        || ip.is_multicast()
-        || ip.is_broadcast()
-        || ip.is_documentation()
-        || a == 0
-        || (a == 100 && (b & 0xc0) == 64) // shared address space 100.64.0.0/10
-        || (a == 192 && b == 0 && c == 0) // IETF protocol assignments
-        || (a == 198 && (b & 0xfe) == 18) // benchmarking 198.18.0.0/15
-        || a >= 240) // reserved
-}
-
-/// DNS for the push client: drops non-public answers so a name can't be re-pointed at an
-/// internal service between the endpoint check and the connection (DNS rebinding).
-struct PublicOnlyResolver;
-
-impl reqwest::dns::Resolve for PublicOnlyResolver {
-    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        let host = name.as_str().to_string();
-        Box::pin(async move {
-            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0)).await?.filter(|a| is_public(a.ip())).collect();
-            if addrs.is_empty() {
-                return Err(anyhow!("{host} has no public address").into());
-            }
-            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
-        })
-    }
-}
+use ferrite_core::net::PublicOnlyResolver;
+/// The address checks live in core, shared with mail; re-exported for existing callers.
+pub use ferrite_core::net::is_public;
 
 /// "Firefox on Android", "Safari on iOS", … from a User-Agent header.
 pub fn device_label(user_agent: &str) -> String {

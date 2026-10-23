@@ -1,0 +1,22 @@
+/* Settings → Mail admin: OAuth providers, provisioning templates, alerts. Tokens only, both
+   themes. */
+
+.set-mail-provider { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 14px 6px; margin: 12px 0 0; min-width: 0; }
+.set-mail-provider legend { display: flex; align-items: center; gap: 8px; padding: 0 4px; font-weight: 600; }
+.set-mail-advanced { margin: 4px 0 8px; }
+.set-mail-advanced summary { cursor: pointer; color: var(--text-2); font-weight: 500; padding: 4px 0; }
+.set-mail-modes { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.set-mail-mode { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; }
+.set-mail-mode:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.set-mail-mode input { margin-top: 3px; flex: none; accent-color: var(--accent); }
+.set-mail-mode > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.set-mail-template.set-disabled { opacity: .65; }
+.set-mail-template .btn { flex: none; }
+.set-mail-template-form .set-grid { align-items: end; }
+.set-subhead { font-size: 14px; margin: 18px 0 8px; }
+.set-mail-switches { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+.set-mail-alerts .list-item { padding: 7px 12px; }
+@media (max-width: 760px) {
+  .set-mail-provider { padding: 8px 10px 4px; }
+  .set-mail-template { flex-wrap: wrap; }
+}
