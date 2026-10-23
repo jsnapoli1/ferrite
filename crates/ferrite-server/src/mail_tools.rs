@@ -1,8 +1,12 @@
 //! MCP tools for webmail (scope `mail`). Reading is read-only; drafting, sending, marking and
-//! moving change mail, so the assistant only uses them when the user allowed changes.
+//! moving change mail, so the assistant only uses them when the user allowed changes. Every
+//! tool works on the accounts the user owns and those delegated to them, through core's
+//! central access check; sharing an account is for its owner, and administrators (with the
+//! `admin` scope) can see and revoke every delegation and run provisioning.
 
 use crate::tools::UserCtx;
 use ferrite_core::mail::Account;
+use ferrite_core::mail::antispam::Verdict;
 use ferrite_core::mail::compose::{Compose, ReplyMode};
 use ferrite_core::mail::store::{FlagAction, MessageSummary};
 use ferrite_core::{Core, Error};
@@ -36,7 +40,7 @@ pub fn definitions() -> &'static Vec<Tool> {
             Tool::new(
                 "mail_accounts",
                 "Mail accounts",
-                "Your connected mail accounts with their folders and unread counts.",
+                "Your mail accounts (your own and those shared with you) with their folders, unread counts and storage quota.",
                 &[],
             )
             .read_only(),
@@ -115,6 +119,45 @@ pub fn definitions() -> &'static Vec<Tool> {
                 &[("message_ids", "string[]", "Message ids", true)],
             )
             .destructive(),
+            Tool::new(
+                "mail_report_spam",
+                "Report spam",
+                "Report messages as spam (moved to Junk) or as not spam (moved back to the Inbox); when the server has a report address, a copy is forwarded there.",
+                &[
+                    ("message_ids", "string[]", "Message ids", true),
+                    ("not_spam", "boolean", "Report as not spam instead", false),
+                ],
+            ),
+            Tool::new(
+                "mail_delegations",
+                "Mail delegations",
+                "Who an account of yours is shared with. Administrators may leave out the account to list every delegation on the server.",
+                &[account],
+            )
+            .read_only(),
+            Tool::new(
+                "mail_delegate",
+                "Share mail account",
+                "Share one of your mail accounts with another user: they can read, send, move and delete its mail, but not remove it or change how it signs in.",
+                &[account, ("user", "string", "Username to share the account with", true)],
+            ),
+            Tool::new(
+                "mail_undelegate",
+                "Stop sharing mail account",
+                "Revoke a delegation (by its id from mail_delegations, or account plus username). Owners, the delegate themselves, and administrators may revoke.",
+                &[
+                    ("delegation_id", "string", "Delegation id", false),
+                    account,
+                    ("user", "string", "Username the account is shared with", false),
+                ],
+            )
+            .destructive(),
+            Tool::new(
+                "mail_provision",
+                "Provision mail accounts",
+                "Administrators: create, update and remove provisioned mail accounts so every user matches the provisioning templates. Reports what changed.",
+                &[],
+            ),
         ]
     })
 }
@@ -144,8 +187,12 @@ fn summary(m: &MessageSummary) -> Value {
     })
 }
 
+fn is_admin(ctx: &UserCtx) -> bool {
+    ctx.user.is_admin && ctx.scopes.split(',').map(str::trim).any(|s| s == "*" || s == "admin")
+}
+
 async fn account(core: &Core, uid: &str, which: Option<&str>) -> Result<Account, Error> {
-    let accounts = core.mail_accounts(uid).await?;
+    let accounts = core.mail_accounts_for(uid).await?;
     match which {
         Some(w) => accounts
             .into_iter()
@@ -198,7 +245,7 @@ pub async fn dispatch(core: &Core, ctx: &UserCtx, name: &str, a: &Value) -> Resu
     match name {
         "mail_accounts" => {
             let mut out = Vec::new();
-            for acc in core.mail_accounts(uid).await? {
+            for acc in core.mail_accounts_for(uid).await? {
                 let folders: Vec<Value> = core
                     .mail_folders(uid, &acc.id)
                     .await?
@@ -206,7 +253,12 @@ pub async fn dispatch(core: &Core, ctx: &UserCtx, name: &str, a: &Value) -> Resu
                     .filter(|f| f.selectable)
                     .map(|f| json!({"id": f.id, "name": f.name, "role": f.role, "total": f.total, "unread": f.unread}))
                     .collect();
-                out.push(json!({"id": acc.id, "email": acc.email, "name": acc.name, "folders": folders, "last_error": acc.last_error}));
+                out.push(json!({
+                    "id": acc.id, "email": acc.email, "name": acc.name, "folders": folders, "last_error": acc.last_error,
+                    "shared_by": acc.owner_name, "delegated": acc.delegated, "provisioned": acc.provisioning_id.is_some(),
+                    "sign_in": acc.oauth_provider.clone().unwrap_or_else(|| "password".into()),
+                    "quota": acc.quota_limit.map(|limit| json!({"used_bytes": acc.quota_used, "limit_bytes": limit})),
+                }));
             }
             Ok(ToolResult::json(json!({"accounts": out})))
         }
@@ -305,6 +357,51 @@ pub async fn dispatch(core: &Core, ctx: &UserCtx, name: &str, a: &Value) -> Resu
             let ids = strings(a, "message_ids");
             core.mail_delete(uid, &ids).await?;
             Ok(ToolResult::text(format!("Deleted {} message(s).", ids.len())))
+        }
+        "mail_report_spam" => {
+            let ids = strings(a, "message_ids");
+            let ham = a.get("not_spam").and_then(Value::as_bool).unwrap_or(false);
+            let out = core.mail_report_spam(uid, &ids, if ham { Verdict::Ham } else { Verdict::Spam }).await?;
+            Ok(ToolResult::json(
+                json!({"reported_to_server_filter": out.reported, "moved": out.moved, "as": if ham { "not spam" } else { "spam" }}),
+            ))
+        }
+        "mail_delegations" => match opt(a, "account") {
+            None if is_admin(ctx) => Ok(ToolResult::json(json!({"delegations": core.mail_all_delegations().await?}))),
+            which => {
+                let acc = account(core, uid, which).await?;
+                Ok(ToolResult::json(
+                    json!({"account": acc.email, "delegations": core.mail_delegations(uid, &acc.id).await?}),
+                ))
+            }
+        },
+        "mail_delegate" => {
+            let acc = account(core, uid, opt(a, "account")).await?;
+            let d = core.mail_delegate(uid, &acc.id, s(a, "user")?).await?;
+            Ok(ToolResult::json(json!({"shared": acc.email, "with": d.username, "delegation_id": d.id})))
+        }
+        "mail_undelegate" => {
+            let id = match opt(a, "delegation_id") {
+                Some(id) => id.to_string(),
+                None => {
+                    let acc = account(core, uid, opt(a, "account")).await?;
+                    let user = s(a, "user")?;
+                    core.mail_delegations(uid, &acc.id)
+                        .await?
+                        .into_iter()
+                        .find(|d| d.username.eq_ignore_ascii_case(user))
+                        .map(|d| d.id)
+                        .ok_or_else(|| Error::bad(format!("{} is not shared with {user:?}", acc.email)))?
+                }
+            };
+            core.mail_undelegate(uid, &id, is_admin(ctx)).await?;
+            Ok(ToolResult::text("The delegation was revoked."))
+        }
+        "mail_provision" => {
+            if !is_admin(ctx) {
+                return Err(Error::Forbidden);
+            }
+            Ok(ToolResult::json(json!({"report": core.mail_provision_all().await?})))
         }
         other => Err(Error::bad(format!("unknown tool {other}"))),
     }

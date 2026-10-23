@@ -5,7 +5,7 @@
 use crate::{Core, Error, Result};
 use lettre::message::header::{ContentType, HeaderName, HeaderValue};
 use lettre::message::{Attachment as LettreAttachment, Mailbox, MultiPart, SinglePart};
-use lettre::transport::smtp::authentication::Credentials;
+use lettre::transport::smtp::authentication::{Credentials, Mechanism};
 use lettre::transport::smtp::client::{Tls, TlsParameters};
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use serde::{Deserialize, Serialize};
@@ -138,10 +138,29 @@ pub fn build_message(m: &OutgoingMail, default_from: &str) -> Result<Message> {
     Ok(msg)
 }
 
+/// How a webmail account's SMTP connection authenticates and checks certificates.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TransportOptions {
+    /// Authenticate with SASL XOAUTH2 (the password is an OAuth access token).
+    pub xoauth2: bool,
+    /// Accept any certificate (the administrator turned verification off).
+    pub accept_invalid_certs: bool,
+}
+
 /// An SMTP transport for `settings` (connections are pooled and reused).
 pub fn transport(settings: &SmtpSettings) -> Result<AsyncSmtpTransport<Tokio1Executor>> {
+    transport_with(settings, &TransportOptions::default())
+}
+
+/// [`transport`] with webmail options.
+pub fn transport_with(settings: &SmtpSettings, opts: &TransportOptions) -> Result<AsyncSmtpTransport<Tokio1Executor>> {
     let host = settings.host.trim();
-    let tls = || TlsParameters::new(host.to_string()).map_err(|e| Error::bad(format!("TLS for {host}: {e}")));
+    let tls = || {
+        TlsParameters::builder(host.to_string())
+            .dangerous_accept_invalid_certs(opts.accept_invalid_certs)
+            .build()
+            .map_err(|e| Error::bad(format!("TLS for {host}: {e}")))
+    };
     let mut b = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host)
         .port(settings.port)
         .timeout(Some(Duration::from_secs(30)));
@@ -152,6 +171,9 @@ pub fn transport(settings: &SmtpSettings) -> Result<AsyncSmtpTransport<Tokio1Exe
     };
     if let (Some(u), Some(p)) = (&settings.username, &settings.password) {
         b = b.credentials(Credentials::new(u.clone(), p.clone()));
+        if opts.xoauth2 {
+            b = b.authentication(vec![Mechanism::Xoauth2]);
+        }
     }
     Ok(b.build())
 }
@@ -184,8 +206,11 @@ impl Core {
 
 /// A minimal SMTP server that accepts every message, for tests: `sink().await` returns its
 /// port and a channel of received messages (envelope recipients and raw data).
+/// `sink_with_auth` also offers AUTH PLAIN and XOAUTH2 and checks credentials with a callback.
 #[cfg(any(test, feature = "test-util"))]
 pub mod sink {
+    use base64::Engine;
+    use std::sync::Arc;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::sync::mpsc;
 
@@ -194,15 +219,52 @@ pub mod sink {
         pub from: String,
         pub to: Vec<String>,
         pub data: String,
+        /// How the client authenticated: `("PLAIN" | "XOAUTH2", user)`; `None` without AUTH.
+        pub auth: Option<(String, String)>,
+    }
+
+    /// A credential check: (mechanism, user, password or bearer token) → accepted.
+    pub type Check = Arc<dyn Fn(&str, &str, &str) -> bool + Send + Sync>;
+
+    /// The user and token of an XOAUTH2 initial response (`user=…^Aauth=Bearer …^A^A`).
+    pub fn parse_xoauth2(raw: &[u8]) -> Option<(String, String)> {
+        let s = String::from_utf8(raw.to_vec()).ok()?;
+        let mut user = None;
+        let mut token = None;
+        for part in s.split('\x01') {
+            if let Some(u) = part.strip_prefix("user=") {
+                user = Some(u.to_string());
+            } else if let Some(t) = part.strip_prefix("auth=Bearer ") {
+                token = Some(t.to_string());
+            }
+        }
+        Some((user?, token?))
+    }
+
+    fn parse_plain(raw: &[u8]) -> Option<(String, String)> {
+        let mut parts = raw.split(|b| *b == 0);
+        let _authzid = parts.next()?;
+        let user = String::from_utf8(parts.next()?.to_vec()).ok()?;
+        let pass = String::from_utf8(parts.next()?.to_vec()).ok()?;
+        Some((user, pass))
     }
 
     pub async fn sink() -> (u16, mpsc::UnboundedReceiver<Received>) {
+        serve(None).await
+    }
+
+    pub async fn sink_with_auth(check: Check) -> (u16, mpsc::UnboundedReceiver<Received>) {
+        serve(Some(check)).await
+    }
+
+    async fn serve(check: Option<Check>) -> (u16, mpsc::UnboundedReceiver<Received>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind SMTP sink");
         let port = listener.local_addr().expect("local addr").port();
         let (tx, rx) = mpsc::unbounded_channel();
         tokio::spawn(async move {
             while let Ok((sock, _)) = listener.accept().await {
                 let tx = tx.clone();
+                let check = check.clone();
                 tokio::spawn(async move {
                     let (r, mut w) = sock.into_split();
                     let mut lines = BufReader::new(r).lines();
@@ -211,11 +273,50 @@ pub mod sink {
                         from: String::new(),
                         to: Vec::new(),
                         data: String::new(),
+                        auth: None,
                     };
+                    let mut authed: Option<(String, String)> = None;
                     while let Ok(Some(line)) = lines.next_line().await {
                         let upper = line.to_ascii_uppercase();
+                        let b64 = base64::engine::general_purpose::STANDARD;
                         let reply: &[u8] = if upper.starts_with("EHLO") || upper.starts_with("HELO") {
-                            b"250-sink\r\n250 8BITMIME\r\n"
+                            if check.is_some() {
+                                b"250-sink\r\n250-AUTH PLAIN XOAUTH2\r\n250 8BITMIME\r\n"
+                            } else {
+                                b"250-sink\r\n250 8BITMIME\r\n"
+                            }
+                        } else if let (Some(check), true) = (&check, upper.starts_with("AUTH ")) {
+                            let mut words = line.split_whitespace().skip(1);
+                            let mech = words.next().unwrap_or("").to_ascii_uppercase();
+                            let initial = match words.next() {
+                                Some(i) => i.to_string(),
+                                None => {
+                                    let _ = w.write_all(b"334 \r\n").await;
+                                    lines.next_line().await.ok().flatten().unwrap_or_default()
+                                }
+                            };
+                            let raw = b64.decode(initial.trim()).unwrap_or_default();
+                            let creds = match mech.as_str() {
+                                "PLAIN" => parse_plain(&raw),
+                                "XOAUTH2" => parse_xoauth2(&raw),
+                                _ => None,
+                            };
+                            match creds {
+                                Some((user, secret)) if check(&mech, &user, &secret) => {
+                                    authed = Some((mech, user));
+                                    b"235 2.7.0 Authentication successful\r\n"
+                                }
+                                _ if mech == "XOAUTH2" => {
+                                    // RFC 7628 style failure: a JSON challenge, then 535 after the
+                                    // client's empty response.
+                                    let _ = w.write_all(b"334 eyJzdGF0dXMiOiI0MDEifQ==\r\n").await;
+                                    let _ = lines.next_line().await;
+                                    b"535 5.7.8 Authentication failed\r\n"
+                                }
+                                _ => b"535 5.7.8 Authentication failed\r\n",
+                            }
+                        } else if check.is_some() && authed.is_none() && upper.starts_with("MAIL FROM:") {
+                            b"530 5.7.0 Authentication required\r\n"
                         } else if upper.starts_with("MAIL FROM:") {
                             msg.from = line[10..].trim().trim_matches(['<', '>']).to_string();
                             b"250 OK\r\n"
@@ -233,12 +334,14 @@ pub mod sink {
                                 data.push_str("\r\n");
                             }
                             msg.data = data;
+                            msg.auth = authed.clone();
                             let _ = tx.send(std::mem::replace(
                                 &mut msg,
                                 Received {
                                     from: String::new(),
                                     to: Vec::new(),
                                     data: String::new(),
+                                    auth: None,
                                 },
                             ));
                             b"250 queued\r\n"
@@ -325,5 +428,37 @@ mod tests {
         assert_eq!(got.from, "noreply@example.org");
         assert!(got.data.contains("method=REQUEST"));
         assert!(!id.is_empty() && got.data.contains(&id), "Message-ID returned and sent");
+    }
+
+    #[tokio::test]
+    async fn authenticates_with_xoauth2() {
+        let check: sink::Check =
+            std::sync::Arc::new(|mech: &str, user: &str, secret: &str| mech == "XOAUTH2" && user == "ada@example.org" && secret == "tok-1");
+        let (port, mut rx) = sink::sink_with_auth(check).await;
+        let mut settings = SmtpSettings {
+            host: "127.0.0.1".into(),
+            port,
+            security: SmtpSecurity::None,
+            username: Some("ada@example.org".into()),
+            password: Some("tok-1".into()),
+            from: "ada@example.org".into(),
+        };
+        let opts = TransportOptions {
+            xoauth2: true,
+            accept_invalid_certs: false,
+        };
+        send(&transport_with(&settings, &opts).unwrap(), build_message(&invite(), "ada@example.org").unwrap())
+            .await
+            .unwrap();
+        let got = rx.recv().await.unwrap();
+        assert_eq!(got.auth, Some(("XOAUTH2".into(), "ada@example.org".into())));
+        // A wrong token is refused.
+        settings.password = Some("stale".into());
+        let err = send(&transport_with(&settings, &opts).unwrap(), build_message(&invite(), "ada@example.org").unwrap()).await;
+        assert!(err.is_err());
+        assert_eq!(
+            sink::parse_xoauth2(b"user=a@b\x01auth=Bearer t\x01\x01"),
+            Some(("a@b".to_string(), "t".to_string()))
+        );
     }
 }
