@@ -529,7 +529,10 @@ async fn delegation_provisioning_and_administration() {
         scopes: "mail".into(),
     };
     let listed = state.tools.call(&bob_ctx, "mail_accounts", json!({})).await.unwrap().text_content();
-    assert!(listed.contains("\"delegated\": true") && listed.contains("\"shared_by\": \"Alice\""), "{listed}");
+    assert!(
+        listed.contains("\"delegated\": true") && listed.contains("\"shared_by\": \"Alice\""),
+        "{listed}"
+    );
     let l = state
         .tools
         .call(&bob_ctx, "mail_list", json!({"account": "alice@example.test"}))
