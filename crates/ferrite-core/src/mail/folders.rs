@@ -318,7 +318,7 @@ impl Core {
         if let Some(subs) = subscribed.filter(|s| !s.is_empty()) {
             for f in &folders {
                 // Containers (\Noselect) follow their children.
-                let on = !f.selectable || f.role.as_deref() == Some("inbox") || subs.iter().any(|s| *s == f.name);
+                let on = !f.selectable || f.role.as_deref() == Some("inbox") || subs.contains(&f.name);
                 if on != f.subscribed {
                     sqlx::query("UPDATE mail_folders SET subscribed = ? WHERE id = ?")
                         .bind(on)

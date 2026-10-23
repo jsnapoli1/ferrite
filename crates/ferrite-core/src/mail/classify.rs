@@ -340,11 +340,11 @@ impl Core {
     }
 
     pub async fn classifier_status(&self, account_id: &str) -> Result<ClassifierStatus> {
-        let row: Option<(Option<String>, i64, i64, Option<f64>, Option<chrono::DateTime<chrono::Utc>>)> =
-            sqlx::query_as("SELECT model, samples, important, accuracy, trained_at FROM mail_classifiers WHERE account_id = ?")
-                .bind(account_id)
-                .fetch_optional(&self.db)
-                .await?;
+        type Row = (Option<String>, i64, i64, Option<f64>, Option<chrono::DateTime<chrono::Utc>>);
+        let row: Option<Row> = sqlx::query_as("SELECT model, samples, important, accuracy, trained_at FROM mail_classifiers WHERE account_id = ?")
+            .bind(account_id)
+            .fetch_optional(&self.db)
+            .await?;
         let enabled = self.classify_enabled(account_id).await?;
         Ok(match row {
             Some((model, samples, important, accuracy, trained_at)) => ClassifierStatus {

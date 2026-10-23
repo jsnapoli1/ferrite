@@ -247,7 +247,7 @@ impl Core {
         self.drop_snoozed(&a.id, &done).await?;
         if woken > 0 {
             let _: sync::SyncReport = self.sync_mail_folder(a, &snoozed.id).await.unwrap_or_default();
-            self.mail_publish(&a, &serde_json::json!({"type": "mail.changed", "account_id": a.id, "what": "snoozed"}));
+            self.mail_publish(a, &serde_json::json!({"type": "mail.changed", "account_id": a.id, "what": "snoozed"}));
         }
         Ok(woken)
     }
