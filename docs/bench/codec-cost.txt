@@ -38,3 +38,11 @@ step      codec    kbit/s     enc_ms enc_fps/core      dec_ms dec_fps/core
 2160p60   vp8       20797       86.3         12        10.9          92
 2160p60   vp9       20797       92.2         11        27.6          36
 2160p60   av1       20797      179.9          6        41.3          24
+
+## simulcast ladder, VP8 (pass 3; ms are CPU per frame per layer, quarter + half + full size)
+step      layers (VP8 enc ms/frame)     send_cores  upload_kbit/s
+720p30    1.4 + 4.8 + 16.5                    0.68           2106
+1080p30   2.6 + 10.1 + 23.6                   1.09           4283
+1080p60   2.7 + 9.9 + 22.3                    2.09           8567
+2160p30   9.9 + 24.3 + 85.7                   3.60          14408
+2160p60   10.1 + 23.1 + 95.6                  7.73          28818

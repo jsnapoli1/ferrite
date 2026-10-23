@@ -43,3 +43,23 @@ for step in "1280x720 30" "1920x1080 30" "1920x1080 60" "3840x2160 30" "3840x216
       printf "%-9s %-6s %8d %10.1f %10.0f %11.1f %11.0f\n", s, c, r, e, 1000/e, dd, 1000/dd }'
   done
 done
+
+# What one sender's camera costs through the SFU: VP8 at the three simulcast layers (full,
+# half and quarter size, each at its own bitrate), summed and turned into CPU cores at the
+# step's frame rate. Receivers decode one layer per remote person.
+echo
+printf "%-9s %-28s %11s %14s\n" step "layers (VP8 enc ms/frame)" send_cores upload_kbit/s
+for step in "1280x720 30" "1920x1080 30" "1920x1080 60" "3840x2160 30" "3840x2160 60"; do
+  set -- $step; size=$1; fps=$2; w=${size%x*}; h=${size#*x}
+  total=0; kb=0; parts=""
+  for div in 4 2 1; do
+    lw=$((w / div)); lh=$((h / div)); rate=$(kbps "$lh" "$fps")
+    base=$(cpu -nostdin -f lavfi -i "$(src "${lw}x${lh}" "$fps")" -frames:v "$FRAMES" -threads 1 -f null -)
+    t=$(cpu -nostdin -y -f lavfi -i "$(src "${lw}x${lh}" "$fps")" -frames:v "$FRAMES" -threads 1 \
+          -c:v libvpx -deadline realtime -cpu-used 6 -error-resilient 1 -lag-in-frames 0 -auto-alt-ref 0 \
+          -b:v "${rate}k" -maxrate "${rate}k" -minrate "${rate}k" -g 3000 -an "$TMP/l.webm")
+    ms=$(awk -v t="$t" -v b="$base" -v n="$FRAMES" 'BEGIN{e=(t-b)*1000/n; if (e<0.01) e=0.01; printf "%.1f", e}')
+    parts="$parts${parts:+ + }$ms"; total=$(awk -v a="$total" -v b="$ms" 'BEGIN{print a+b}'); kb=$((kb + rate))
+  done
+  awk -v s="${h}p$fps" -v p="$parts" -v t="$total" -v f="$fps" -v k="$kb" 'BEGIN{printf "%-9s %-28s %11.2f %14d\n", s, p, t*f/1000, k}'
+done
