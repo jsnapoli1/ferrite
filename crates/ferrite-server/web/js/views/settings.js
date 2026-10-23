@@ -9,6 +9,7 @@ import { aiTab, mcpServersTab } from './settings-ai.js';
 import { adminTab } from './settings-admin.js';
 import { securityTab } from './settings-security.js';
 import { notificationsTab } from './settings-notifications.js';
+import { availabilityCard } from './settings-availability.js';
 import { copyField } from './files-dialogs.js';
 
 const TABS = [
@@ -106,7 +107,8 @@ async function profileTab(host, ctx) {
   host.append(
     card('Profile', 'How other people see you in Ferrite.', profile),
     card('Password', 'You need your current password to set a new one.', password),
-    card('Appearance', 'Choose a theme for this browser. “System” follows your device setting.', seg));
+    card('Appearance', 'Choose a theme for this browser. “System” follows your device setting.', seg),
+    await availabilityCard());
 }
 
 // ---- Tokens & MCP ----------------------------------------------------------------------

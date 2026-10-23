@@ -478,14 +478,27 @@ fn expects_reply(out: &str) -> bool {
     }
 }
 
+/// Checks one user's sent mail now (their "check now", and each periodic pass).
+pub async fn check_follow_ups(core: &Core, user: &User) -> Result<usize> {
+    let (provider, model) = model(core, user, "summarize").await?;
+    let mut total = 0;
+    for a in core.mail_accounts(&user.id).await? {
+        if !core.mail_integrations(&user.id, &a.id).await?.followup_enabled {
+            continue;
+        }
+        match classify_account(core, user, &a, &provider, &model).await {
+            Ok(n) => total += n,
+            Err(e) => tracing::info!(account = %a.id, error = %e, "follow-up check failed"),
+        }
+    }
+    Ok(total)
+}
+
 /// One pass over every user who has AI turned on.
 pub async fn run_follow_ups(core: &Core) -> Result<usize> {
-    if !llm_processing(core).await? {
+    if !llm_processing(core).await? || crate::ai::provider_for_role(core, "summarize").await.is_err() {
         return Ok(0);
     }
-    let Ok((provider, model)) = crate::ai::provider_for_role(core, "summarize").await else {
-        return Ok(0);
-    };
     let users: Vec<String> =
         sqlx::query_scalar("SELECT DISTINCT u.id FROM users u JOIN mail_accounts a ON a.user_id = u.id WHERE u.ai_consent = 1 AND u.disabled = 0")
             .fetch_all(&core.db)
@@ -493,14 +506,9 @@ pub async fn run_follow_ups(core: &Core) -> Result<usize> {
     let mut total = 0;
     for uid in users {
         let user = core.user(&uid).await?;
-        for a in core.mail_accounts(&uid).await? {
-            if !core.mail_integrations(&uid, &a.id).await?.followup_enabled {
-                continue;
-            }
-            match classify_account(core, &user, &a, &provider, &model).await {
-                Ok(n) => total += n,
-                Err(e) => tracing::info!(account = %a.id, error = %e, "follow-up check failed"),
-            }
+        match check_follow_ups(core, &user).await {
+            Ok(n) => total += n,
+            Err(e) => tracing::info!(user = %uid, error = %e, "follow-up check failed"),
         }
     }
     Ok(total)

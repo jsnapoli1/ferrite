@@ -47,6 +47,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/mail/messages/{id}/ai/event", post(ai_event))
         .route("/api/mail/follow-ups", get(follow_ups))
         .route("/api/mail/follow-ups/disable", post(disable_follow_up))
+        .route("/api/mail/follow-ups/check", post(check_follow_ups))
         .route("/api/admin/mail/ai", get(admin_ai).put(set_admin_ai))
 }
 
@@ -414,6 +415,15 @@ async fn ai_event(State(s): State<AppState>, auth: Auth, Path(id): Path<String>)
 async fn follow_ups(State(s): State<AppState>, auth: Auth) -> ApiResult<Json<Value>> {
     mail(&auth)?;
     Ok(Json(json!({"follow_ups": mail_ai::follow_ups(&s.core, &auth.user.id).await?})))
+}
+
+/// Checks the user's sent mail for follow-ups now (instead of at the next half-hourly pass).
+async fn check_follow_ups(State(s): State<AppState>, auth: Auth) -> ApiResult<Json<Value>> {
+    ai_scopes(&auth)?;
+    let checked = mail_ai::check_follow_ups(&s.core, &auth.user).await?;
+    Ok(Json(
+        json!({"checked": checked, "follow_ups": mail_ai::follow_ups(&s.core, &auth.user.id).await?}),
+    ))
 }
 
 #[derive(Deserialize)]
