@@ -244,6 +244,9 @@ struct EnqueueBody {
     compose: Compose,
     /// Send later at this time; without it the message goes out after the undo delay.
     send_at: Option<DateTime<Utc>>,
+    /// Keep the (edited) message set aside instead of scheduling it.
+    #[serde(default)]
+    hold: bool,
 }
 
 async fn enqueue(State(s): State<AppState>, auth: Auth, Json(b): Json<EnqueueBody>) -> ApiResult<Json<Value>> {
@@ -259,7 +262,11 @@ async fn outbox_message(State(s): State<AppState>, auth: Auth, Path(id): Path<St
 
 async fn update_outbox(State(s): State<AppState>, auth: Auth, Path(id): Path<String>, Json(b): Json<EnqueueBody>) -> ApiResult<Json<Value>> {
     scope(&auth)?;
-    let entry = s.core.mail_outbox_update(&auth.user.id, &id, &b.account_id, &b.compose, b.send_at).await?;
+    let entry = if b.hold {
+        s.core.mail_outbox_keep(&auth.user.id, &id, &b.account_id, &b.compose).await?
+    } else {
+        s.core.mail_outbox_update(&auth.user.id, &id, &b.account_id, &b.compose, b.send_at).await?
+    };
     Ok(Json(json!({"message": entry})))
 }
 

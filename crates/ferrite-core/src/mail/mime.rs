@@ -83,12 +83,27 @@ fn crlf(raw: &[u8]) -> Vec<u8> {
     out
 }
 
+/// A whole message as a body part: as it is (7bit or 8bit, as RFC 2046 §5.2.1 wants for
+/// message/rfc822; quoted-printable would hide its structure from readers), or base64 when
+/// it has lines no transport could carry.
+fn message_body(raw: &[u8]) -> Body {
+    let raw = crlf(raw);
+    let fits = !raw.contains(&0) && raw.split(|b| *b == b'\n').all(|l| l.len() <= 998);
+    if fits {
+        let encoding = if raw.is_ascii() {
+            ContentTransferEncoding::SevenBit
+        } else {
+            ContentTransferEncoding::EightBit
+        };
+        Body::dangerous_pre_encoded(raw, encoding)
+    } else {
+        Body::new_with_encoding(raw, ContentTransferEncoding::Base64).unwrap_or_else(Body::new)
+    }
+}
+
 fn attachment_part(a: &Attachment) -> SinglePart {
     if a.content_type.eq_ignore_ascii_case("message/rfc822") {
-        // RFC 2046 §5.2.1: message/rfc822 is 7bit, 8bit or binary, never base64, unless
-        // the message has lines no transport could carry.
-        let raw = crlf(&a.data);
-        let body = Body::new_with_encoding(raw, ContentTransferEncoding::EightBit).unwrap_or_else(Body::new);
+        let body = message_body(&a.data);
         return SinglePart::builder()
             .header(ContentType::parse("message/rfc822").expect("valid content type"))
             .header(ContentDisposition::attachment(&a.filename))
@@ -230,9 +245,7 @@ pub fn build_mdn(m: &MdnSpec) -> Result<Message> {
                 .body(Body::new_with_encoding(report, ContentTransferEncoding::SevenBit).map_err(|_| Error::bad("the receipt has a non-ASCII field"))?),
         );
     if let Some(h) = &m.original_headers {
-        let headers = crlf(h);
-        let body = Body::new_with_encoding(headers, ContentTransferEncoding::EightBit).unwrap_or_else(Body::new);
-        parts = parts.singlepart(SinglePart::builder().header(content_type("text/rfc822-headers")).body(body));
+        parts = parts.singlepart(SinglePart::builder().header(content_type("text/rfc822-headers")).body(message_body(h)));
     }
     let mut b = Message::builder()
         .from(mailbox(&m.from)?)
@@ -303,7 +316,11 @@ mod tests {
             Attachment {
                 filename: "Original.eml".into(),
                 content_type: "message/rfc822".into(),
-                data: b"From: a@example.org\nSubject: inner\n\nInner body\n".to_vec(),
+                data: format!(
+                    "From: a@example.org\nSubject: inner\n\nInner body with a line far longer than seventy-eight characters, which quoted-printable would wrap.\n{}\n",
+                    "x".repeat(900)
+                )
+                .into_bytes(),
             },
         ];
         s.read_receipt_to = Some("Jürgen Müller <juergen@example.org>".into());
@@ -348,10 +365,12 @@ mod tests {
             panic!("not a nested message")
         };
         assert_eq!(inner.subject(), Some("inner"));
-        assert!(text.contains("Content-Type: message/rfc822\r\nContent-Disposition: attachment") || text.contains("message/rfc822"));
+        // As it is, not quoted-printable (which would hide the structure) or base64.
         assert!(
-            !text.contains("Content-Type: message/rfc822\r\nContent-Disposition: attachment; filename=\"Original.eml\"\r\nContent-Transfer-Encoding: base64")
+            text.contains("Content-Type: message/rfc822\r\nContent-Disposition: attachment; filename=\"Original.eml\"\r\nContent-Transfer-Encoding: 7bit"),
+            "{text}"
         );
+        assert!(inner.body_text(0).unwrap().contains("which quoted-printable would wrap"));
         assert!(m.body_html(0).unwrap().contains("<b>Zoë</b>"));
         assert!(m.body_text(0).unwrap().contains("Hallo Zoë"));
     }

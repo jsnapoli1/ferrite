@@ -66,6 +66,9 @@ const STYLES: &[&str] = &[
     "border",
     "border-collapse",
     "border-left",
+    "border-left-color",
+    "border-left-style",
+    "border-left-width",
     "color",
     "font-family",
     "font-size",
@@ -84,6 +87,7 @@ const STYLES: &[&str] = &[
     "padding-left",
     "text-align",
     "text-decoration",
+    "text-decoration-line",
     "vertical-align",
     "width",
 ];
@@ -339,7 +343,8 @@ fn transform(el: &mut El, f: &mut dyn FnMut(&mut El) -> bool) {
 /// event handlers, remote images or CSS resources; links only to http(s), mailto and tel.
 /// Images without an allowed source are removed rather than left broken.
 pub fn sanitize(html: &str) -> String {
-    let clean = builder().clean(html).to_string();
+    // Zero-width spaces only hold the caret in the editor.
+    let clean = builder().clean(&html.replace('\u{200b}', "")).to_string();
     let mut root = parse(&clean);
     transform(&mut root, &mut |e| !(e.name == "img" && e.attr("src").is_none()));
     to_html(&root)
@@ -445,7 +450,7 @@ impl TextWriter {
             return;
         }
         let mut word = String::new();
-        for c in t.chars() {
+        for c in t.chars().filter(|c| *c != '\u{200b}') {
             if c.is_whitespace() && c != '\u{a0}' {
                 if !word.is_empty() {
                     self.word(&std::mem::take(&mut word));

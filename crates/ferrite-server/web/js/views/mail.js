@@ -12,6 +12,9 @@ import { h, clear, icon, avatar, menu, toast, errorToast, confirmDialog, bytes, 
 import { pickFolder } from './files-dialogs.js';
 import { accountDialog } from './mail-setup.js';
 import { openComposer } from './mail-compose.js';
+import { mdnBanner, attachedMessageButton, printMessage } from './mail-reading.js';
+import { outboxNavItem, renderOutbox } from './mail-outbox.js';
+import { mailSettingsDialog } from './mail-settings.js';
 
 const ROLE_ICONS = { inbox: 'mail', sent: 'send', drafts: 'edit', trash: 'trash', junk: 'junk', archive: 'archive' };
 const PAGE = 50;
@@ -104,6 +107,7 @@ export default async function render(root, ctx) {
           onclick: (e) => menu(e.currentTarget, [
             { label: 'Refresh', icon: 'refresh', run: () => refreshAccount(a.id) },
             { label: 'Edit account', icon: 'settings', run: () => editAccount(a) },
+            { label: 'Signature and aliases', icon: 'edit', run: () => mailSettingsDialog(ctx, { tab: 'aliases', accountId: a.id }) },
             'sep',
             { label: 'Remove account', icon: 'trash', danger: true, run: () => removeAccount(a) },
           ]),
@@ -129,8 +133,10 @@ export default async function render(root, ctx) {
         f.unread > 0 && f.role !== 'sent' && f.role !== 'drafts' && f.role !== 'trash' && h('span.badge.ml-unread', String(f.unread))));
       }
     }
+    if (state.accounts.length) tree.appendChild(outboxNavItem({ active: !!outboxCleanup, onOpen: openOutbox }));
     nav.appendChild(tree);
-    nav.appendChild(h('div.ml-nav-foot', h('button.btn.ghost.sm', { type: 'button', onclick: addAccount }, icon('plus', 'sm'), 'Add account')));
+    nav.appendChild(h('div.ml-nav-foot', h('button.btn.ghost.sm', { type: 'button', onclick: addAccount }, icon('plus', 'sm'), 'Add account'),
+      state.accounts.length > 0 && h('button.btn.ghost.icon.sm', { type: 'button', 'aria-label': 'Mail settings', title: 'Mail settings', onclick: () => mailSettingsDialog(ctx) }, icon('settings', 'sm'))));
   }
 
   // ---- message list -----------------------------------------------------------------------
@@ -239,7 +245,29 @@ export default async function render(root, ctx) {
         h('button.btn.primary', { type: 'button', onclick: addAccount }, icon('plus'), 'Add mail account')));
   }
 
+  // ---- outbox (shown in the reading pane) -------------------------------------------------------
+  let outboxCleanup = null;
+  function leaveOutbox() {
+    if (!outboxCleanup) return false;
+    outboxCleanup();
+    outboxCleanup = null;
+    outboxNavItem({ active: false, onOpen: openOutbox });
+    return true;
+  }
+  function openOutbox() {
+    leaveOutbox();
+    state.messageId = null;
+    state.thread = [];
+    state.openSeq++;
+    setUrl();
+    setPane('reader');
+    drawList();
+    outboxCleanup = renderOutbox(reader, ctx, { accounts: state.accounts, onBack: closeReader });
+    outboxNavItem({ active: true, onOpen: openOutbox });
+  }
+
   async function openMessage(id, { focusList = true } = {}) {
+    leaveOutbox();
     state.messageId = id;
     state.selected.clear();
     setUrl();
@@ -298,6 +326,8 @@ export default async function render(root, ctx) {
           { label: current.seen ? 'Mark unread' : 'Mark read', icon: 'mail', run: () => act(current.seen ? 'unread' : 'read', [current.id]) },
           { label: current.flagged ? 'Unflag' : 'Flag', icon: 'star', run: () => act(current.flagged ? 'unflag' : 'flag', [current.id]) },
           { label: 'Download (.eml)', icon: 'download', run: () => { location.href = `/api/mail/messages/${encodeURIComponent(current.id)}/raw`; } },
+          !isDraftFolder && { label: 'Forward as attachment', icon: 'paperclip', run: () => compose({ fromMessage: current.id, mode: 'forward_as_attachment' }) },
+          { label: 'Print', icon: 'file', run: () => printMessage(current.id) },
         ]),
       }, icon('more', 'sm'))));
     const cards = h('div.ml-cards');
@@ -353,6 +383,7 @@ export default async function render(root, ctx) {
   }
 
   function drawBody(body, message) {
+    body.appendChild(mdnBanner(message));
     if (message.has_html) {
       let remote = false;
       const banner = message.remote_content && h('div.ml-remote.small',
@@ -391,6 +422,7 @@ export default async function render(root, ctx) {
           icon('paperclip', 'sm'),
           h('a.ellipsis', { href, download: a.name, title: `Download ${a.name}` }, a.name),
           h('span.small.muted', bytes(a.size)),
+          attachedMessageButton(body, message, a),
           h('button.btn.ghost.icon.sm', { type: 'button', 'aria-label': `Save ${a.name} to Files`, title: 'Save to Files', onclick: () => saveToFiles(message.id, a) }, icon('files', 'sm')));
       })));
     }
@@ -408,6 +440,7 @@ export default async function render(root, ctx) {
   }
 
   function closeReader() {
+    leaveOutbox();
     state.messageId = null;
     state.thread = [];
     setUrl();
@@ -617,6 +650,7 @@ export default async function render(root, ctx) {
   }
 
   async function openFolder(accountId, folderId) {
+    if (leaveOutbox()) drawReaderEmpty();
     state.accountId = accountId;
     state.folderId = folderId;
     state.search = '';
@@ -697,6 +731,7 @@ export default async function render(root, ctx) {
   else if (ctx.query.compose) compose({ to: ctx.query.compose });
 
   return () => {
+    leaveOutbox();
     document.removeEventListener('keydown', onKey);
     offs.forEach((off) => off());
   };

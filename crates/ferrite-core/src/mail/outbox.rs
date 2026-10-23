@@ -267,7 +267,7 @@ impl Core {
         })
     }
 
-    async fn write_outbox(&self, user_id: &str, id: &str, account_id: &str, c: &Compose, send_at: DateTime<Utc>) -> Result<()> {
+    async fn write_outbox(&self, user_id: &str, id: &str, account_id: &str, c: &Compose, send_at: Option<DateTime<Utc>>) -> Result<()> {
         let recipients: Vec<&String> = c.to.iter().chain(&c.cc).chain(&c.bcc).collect();
         sqlx::query(
             "UPDATE mail_outbox SET account_id = ?, compose = ?, subject = ?, recipients = ?, send_at = ?, status = 'queued', attempts = 0,
@@ -304,7 +304,7 @@ impl Core {
             // Everything that would make sending fail for good is caught now.
             self.build_outgoing(user_id, &a, &stored, false).await?;
             let when = self.send_time(user_id, send_at).await?;
-            self.write_outbox(user_id, &id, &a.id, &stored, when).await
+            self.write_outbox(user_id, &id, &a.id, &stored, Some(when)).await
         }
         .await;
         if let Err(e) = r {
@@ -327,10 +327,24 @@ impl Core {
         let stored = self.store_outbox_files(user_id, id, c).await?;
         self.build_outgoing(user_id, &a, &stored, false).await?;
         let when = self.send_time(user_id, send_at).await?;
-        self.write_outbox(user_id, id, &a.id, &stored, when).await?;
+        self.write_outbox(user_id, id, &a.id, &stored, Some(when)).await?;
         self.forget_uploads(user_id, c).await;
         self.outbox_changed(user_id, id, "queued");
         wake_senders();
+        self.outbox_entry(user_id, id).await
+    }
+
+    /// Saves edits to a set-aside message without scheduling it (the composer was closed).
+    pub async fn mail_outbox_keep(&self, user_id: &str, id: &str, account_id: &str, c: &Compose) -> Result<OutboxEntry> {
+        let cur = self.outbox_entry(user_id, id).await?;
+        if cur.status == "sending" {
+            return Err(Error::conflict("this message is being sent right now"));
+        }
+        let a = self.mail_account(user_id, account_id).await?;
+        let stored = self.store_outbox_files(user_id, id, c).await?;
+        self.write_outbox(user_id, id, &a.id, &stored, None).await?;
+        self.forget_uploads(user_id, c).await;
+        self.outbox_changed(user_id, id, "held");
         self.outbox_entry(user_id, id).await
     }
 
