@@ -6,6 +6,12 @@
 #   sudo e2e/mail-server.sh start [DIR]    # Debian/Ubuntu: installs dovecot-imapd, dovecot-lmtpd, postfix if missing
 #   sudo e2e/mail-server.sh reset [DIR]    # empty every mailbox (fresh test run)
 #   sudo e2e/mail-server.sh stop [DIR]
+#   sudo e2e/mail-server.sh deliver USER FILE [DIR]   # deliver a message as mail arriving (runs Sieve)
+#
+# Several isolated instances can run at once: give each its own DIR and ports, and set
+# POSTFIX=0 for all but one (Postfix runs as the single system instance). SIEVE=1 adds
+# Sieve filtering on delivery and a ManageSieve server on $SIEVE_PORT (4190). EXTRA_USERS
+# ("carol dave") adds more mailboxes, each with password <name>-mail-pw.
 #
 # Mailboxes (domain example.test): alice@example.test / alice-mail-pw, bob@example.test /
 # bob-mail-pw. Ports: IMAP $IMAP_PORT (3143), SMTP $SMTP_PORT (3587). Then, for the Rust
@@ -23,6 +29,10 @@ IMAP_PORT=${IMAP_PORT:-3143}
 SMTP_PORT=${SMTP_PORT:-3587}
 LMTP_PORT=${LMTP_PORT:-3024}
 AUTH_PORT=${AUTH_PORT:-3012}
+SIEVE_PORT=${SIEVE_PORT:-4190}
+POSTFIX=${POSTFIX:-1}
+SIEVE=${SIEVE:-0}
+EXTRA_USERS=${EXTRA_USERS:-}
 
 need_root() {
   if [ "$(id -u)" != 0 ]; then echo "run as root (it starts system services)" >&2; exit 1; fi
@@ -32,6 +42,10 @@ install_packages() {
   if ! command -v dovecot >/dev/null || [ ! -e /usr/lib/dovecot/lmtp ] || ! command -v postfix >/dev/null; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get install -y dovecot-imapd dovecot-lmtpd postfix >/dev/null 2>&1 || { apt-get update >/dev/null && apt-get install -y dovecot-imapd dovecot-lmtpd postfix >/dev/null; }
+  fi
+  if [ "$SIEVE" = 1 ] && [ ! -e /usr/lib/dovecot/managesieve ]; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y dovecot-sieve dovecot-managesieved >/dev/null 2>&1 || { apt-get update >/dev/null && apt-get install -y dovecot-sieve dovecot-managesieved >/dev/null; }
   fi
   id vmail >/dev/null 2>&1 || useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin vmail
 }
@@ -43,13 +57,14 @@ write_dovecot() {
 alice@example.test:{PLAIN}alice-mail-pw::::::
 bob@example.test:{PLAIN}bob-mail-pw::::::
 EOF
+  for u in $EXTRA_USERS; do echo "$u@example.test:{PLAIN}$u-mail-pw::::::" >>"$DIR/users"; done
   chmod 640 "$DIR/users"
   chgrp dovecot "$DIR/users"
   cat >"$DIR/dovecot.conf" <<EOF
 base_dir = $DIR/run/
 state_dir = $DIR/state
 log_path = $DIR/dovecot.log
-protocols = imap lmtp
+protocols = imap lmtp $( [ "$SIEVE" = 1 ] && echo sieve )
 listen = 127.0.0.1
 ssl = no
 disable_plaintext_auth = no
@@ -114,6 +129,25 @@ protocol imap {
   mail_max_userip_connections = 100
 }
 EOF
+  if [ "$SIEVE" = 1 ]; then
+    cat >>"$DIR/dovecot.conf" <<EOF
+protocol lmtp {
+  mail_plugins = \$mail_plugins sieve
+}
+protocol lda {
+  mail_plugins = \$mail_plugins sieve
+}
+plugin {
+  sieve = file:$DIR/mail/%d/%n/sieve;active=$DIR/mail/%d/%n/active.sieve
+}
+service managesieve-login {
+  inet_listener sieve {
+    address = 127.0.0.1
+    port = $SIEVE_PORT
+  }
+}
+EOF
+  fi
 }
 
 configure_postfix() {
@@ -152,7 +186,7 @@ wait_port() {
 
 stop_all() {
   if [ -f "$DIR/dovecot.conf" ]; then dovecot -c "$DIR/dovecot.conf" stop 2>/dev/null || true; fi
-  postfix stop 2>/dev/null || true
+  if [ "$POSTFIX" = 1 ]; then postfix stop 2>/dev/null || true; fi
 }
 
 case "$cmd" in
@@ -162,13 +196,25 @@ case "$cmd" in
     stop_all
     sleep 0.5
     write_dovecot
-    configure_postfix
     # Daemons must not hold this script's stdout (callers may pipe it).
     dovecot -c "$DIR/dovecot.conf" </dev/null >/dev/null 2>&1
-    postfix start </dev/null >/dev/null 2>&1 || postfix reload </dev/null >/dev/null 2>&1
     wait_port "$IMAP_PORT"
-    wait_port "$SMTP_PORT"
-    echo "$(dovecot --version | cut -d' ' -f1) IMAP on 127.0.0.1:$IMAP_PORT, Postfix $(postconf -h mail_version) SMTP on 127.0.0.1:$SMTP_PORT, data in $DIR"
+    msg="$(dovecot --version | cut -d' ' -f1) IMAP on 127.0.0.1:$IMAP_PORT"
+    if [ "$SIEVE" = 1 ]; then wait_port "$SIEVE_PORT"; msg="$msg, ManageSieve on 127.0.0.1:$SIEVE_PORT"; fi
+    if [ "$POSTFIX" = 1 ]; then
+      configure_postfix
+      postfix start </dev/null >/dev/null 2>&1 || postfix reload </dev/null >/dev/null 2>&1
+      wait_port "$SMTP_PORT"
+      msg="$msg, Postfix $(postconf -h mail_version) SMTP on 127.0.0.1:$SMTP_PORT"
+    fi
+    echo "$msg, data in $DIR"
+    ;;
+  deliver)
+    need_root
+    # As if it arrived from outside: through Dovecot's delivery agent (Sieve runs).
+    user=${2:?user}; file=${3:?file}; DIR=${4:-${MAIL_TEST_DIR:-/tmp/ferrite-mail-server}}
+    case "$user" in *@*) ;; *) user="$user@example.test" ;; esac
+    /usr/lib/dovecot/dovecot-lda -c "$DIR/dovecot.conf" -d "$user" -f "sender@example.org" <"$file"
     ;;
   reset)
     need_root
@@ -182,7 +228,7 @@ case "$cmd" in
     echo "stopped"
     ;;
   *)
-    echo "usage: $0 start|reset|stop [DIR]" >&2
+    echo "usage: $0 start|reset|stop [DIR] | deliver USER FILE [DIR]" >&2
     exit 2
     ;;
 esac
