@@ -6,9 +6,9 @@
 //! folder ids (and cached messages) across renames.
 
 use super::Account;
+use super::delegation::MailRight;
 use super::imap::{self, ImapConn, MailStream, uid_set};
 use super::store::{FOLDER_COLS, Folder};
-use crate::mailer::SmtpSecurity;
 use crate::util::now;
 use crate::{Core, Error, Result};
 use serde::{Deserialize, Serialize};
@@ -195,9 +195,10 @@ pub fn parse_namespace(line: &str) -> Option<Namespaces> {
 const NS_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Asks the server for its namespaces on a short connection of its own (the IMAP library
-/// does not parse NAMESPACE responses). Servers without NAMESPACE give empty namespaces.
-pub async fn fetch_namespaces(s: &super::ServerSettings) -> Result<Namespaces> {
-    tokio::time::timeout(NS_TIMEOUT * 3, fetch_namespaces_inner(s))
+/// does not parse NAMESPACE responses), opened like every mail connection (`policy`: TLS
+/// verification, local servers). Servers without NAMESPACE give empty namespaces.
+pub async fn fetch_namespaces(s: &super::ServerSettings, policy: imap::ConnectPolicy) -> Result<Namespaces> {
+    tokio::time::timeout(NS_TIMEOUT * 3, fetch_namespaces_inner(s, policy))
         .await
         .map_err(|_| Error::Unavailable("asking the mail server for its namespaces timed out".into()))?
 }
@@ -219,55 +220,25 @@ async fn read_tagged<R: tokio::io::AsyncBufRead + Unpin>(r: &mut R, tag: &str, u
     }
 }
 
-async fn fetch_namespaces_inner(s: &super::ServerSettings) -> Result<Namespaces> {
-    let host = s.host.trim();
-    let tcp = tokio::time::timeout(NS_TIMEOUT, tokio::net::TcpStream::connect((host, s.port)))
-        .await
-        .map_err(|_| Error::Unavailable(format!("connecting to {host}:{} timed out", s.port)))?
-        .map_err(|e| Error::Unavailable(format!("cannot connect to {host}:{}: {e}", s.port)))?;
-    let mut ignored = Vec::new();
-    let stream = match s.security {
-        SmtpSecurity::Tls => imap::tls_wrap(host, tcp).await?,
-        SmtpSecurity::None => MailStream::Plain(tcp),
-        SmtpSecurity::Starttls => {
-            let mut r = BufReader::new(tcp);
-            let mut greeting = String::new();
-            tokio::time::timeout(NS_TIMEOUT, r.read_line(&mut greeting))
-                .await
-                .map_err(|_| Error::Unavailable("no IMAP greeting".into()))?
-                .map_err(|e| Error::Unavailable(format!("IMAP: {e}")))?;
-            r.get_mut()
-                .write_all(b"n0 STARTTLS\r\n")
-                .await
-                .map_err(|e| Error::Unavailable(format!("IMAP: {e}")))?;
-            let st = read_tagged(&mut r, "n0", &mut ignored).await?;
-            if !st.starts_with("OK") {
-                return Err(Error::Unavailable(format!("STARTTLS refused: {st}")));
-            }
-            imap::tls_wrap(host, r.into_inner()).await?
-        }
-    };
+async fn fetch_namespaces_inner(s: &super::ServerSettings, policy: imap::ConnectPolicy) -> Result<Namespaces> {
+    use base64::Engine;
+    // Connected, secured and greeted; the rest is spoken directly.
+    let stream: MailStream = ImapConn::open(s, policy).await?.into_inner();
     let mut r = BufReader::new(stream);
-    if s.security != SmtpSecurity::Starttls {
-        let mut greeting = String::new();
-        tokio::time::timeout(NS_TIMEOUT, r.read_line(&mut greeting))
-            .await
-            .map_err(|_| Error::Unavailable("no IMAP greeting".into()))?
-            .map_err(|e| Error::Unavailable(format!("IMAP: {e}")))?;
-    }
-    let send = |cmd: String| cmd.into_bytes();
-    r.get_mut()
-        .write_all(&send(format!("n1 LOGIN {} {}\r\n", imap::quote(&s.username), imap::quote(&s.password))))
-        .await
-        .map_err(|e| Error::Unavailable(format!("IMAP: {e}")))?;
+    let io = |e: std::io::Error| Error::Unavailable(format!("IMAP: {e}"));
+    let login = if s.xoauth2 {
+        let token = base64::engine::general_purpose::STANDARD.encode(super::oauth::xoauth2(&s.username, &s.password));
+        format!("n1 AUTHENTICATE XOAUTH2 {token}\r\n")
+    } else {
+        format!("n1 LOGIN {} {}\r\n", imap::quote(&s.username), imap::quote(&s.password))
+    };
+    r.get_mut().write_all(login.as_bytes()).await.map_err(io)?;
+    let mut ignored = Vec::new();
     let st = read_tagged(&mut r, "n1", &mut ignored).await?;
     if !st.starts_with("OK") {
         return Err(Error::bad(format!("IMAP login failed: {st}")));
     }
-    r.get_mut()
-        .write_all(b"n2 NAMESPACE\r\n")
-        .await
-        .map_err(|e| Error::Unavailable(format!("IMAP: {e}")))?;
+    r.get_mut().write_all(b"n2 NAMESPACE\r\n").await.map_err(io)?;
     let mut untagged = Vec::new();
     let st = read_tagged(&mut r, "n2", &mut untagged).await?;
     let _ = r.get_mut().write_all(b"n3 LOGOUT\r\n").await;
@@ -453,7 +424,8 @@ impl Core {
     }
 
     pub async fn load_namespaces(&self, a: &Account) -> Result<Namespaces> {
-        let ns = fetch_namespaces(&self.imap_settings(a)?).await?;
+        let fresh = self.mail_fresh_credentials(a).await?;
+        let ns = fetch_namespaces(&self.imap_settings(&fresh)?, self.mail_policy().await).await?;
         self.account_prefs_row(&a.id).await?;
         sqlx::query("UPDATE mail_account_prefs SET namespaces = ? WHERE account_id = ?")
             .bind(serde_json::to_string(&ns)?)
@@ -461,14 +433,12 @@ impl Core {
             .execute(&self.db)
             .await?;
         self.mark_shared(a, &ns, None).await?;
-        self.hub
-            .publish([a.user_id.as_str()], &json!({"type": "mail.changed", "account_id": a.id, "what": "folders"}));
+        self.mail_publish(a, &json!({"type": "mail.changed", "account_id": a.id, "what": "folders"}));
         Ok(ns)
     }
 
     fn folders_changed(&self, a: &Account) {
-        self.hub
-            .publish([a.user_id.as_str()], &json!({"type": "mail.changed", "account_id": a.id, "what": "folders"}));
+        self.mail_publish(a, &json!({"type": "mail.changed", "account_id": a.id, "what": "folders"}));
     }
 
     /// The delimiter to use under `parent` (or at the top).
@@ -502,7 +472,7 @@ impl Core {
 
     /// Creates a folder (subscribed), at the top or under `parent_id`.
     pub async fn create_mail_folder(&self, user_id: &str, account_id: &str, name: &str, parent_id: Option<&str>) -> Result<Folder> {
-        let a = self.mail_account(user_id, account_id).await?;
+        let a = self.mail_access(user_id, account_id, MailRight::Modify).await?;
         let parent = match parent_id.filter(|p| !p.is_empty()) {
             Some(pid) => {
                 let (pa, p) = self.mail_folder(user_id, pid).await?;
@@ -534,7 +504,7 @@ impl Core {
     /// Renames a folder and/or moves it under another parent ("" for the top). Its
     /// subfolders move along; cached messages stay.
     pub async fn rename_mail_folder(&self, user_id: &str, folder_id: &str, name: Option<&str>, parent_id: Option<&str>) -> Result<Folder> {
-        let (a, f) = self.mail_folder(user_id, folder_id).await?;
+        let (a, f) = self.mail_folder_access(user_id, folder_id, MailRight::Modify).await?;
         if f.role.as_deref() == Some("inbox") {
             return Err(Error::bad("the inbox can't be renamed or moved"));
         }
@@ -639,7 +609,7 @@ impl Core {
 
     /// Deletes a folder, its subfolders and their messages on the server.
     pub async fn delete_mail_folder(&self, user_id: &str, folder_id: &str) -> Result<()> {
-        let (a, f) = self.mail_folder(user_id, folder_id).await?;
+        let (a, f) = self.mail_folder_access(user_id, folder_id, MailRight::Modify).await?;
         if f.role.as_deref() == Some("inbox") {
             return Err(Error::bad("the inbox can't be deleted"));
         }
@@ -690,7 +660,7 @@ impl Core {
     }
 
     pub async fn subscribe_mail_folder(&self, user_id: &str, folder_id: &str, on: bool) -> Result<Folder> {
-        let (a, f) = self.mail_folder(user_id, folder_id).await?;
+        let (a, f) = self.mail_folder_access(user_id, folder_id, MailRight::Modify).await?;
         if !on && f.role.as_deref() == Some("inbox") {
             return Err(Error::bad("the inbox is always shown"));
         }
@@ -708,7 +678,7 @@ impl Core {
 
     /// Marks every message of a folder read (also those not cached).
     pub async fn mark_folder_read(&self, user_id: &str, folder_id: &str) -> Result<()> {
-        let (a, f) = self.mail_folder(user_id, folder_id).await?;
+        let (a, f) = self.mail_folder_access(user_id, folder_id, MailRight::Modify).await?;
         if !f.selectable {
             return Err(Error::bad("that folder holds no messages"));
         }
@@ -733,7 +703,7 @@ impl Core {
 
     /// Deletes every message of a folder for good.
     pub async fn empty_mail_folder(&self, user_id: &str, folder_id: &str) -> Result<u32> {
-        let (a, f) = self.mail_folder(user_id, folder_id).await?;
+        let (a, f) = self.mail_folder_access(user_id, folder_id, MailRight::Modify).await?;
         if !f.selectable {
             return Err(Error::bad("that folder holds no messages"));
         }
@@ -802,7 +772,7 @@ impl Core {
 
     /// Drops a folder's cache and syncs it again from scratch (also re-reads namespaces).
     pub async fn repair_mail_folder(&self, user_id: &str, folder_id: &str) -> Result<()> {
-        let (a, f) = self.mail_folder(user_id, folder_id).await?;
+        let (a, f) = self.mail_folder_access(user_id, folder_id, MailRight::Modify).await?;
         sqlx::query("DELETE FROM mail_messages WHERE folder_id = ?")
             .bind(&f.id)
             .execute(&self.db)
@@ -821,33 +791,6 @@ impl Core {
             self.sync_mail_folder(&a, &f.id).await?;
         }
         self.mail_changed(&a, &[&f.id]);
-        Ok(())
-    }
-
-    /// Marks messages as junk (or not): the `$Junk`/`$NotJunk` keywords, and, when the account
-    /// says so, a move to the Junk folder (or back to the inbox).
-    pub async fn mail_mark_junk(&self, user_id: &str, ids: &[String], junk: bool) -> Result<()> {
-        let (on, off) = if junk {
-            (super::tags::JUNK, super::tags::NOT_JUNK)
-        } else {
-            (super::tags::NOT_JUNK, super::tags::JUNK)
-        };
-        self.mail_set_keyword(user_id, ids, off, false).await?;
-        self.mail_set_keyword(user_id, ids, on, true).await?;
-        for (a, f, msgs) in self.group_messages(user_id, ids).await? {
-            if !self.account_prefs_row(&a.id).await?.move_junk {
-                continue;
-            }
-            let in_junk = f.role.as_deref() == Some("junk");
-            if junk && !in_junk {
-                let dest = self.ensure_role_folder(&a, "junk", "Junk").await?;
-                self.move_group(&a, &f, &msgs, &dest).await?;
-            } else if !junk && in_junk {
-                if let Some(inbox) = self.folder_by_role(&a.id, "inbox").await? {
-                    self.move_group(&a, &f, &msgs, &inbox).await?;
-                }
-            }
-        }
         Ok(())
     }
 

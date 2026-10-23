@@ -286,9 +286,15 @@ pub struct Widgets {
 }
 
 impl Core {
+    /// Ids of the accounts `user_id` may read (own and delegated), as a JSON array for SQL.
+    async fn readable_accounts(&self, user_id: &str) -> Result<String> {
+        let ids: Vec<String> = self.mail_accounts_for(user_id).await?.into_iter().map(|a| a.id).collect();
+        Ok(serde_json::to_string(&ids)?)
+    }
+
     /// Background refresh of the user's inboxes (debounced per folder).
     async fn refresh_inboxes(&self, user_id: &str) -> Result<Vec<Account>> {
-        let accounts = self.mail_accounts(user_id).await?;
+        let accounts = self.mail_accounts_for(user_id).await?;
         for a in &accounts {
             if let Some(inbox) = self.folder_by_role(&a.id, "inbox").await? {
                 self.refresh_folder_soon(a, &inbox.id);
@@ -299,6 +305,7 @@ impl Core {
 
     /// A page of a view, newest (or oldest) first.
     pub async fn mail_view(&self, user_id: &str, view: &View, before: Option<&str>, unread_only: bool, sort: Sort, limit: i64) -> Result<MessagePage> {
+        let scope = self.readable_accounts(user_id).await?;
         let accounts = self.refresh_inboxes(user_id).await?;
         if let Some(criteria) = view.server_criteria() {
             let key = format!("view:{user_id}:{criteria}");
@@ -339,9 +346,9 @@ impl Core {
         };
         let sql = format!(
             "SELECT {MSG_COLS} FROM mail_messages m JOIN mail_folders f ON f.id = m.folder_id JOIN mail_accounts a ON a.id = m.account_id
-             WHERE a.user_id = ? AND f.shared = 0 AND {cond} AND (? = 0 OR m.seen = 0) AND (? IS NULL OR {cmp}) ORDER BY {order} LIMIT ?"
+             WHERE m.account_id IN (SELECT value FROM json_each(?)) AND f.shared = 0 AND {cond} AND (? = 0 OR m.seen = 0) AND (? IS NULL OR {cmp}) ORDER BY {order} LIMIT ?"
         );
-        let mut query = sqlx::query_as::<_, MessageSummary>(sqlx::AssertSqlSafe(sql)).bind(user_id);
+        let mut query = sqlx::query_as::<_, MessageSummary>(sqlx::AssertSqlSafe(sql)).bind(&scope);
         if let Some(b) = bind {
             query = query.bind(b);
         }
@@ -475,6 +482,7 @@ impl Core {
 
     /// Advanced search over the cache and the server.
     pub async fn mail_search_advanced(&self, user_id: &str, f: &SearchFilter, limit: usize) -> Result<Vec<MessageSummary>> {
+        let scope = self.readable_accounts(user_id).await?;
         if f.is_empty() {
             return Ok(vec![]);
         }
@@ -499,8 +507,8 @@ impl Core {
         let fts_body = fts(given(&f.body)).await?;
         // Server side.
         let accounts: Vec<Account> = match &f.account_id {
-            Some(id) => vec![self.mail_account(user_id, id).await?],
-            None => self.mail_accounts(user_id).await?,
+            Some(id) => vec![self.mail_access(user_id, id, super::delegation::MailRight::Read).await?],
+            None => self.mail_accounts_for(user_id).await?,
         };
         let criteria = imap_criteria(f, body_search);
         let mut server_ids: Vec<String> = Vec::new();
@@ -534,12 +542,12 @@ impl Core {
         let (cond, binds) = sql_condition(f, body_search, fts_q.as_deref(), fts_body.as_deref());
         let sql = format!(
             "SELECT {MSG_COLS} FROM mail_messages m JOIN mail_folders f ON f.id = m.folder_id JOIN mail_accounts a ON a.id = m.account_id
-             WHERE a.user_id = ? AND (? IS NULL OR m.account_id = ?) AND (? IS NULL OR m.folder_id = ?) AND (? = 0 OR f.role = 'inbox')
+             WHERE m.account_id IN (SELECT value FROM json_each(?)) AND (? IS NULL OR m.account_id = ?) AND (? IS NULL OR m.folder_id = ?) AND (? = 0 OR f.role = 'inbox')
              AND ((({cond})) OR m.id IN (SELECT value FROM json_each(?))) AND (? = 0 OR m.has_attachments = 1)
              ORDER BY m.date DESC LIMIT ?"
         );
         let mut q = sqlx::query_as::<_, MessageSummary>(sqlx::AssertSqlSafe(sql))
-            .bind(user_id)
+            .bind(&scope)
             .bind(&f.account_id)
             .bind(&f.account_id)
             .bind(&f.folder_id)
@@ -559,35 +567,36 @@ impl Core {
     }
 
     pub async fn mail_widgets(&self, user_id: &str, limit: i64) -> Result<Widgets> {
+        let scope = self.readable_accounts(user_id).await?;
         let accounts = self.refresh_inboxes(user_id).await?;
         let unread_count: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(f.unread), 0) FROM mail_folders f JOIN mail_accounts a ON a.id = f.account_id WHERE a.user_id = ? AND f.role = 'inbox'",
+            "SELECT COALESCE(SUM(f.unread), 0) FROM mail_folders f JOIN mail_accounts a ON a.id = f.account_id WHERE f.account_id IN (SELECT value FROM json_each(?)) AND f.role = 'inbox'",
         )
-        .bind(user_id)
+        .bind(&scope)
         .fetch_one(&self.db)
         .await?;
         let base = format!(
             "SELECT {MSG_COLS} FROM mail_messages m JOIN mail_folders f ON f.id = m.folder_id JOIN mail_accounts a ON a.id = m.account_id
-             WHERE a.user_id = ? AND f.role = 'inbox'"
+             WHERE f.account_id IN (SELECT value FROM json_each(?)) AND f.role = 'inbox'"
         );
         let unread: Vec<MessageSummary> = sqlx::query_as(sqlx::AssertSqlSafe(format!("{base} AND m.seen = 0 ORDER BY m.date DESC LIMIT ?")))
-            .bind(user_id)
+            .bind(&scope)
             .bind(limit)
             .fetch_all(&self.db)
             .await?;
         let important: Vec<MessageSummary> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "{base} AND m.keywords LIKE ? ESCAPE '\\' ORDER BY m.date DESC LIMIT ?"
         )))
-        .bind(user_id)
+        .bind(&scope)
         .bind(keyword_like(IMPORTANT))
         .bind(limit)
         .fetch_all(&self.db)
         .await?;
         let important_unread: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM mail_messages m JOIN mail_folders f ON f.id = m.folder_id JOIN mail_accounts a ON a.id = m.account_id
-             WHERE a.user_id = ? AND f.role = 'inbox' AND m.seen = 0 AND m.keywords LIKE ? ESCAPE '\\'",
+             WHERE m.account_id IN (SELECT value FROM json_each(?)) AND f.role = 'inbox' AND m.seen = 0 AND m.keywords LIKE ? ESCAPE '\\'",
         )
-        .bind(user_id)
+        .bind(&scope)
         .bind(keyword_like(IMPORTANT))
         .fetch_one(&self.db)
         .await?;
@@ -604,6 +613,7 @@ impl Core {
     /// cached messages (preferring the inbox, then anything but Trash and Junk), else by
     /// asking each account's inbox and archive.
     pub async fn mail_resolve(&self, user_id: &str, id: Option<&str>, message_id: Option<&str>) -> Result<String> {
+        let scope = self.readable_accounts(user_id).await?;
         if let Some(id) = id {
             if self.message_row(user_id, id).await.is_ok() {
                 return Ok(id.to_string());
@@ -616,10 +626,10 @@ impl Core {
         let find = || async {
             sqlx::query_scalar::<_, String>(
                 "SELECT m.id FROM mail_messages m JOIN mail_folders f ON f.id = m.folder_id JOIN mail_accounts a ON a.id = m.account_id
-                 WHERE a.user_id = ? AND m.message_id = ?
+                 WHERE m.account_id IN (SELECT value FROM json_each(?)) AND m.message_id = ?
                  ORDER BY f.role = 'inbox' DESC, (f.role IN ('trash', 'junk')) ASC, m.date DESC LIMIT 1",
             )
-            .bind(user_id)
+            .bind(&scope)
             .bind(&mid)
             .fetch_optional(&self.db)
             .await
@@ -628,7 +638,7 @@ impl Core {
             return Ok(found);
         }
         let criteria = format!("HEADER Message-ID {}", quote(&format!("<{mid}>")));
-        for a in self.mail_accounts(user_id).await? {
+        for a in self.mail_accounts_for(user_id).await? {
             for role in ["inbox", "archive", "snoozed", "sent"] {
                 if let Some(f) = self.folder_by_role(&a.id, role).await? {
                     if let Ok(ids) = self.server_matches(&a, &f, &criteria).await {

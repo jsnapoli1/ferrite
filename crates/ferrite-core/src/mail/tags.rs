@@ -238,13 +238,14 @@ impl Core {
         if tag.is_default {
             return Err(Error::bad("the default tags can be renamed but not deleted"));
         }
-        let ids: Vec<String> = sqlx::query_scalar(
-            "SELECT m.id FROM mail_messages m JOIN mail_accounts a ON a.id = m.account_id WHERE a.user_id = ? AND m.keywords LIKE ? ESCAPE '\\'",
-        )
-        .bind(user_id)
-        .bind(keyword_like(&tag.keyword))
-        .fetch_all(&self.db)
-        .await?;
+        let ids: Vec<String> =
+            sqlx::query_scalar("SELECT m.id FROM mail_messages m WHERE m.account_id IN (SELECT value FROM json_each(?)) AND m.keywords LIKE ? ESCAPE '\\'")
+                .bind(serde_json::to_string(
+                    &self.mail_accounts_for(user_id).await?.into_iter().map(|a| a.id).collect::<Vec<_>>(),
+                )?)
+                .bind(keyword_like(&tag.keyword))
+                .fetch_all(&self.db)
+                .await?;
         for chunk in ids.chunks(500) {
             if let Err(e) = self.mail_set_keyword(user_id, chunk, &tag.keyword, false).await {
                 tracing::info!(error = %e, "removing a deleted tag from messages failed");

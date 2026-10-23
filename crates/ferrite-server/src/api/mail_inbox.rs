@@ -1,5 +1,5 @@
-//! Webmail inbox management API: preferences (and the admin defaults), tags, important and
-//! junk marking, snoozing, quick actions, folder management, unified views, advanced search,
+//! Webmail inbox management API: preferences (and the admin defaults), tags and important
+//! marking, snoozing, quick actions, folder management, unified views, advanced search,
 //! Home widgets, deep-link resolution and `mailto:` parsing. Everything requires the `mail`
 //! scope and only touches the caller's own accounts.
 
@@ -24,7 +24,6 @@ pub fn router() -> Router<AppState> {
         .route("/api/mail/tags", get(tags).post(create_tag))
         .route("/api/mail/tags/{id}", patch(update_tag).delete(delete_tag))
         .route("/api/mail/keywords", post(set_keyword))
-        .route("/api/mail/junk", post(junk))
         .route("/api/mail/snooze", post(snooze))
         .route("/api/mail/unsnooze", post(unsnooze))
         .route("/api/mail/snoozed", get(snoozed))
@@ -135,19 +134,6 @@ async fn set_keyword(State(s): State<AppState>, auth: Auth, Json(b): Json<Keywor
     scope(&auth)?;
     some_ids(&b.ids)?;
     s.core.mail_set_keyword(&auth.user.id, &b.ids, &b.keyword, b.on).await?;
-    Ok(ok())
-}
-
-#[derive(Deserialize)]
-struct JunkBody {
-    ids: Vec<String>,
-    junk: bool,
-}
-
-async fn junk(State(s): State<AppState>, auth: Auth, Json(b): Json<JunkBody>) -> ApiResult<Json<Value>> {
-    scope(&auth)?;
-    some_ids(&b.ids)?;
-    s.core.mail_mark_junk(&auth.user.id, &b.ids, b.junk).await?;
     Ok(ok())
 }
 
@@ -313,7 +299,10 @@ async fn set_inbox_settings(State(s): State<AppState>, auth: Auth, Path(id): Pat
 /// Retrains the account's importance classifier now.
 async fn train_classifier(State(s): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     scope(&auth)?;
-    let a = s.core.mail_account(&auth.user.id, &id).await?;
+    let a = s
+        .core
+        .mail_access(&auth.user.id, &id, ferrite_core::mail::delegation::MailRight::Modify)
+        .await?;
     Ok(Json(json!({"classifier": s.core.train_classifier(&a).await?})))
 }
 

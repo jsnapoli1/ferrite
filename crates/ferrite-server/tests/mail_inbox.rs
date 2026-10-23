@@ -57,6 +57,7 @@ impl Target {
             security: SmtpSecurity::None,
             username: self.user.clone(),
             password: self.pass.clone(),
+            xoauth2: false,
         }
     }
 }
@@ -149,8 +150,26 @@ fn find<'a>(list: &'a Value, subject: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no {subject:?} in {list}"))
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn inbox_management_against_a_real_imap_server() {
+#[test]
+fn inbox_management_against_a_real_imap_server() {
+    // The scenario is one very large future (unoptimized builds): run it on a thread with
+    // room for it rather than the test harness's default stack.
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(Box::pin(scenario()))
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+async fn scenario() {
     let Some(t) = target() else {
         eprintln!("FERRITE_TEST_IMAP is not set; skipping the real-server inbox test (see the top of tests/mail_inbox.rs)");
         return;
@@ -264,6 +283,8 @@ async fn inbox_management_against_a_real_imap_server() {
         .await;
     let user_id = setup["user"]["id"].as_str().unwrap().to_string();
     let (smtp_port, _sink) = ferrite_core::mailer::sink::sink().await;
+    // The test servers are on 127.0.0.1, which an admin has to allow.
+    b.send(Method::PATCH, "/api/admin/mail/settings", json!({"allow_local_servers": true})).await;
     let account = b
         .post(
             "/api/mail/accounts",
@@ -636,13 +657,13 @@ async fn inbox_management_against_a_real_imap_server() {
 
     // ---- junk ------------------------------------------------------------------------------
     let ancient = find(&list(inbox.clone()).await, "Ancient history")["id"].as_str().unwrap().to_string();
-    b.post("/api/mail/junk", json!({"ids": [ancient], "junk": true})).await;
+    b.post("/api/mail/actions", json!({"ids": [ancient], "action": "spam"})).await;
     check.select("Junk").await.unwrap();
     assert_eq!(check.uid_search("KEYWORD $Junk").await.unwrap().len(), 1, "moved to Junk with $Junk");
     let junk_id = role(&folders().await, "junk").unwrap();
     b.post(&format!("/api/mail/accounts/{acc}/sync"), json!({"folder_id": junk_id})).await;
     let in_junk = list(junk_id.clone()).await;
-    b.post("/api/mail/junk", json!({"ids": ids_of(&in_junk), "junk": false})).await;
+    b.post("/api/mail/actions", json!({"ids": ids_of(&in_junk), "action": "not_spam"})).await;
     check.select("INBOX").await.unwrap();
     assert_eq!(check.uid_search("KEYWORD $NotJunk").await.unwrap().len(), 1, "back in the inbox as not junk");
 

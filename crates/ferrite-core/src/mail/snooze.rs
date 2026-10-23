@@ -113,10 +113,7 @@ impl Core {
             if f.id != dest.id {
                 self.move_group(&a, &f, &msgs, &dest).await?;
             }
-            self.hub.publish(
-                [a.user_id.as_str()],
-                &serde_json::json!({"type": "mail.changed", "account_id": a.id, "what": "snoozed"}),
-            );
+            self.mail_publish(&a, &serde_json::json!({"type": "mail.changed", "account_id": a.id, "what": "snoozed"}));
         }
         Ok(())
     }
@@ -137,10 +134,7 @@ impl Core {
                 .bind(serde_json::to_string(&mids)?)
                 .execute(&self.db)
                 .await?;
-            self.hub.publish(
-                [a.user_id.as_str()],
-                &serde_json::json!({"type": "mail.changed", "account_id": a.id, "what": "snoozed"}),
-            );
+            self.mail_publish(&a, &serde_json::json!({"type": "mail.changed", "account_id": a.id, "what": "snoozed"}));
         }
         Ok(())
     }
@@ -178,10 +172,11 @@ impl Core {
     /// The user's snoozed messages (for the Snoozed folder's "until" labels).
     pub async fn mail_snoozed(&self, user_id: &str) -> Result<Vec<Snoozed>> {
         Ok(sqlx::query_as(
-            "SELECT s.account_id, s.message_id, s.subject, s.src_folder, s.until FROM mail_snoozed s JOIN mail_accounts a ON a.id = s.account_id
-             WHERE a.user_id = ? ORDER BY s.until",
+            "SELECT account_id, message_id, subject, src_folder, until FROM mail_snoozed WHERE account_id IN (SELECT value FROM json_each(?)) ORDER BY until",
         )
-        .bind(user_id)
+        .bind(serde_json::to_string(
+            &self.mail_accounts_for(user_id).await?.into_iter().map(|a| a.id).collect::<Vec<_>>(),
+        )?)
         .fetch_all(&self.db)
         .await?)
     }
@@ -252,10 +247,7 @@ impl Core {
         self.drop_snoozed(&a.id, &done).await?;
         if woken > 0 {
             let _: sync::SyncReport = self.sync_mail_folder(a, &snoozed.id).await.unwrap_or_default();
-            self.hub.publish(
-                [a.user_id.as_str()],
-                &serde_json::json!({"type": "mail.changed", "account_id": a.id, "what": "snoozed"}),
-            );
+            self.mail_publish(&a, &serde_json::json!({"type": "mail.changed", "account_id": a.id, "what": "snoozed"}));
         }
         Ok(woken)
     }

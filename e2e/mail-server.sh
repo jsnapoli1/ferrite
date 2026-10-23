@@ -11,7 +11,11 @@
 # Several isolated instances can run at once: give each its own DIR and ports, and set
 # POSTFIX=0 for all but one (Postfix runs as the single system instance). SIEVE=1 adds
 # Sieve filtering on delivery and a ManageSieve server on $SIEVE_PORT (4190). EXTRA_USERS
-# ("carol dave") adds more mailboxes, each with password <name>-mail-pw. SHARED=1 adds ACLs
+# ("carol dave") adds more mailboxes, each with password <name>-mail-pw. QUOTA=1 gives every
+# mailbox a 10 MiB storage quota (IMAP QUOTA). OAUTH2_INTROSPECTION_URL=http://… also accepts
+# OAuth 2.0 bearer tokens (SASL XOAUTH2/OAUTHBEARER), validated by POSTing them to that token
+# introspection endpoint (RFC 7662; it answers {"active": true, "username": "<user>"}).
+# SHARED=1 adds ACLs
 # and a shared namespace ("shared/<user>/..."): folders another user may read (e.g.
 # `doveadm -c DIR/dovecot.conf acl set -u carol@example.test INBOX user=alice@example.test
 # lookup read`) show up in that user's folder list.
@@ -37,6 +41,8 @@ POSTFIX=${POSTFIX:-1}
 SIEVE=${SIEVE:-0}
 SHARED=${SHARED:-0}
 EXTRA_USERS=${EXTRA_USERS:-}
+QUOTA=${QUOTA:-0}
+OAUTH2_INTROSPECTION_URL=${OAUTH2_INTROSPECTION_URL:-}
 
 need_root() {
   if [ "$(id -u)" != 0 ]; then echo "run as root (it starts system services)" >&2; exit 1; fi
@@ -72,7 +78,7 @@ protocols = imap lmtp $( [ "$SIEVE" = 1 ] && echo sieve )
 listen = 127.0.0.1
 ssl = no
 disable_plaintext_auth = no
-auth_mechanisms = plain login
+auth_mechanisms = plain login $( [ -n "$OAUTH2_INTROSPECTION_URL" ] && echo xoauth2 oauthbearer )
 mail_location = maildir:$DIR/mail/%d/%n/Maildir
 mail_uid = vmail
 mail_gid = vmail
@@ -83,6 +89,7 @@ mail_plugins = \$mail_plugins
 passdb {
   driver = passwd-file
   args = scheme=PLAIN username_format=%u $DIR/users
+$( [ -n "$OAUTH2_INTROSPECTION_URL" ] && echo "  mechanisms = plain login" )
 }
 userdb {
   driver = static
@@ -133,6 +140,35 @@ protocol imap {
   mail_max_userip_connections = 100
 }
 EOF
+  if [ -n "$OAUTH2_INTROSPECTION_URL" ]; then
+    cat >"$DIR/dovecot-oauth2.conf.ext" <<EOF
+introspection_mode = post
+introspection_url = $OAUTH2_INTROSPECTION_URL
+username_attribute = username
+active_attribute = active
+active_value = true
+EOF
+    cat >>"$DIR/dovecot.conf" <<EOF
+passdb {
+  driver = oauth2
+  mechanisms = xoauth2 oauthbearer
+  args = $DIR/dovecot-oauth2.conf.ext
+}
+EOF
+  fi
+  if [ "$QUOTA" = 1 ]; then
+    cat >>"$DIR/dovecot.conf" <<EOF
+mail_plugins = \$mail_plugins quota
+protocol imap {
+  mail_plugins = \$mail_plugins imap_quota
+}
+plugin {
+  quota = count:User quota
+  quota_rule = *:storage=10M
+  quota_vsizes = yes
+}
+EOF
+  fi
   if [ "$SHARED" = 1 ]; then
     # ACLs, and other users' folders under shared/<user>/ (with private \Seen flags).
     sed -i 's/^mail_plugins = \$mail_plugins$/mail_plugins = $mail_plugins acl/' "$DIR/dovecot.conf"

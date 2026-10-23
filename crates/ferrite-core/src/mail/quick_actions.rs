@@ -18,7 +18,7 @@ pub enum Step {
     Flag,
     /// The Important tag ($label1).
     Important,
-    /// Junk (moves to the Junk folder when the account says so).
+    /// Report spam (moves to the Junk folder when the account says so).
     Spam,
     Tag {
         keyword: String,
@@ -134,7 +134,7 @@ impl Core {
     }
 
     pub async fn create_mail_quick_action(&self, user_id: &str, account_id: &str, input: &QuickActionInput) -> Result<QuickAction> {
-        let a = self.mail_account(user_id, account_id).await?;
+        let a = self.mail_access(user_id, account_id, super::delegation::MailRight::Modify).await?;
         let name = self.check_steps(user_id, &a.id, input).await?;
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mail_quick_actions WHERE account_id = ?")
             .bind(&a.id)
@@ -192,7 +192,9 @@ impl Core {
                 Step::Flag => self.mail_set_flags(user_id, ids, FlagAction::Flag).await?,
                 Step::Important => self.mail_set_keyword(user_id, ids, super::tags::IMPORTANT, true).await?,
                 Step::Tag { keyword } => self.mail_set_keyword(user_id, ids, keyword, true).await?,
-                Step::Spam => self.mail_mark_junk(user_id, ids, true).await?,
+                Step::Spam => {
+                    self.mail_report_spam(user_id, ids, super::antispam::Verdict::Spam).await?;
+                }
                 Step::Move { folder_id } => self.mail_move(user_id, ids, folder_id).await?,
                 Step::Delete => self.mail_delete(user_id, ids).await?,
             }

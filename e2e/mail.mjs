@@ -122,6 +122,8 @@ try {
   const page = await newPage('desktop');
   current = page;
   await page.api('POST', '/api/setup', { username: 'alice', display_name: 'Alice Archer', password: 'alice-password' });
+  // The test mail server is on localhost, which a fresh server refuses until an admin allows it.
+  await page.api('PATCH', '/api/admin/mail/settings', { allow_local_servers: true });
   await page.api('POST', '/api/contacts', { name: 'Bob Builder', emails: ['bob@example.test'] });
   const me = await page.api('GET', '/api/me');
   const up = await page.request.put(`${base}/api/files/${me.root_id}/upload?name=agenda.md`, { headers: H, data: '# Agenda\n' });

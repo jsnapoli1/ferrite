@@ -1,10 +1,15 @@
 //! Mail preferences: per user (layout, density, threading, sorting, search), with defaults an
-//! administrator can set for everyone (kv `mail.defaults`), and per-account inbox settings
-//! (importance classification, junk handling, trash retention, the folders used for each role).
+//! administrator can set for everyone, and per-account inbox settings (importance
+//! classification, junk handling, trash retention, the folders used for each role).
+//!
+//! The admin defaults for layout, threading, sorting, density and importance classification
+//! are the Mail admin settings' (`ui_defaults`, `importance_default` in `settings`); the other
+//! defaults are kept in kv `mail.defaults`.
 //!
 //! A user's stored preferences only hold what they changed; everything else follows the
 //! admin defaults, then the built-in ones.
 
+use super::delegation::MailRight;
 use crate::{Core, Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -150,7 +155,18 @@ impl Core {
             None => Value::Null,
         };
         let base = serde_json::to_value(MailDefaults::default())?;
-        Ok(serde_json::from_value(layered(&[&base, &stored])).unwrap_or_default())
+        let mut d: MailDefaults = serde_json::from_value(layered(&[&base, &stored])).unwrap_or_default();
+        let ui = self.mail_ui_defaults().await;
+        d.prefs.layout = match ui.layout.as_str() {
+            "list" => Layout::List,
+            "horizontal-split" => Layout::Horizontal,
+            _ => Layout::Vertical,
+        };
+        d.prefs.sort = if ui.sort == "oldest" { Sort::Oldest } else { Sort::Newest };
+        d.prefs.threaded = ui.threaded;
+        d.prefs.compact = ui.compact;
+        d.classify = self.mail_importance_default().await;
+        Ok(d)
     }
 
     /// Changes the administrator's defaults (keys of `patch` only).
@@ -164,8 +180,26 @@ impl Core {
         validate_prefs_patch(&Value::Object(prefs_part))?;
         let current = serde_json::to_value(self.mail_defaults().await?)?;
         let next: MailDefaults = serde_json::from_value(layered(&[&current, patch])).map_err(|e| Error::bad(format!("invalid defaults: {e}")))?;
+        // Layout, threading, sorting, density and classification live in the admin settings.
+        let ui = super::settings::UiDefaults {
+            layout: match next.prefs.layout {
+                Layout::List => "list",
+                Layout::Horizontal => "horizontal-split",
+                Layout::Vertical => "vertical-split",
+            }
+            .into(),
+            threaded: next.prefs.threaded,
+            sort: if next.prefs.sort == Sort::Oldest { "oldest" } else { "newest" }.into(),
+            compact: next.prefs.compact,
+        };
+        self.mail_update_settings(super::settings::MailSettingsPatch {
+            ui_defaults: Some(ui),
+            importance_default: Some(next.classify),
+            ..Default::default()
+        })
+        .await?;
         self.kv_set(DEFAULTS_KEY, &serde_json::to_string(&next)?).await?;
-        Ok(next)
+        self.mail_defaults().await
     }
 
     async fn stored_prefs(&self, user_id: &str) -> Result<Value> {
@@ -214,7 +248,7 @@ impl Core {
     pub async fn classify_enabled(&self, account_id: &str) -> Result<bool> {
         Ok(match self.account_prefs_row(account_id).await?.classify {
             Some(v) => v,
-            None => self.mail_defaults().await?.classify,
+            None => self.mail_importance_default().await,
         })
     }
 
@@ -224,7 +258,7 @@ impl Core {
     }
 
     pub async fn account_inbox_settings(&self, user_id: &str, account_id: &str) -> Result<AccountInboxSettings> {
-        let a = self.mail_account(user_id, account_id).await?;
+        let a = self.mail_access(user_id, account_id, MailRight::Read).await?;
         let row = self.account_prefs_row(&a.id).await?;
         let roles: BTreeMap<String, String> = sqlx::query_as::<_, (String, String)>(
             "SELECT role, id FROM mail_folders WHERE account_id = ? AND role IS NOT NULL AND role <> 'inbox' ORDER BY length(name)",
@@ -238,7 +272,7 @@ impl Core {
         Ok(AccountInboxSettings {
             classify: match row.classify {
                 Some(v) => v,
-                None => self.mail_defaults().await?.classify,
+                None => self.mail_importance_default().await,
             },
             move_junk: row.move_junk,
             trash_retention_days: row.trash_retention_days,
@@ -247,7 +281,7 @@ impl Core {
     }
 
     pub async fn set_account_inbox_settings(&self, user_id: &str, account_id: &str, input: &AccountInboxInput) -> Result<AccountInboxSettings> {
-        let a = self.mail_account(user_id, account_id).await?;
+        let a = self.mail_access(user_id, account_id, MailRight::Configure).await?;
         let row = self.account_prefs_row(&a.id).await?;
         if let Some(d) = input.trash_retention_days {
             if !(0..=3650).contains(&d) {

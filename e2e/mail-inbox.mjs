@@ -204,6 +204,7 @@ try {
   const page = await newPage('desktop');
   current = page;
   await page.api('POST', '/api/setup', { username: 'alice', display_name: 'Alice Archer', password: 'alice-password' });
+  await page.api('PATCH', '/api/admin/mail/settings', { allow_local_servers: true });
   const smtp = { smtp_host: SMTP.host, smtp_port: SMTP.port, smtp_security: 'none', imap_host: IMAP.host, imap_port: IMAP.port, imap_security: 'none' };
   const { account: alice } = await page.api('POST', '/api/mail/accounts', { email: ALICE.email, name: 'Alice Archer', password: ALICE.password, ...smtp });
   const { account: carol } = await page.api('POST', '/api/mail/accounts', { email: CAROL.email, name: 'Carol', password: CAROL.password, ...smtp });
@@ -368,9 +369,9 @@ try {
   await page.locator('.toast', { hasText: '“File as to do” done' }).waitFor({ timeout: 15000 });
   await waitFor('all steps on the server', async () => (await search(ALICE, 'Projects', 'SEEN KEYWORD $label4 HEADER Message-ID "<qa@e2e.test>"')).length === 1);
 
-  log('junk: moved to the Junk folder');
-  await moreAction(page, 'Spammy offer', 'Mark as junk');
-  await page.locator('.toast', { hasText: 'Marked as junk' }).waitFor({ timeout: 15000 });
+  log('report spam: moved to the Junk folder');
+  await moreAction(page, 'Spammy offer', 'Report spam');
+  await page.locator('.toast', { hasText: 'Reported as spam' }).waitFor({ timeout: 15000 });
   await waitFor('in Junk with $Junk', async () => (await search(ALICE, 'Junk', 'KEYWORD $Junk')).length === 1);
 
   log('inbox settings: trash retention and default folders');

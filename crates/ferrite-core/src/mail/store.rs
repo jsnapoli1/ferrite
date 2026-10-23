@@ -3,6 +3,7 @@
 //! (applied on the server first, then to the cache) and search.
 
 use super::Account;
+use super::delegation::MailRight;
 use super::imap::{quote, uid_set};
 use super::parse::{self, Addr, AttachmentInfo};
 use super::sync::index_text;
@@ -172,7 +173,7 @@ impl Core {
     /// An account's folders. The first call lists them from the server; later calls answer
     /// from the cache and refresh in the background when stale.
     pub async fn mail_folders(&self, user_id: &str, account_id: &str) -> Result<Vec<Folder>> {
-        let a = self.mail_account(user_id, account_id).await?;
+        let a = self.mail_access(user_id, account_id, MailRight::Read).await?;
         let any: Option<String> = sqlx::query_scalar("SELECT id FROM mail_folders WHERE account_id = ? LIMIT 1")
             .bind(&a.id)
             .fetch_optional(&self.db)
@@ -201,11 +202,9 @@ impl Core {
         Ok(folders)
     }
 
-    /// A folder of one of `user_id`'s accounts.
+    /// A folder of an account `user_id` may read (own or delegated).
     pub async fn mail_folder(&self, user_id: &str, folder_id: &str) -> Result<(Account, Folder)> {
-        let f = self.folder_row(folder_id).await?;
-        let a = self.mail_account(user_id, &f.account_id).await?;
-        Ok((a, f))
+        self.mail_folder_access(user_id, folder_id, MailRight::Read).await
     }
 
     /// Finds a folder by id, IMAP name, display name or role (for tools).
@@ -287,15 +286,18 @@ impl Core {
         Ok(MessagePage { messages: rows, has_more })
     }
 
-    /// A cached message of one of `user_id`'s accounts, without its body.
+    /// A cached message of an account `user_id` may read (own or delegated), without its body.
     pub async fn message_row(&self, user_id: &str, id: &str) -> Result<(Account, MessageSummary)> {
-        let m: MessageSummary = sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {MSG_COLS} FROM mail_messages m WHERE m.id = ?")))
+        self.mail_message_access(user_id, id, MailRight::Read).await
+    }
+
+    /// A cached message by id, without any access check (callers check through its account).
+    pub(crate) async fn message_summary(&self, id: &str) -> Result<MessageSummary> {
+        sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {MSG_COLS} FROM mail_messages m WHERE m.id = ?")))
             .bind(id)
             .fetch_optional(&self.db)
             .await?
-            .ok_or(Error::NotFound)?;
-        let a = self.mail_account(user_id, &m.account_id).await?;
-        Ok((a, m))
+            .ok_or(Error::NotFound)
     }
 
     /// Downloads a whole message (`BODY.PEEK[]`, so it stays unread).
@@ -318,8 +320,8 @@ impl Core {
             None => {
                 // Expunged meanwhile.
                 sqlx::query("DELETE FROM mail_messages WHERE id = ?").bind(&m.id).execute(&self.db).await?;
-                self.hub.publish(
-                    [a.user_id.as_str()],
+                self.mail_publish(
+                    a,
                     &json!({"type": "mail.changed", "account_id": a.id, "folder_id": m.folder_id, "what": "messages"}),
                 );
                 Err(Error::NotFound)
@@ -575,11 +577,12 @@ impl Core {
         Ok(out)
     }
 
-    /// Cached messages by id, grouped per (account, folder), all owned by `user_id`.
+    /// Cached messages by id, grouped per (account, folder), each on an account `user_id` may
+    /// change (own or delegated).
     pub(crate) async fn group_messages(&self, user_id: &str, ids: &[String]) -> Result<Vec<(Account, super::store::Folder, Vec<MessageSummary>)>> {
         let mut groups: Vec<(Account, Folder, Vec<MessageSummary>)> = Vec::new();
         for id in ids {
-            let (a, m) = self.message_row(user_id, id).await?;
+            let (a, m) = self.mail_message_access(user_id, id, MailRight::Modify).await?;
             match groups.iter_mut().find(|g| g.1.id == m.folder_id) {
                 Some(g) => g.2.push(m),
                 None => {
@@ -593,10 +596,7 @@ impl Core {
 
     pub(crate) fn mail_changed(&self, a: &Account, folder_ids: &[&str]) {
         for f in folder_ids {
-            self.hub.publish(
-                [a.user_id.as_str()],
-                &json!({"type": "mail.changed", "account_id": a.id, "folder_id": f, "what": "messages"}),
-            );
+            self.mail_publish(a, &json!({"type": "mail.changed", "account_id": a.id, "folder_id": f, "what": "messages"}));
         }
     }
 
@@ -674,7 +674,7 @@ impl Core {
 
     /// Moves messages to a folder of the same account.
     pub async fn mail_move(&self, user_id: &str, ids: &[String], dest_folder_id: &str) -> Result<()> {
-        let (dest_account, dest) = self.mail_folder(user_id, dest_folder_id).await?;
+        let (dest_account, dest) = self.mail_folder_access(user_id, dest_folder_id, MailRight::Modify).await?;
         if !dest.selectable {
             return Err(Error::bad("messages cannot be moved into that folder"));
         }
@@ -766,9 +766,10 @@ impl Core {
             return Ok(vec![]);
         }
         let accounts: Vec<Account> = match account_id {
-            Some(id) => vec![self.mail_account(user_id, id).await?],
-            None => self.mail_accounts(user_id).await?,
+            Some(id) => vec![self.mail_access(user_id, id, MailRight::Read).await?],
+            None => self.mail_accounts_for(user_id).await?,
         };
+        let visible: Vec<&str> = accounts.iter().map(|a| a.id.as_str()).collect();
         let mut ids: Vec<String> = self.search(user_id, q, Some(&["mail"]), 200).await?.into_iter().map(|h| h.id).collect();
         for a in &accounts {
             let folders: Vec<Folder> = match folder_id {
@@ -797,11 +798,11 @@ impl Core {
             }
         }
         let rows: Vec<MessageSummary> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT {MSG_COLS} FROM mail_messages m JOIN mail_accounts a ON a.id = m.account_id
-             WHERE a.user_id = ? AND m.id IN (SELECT value FROM json_each(?)) AND (? IS NULL OR m.account_id = ?) AND (? IS NULL OR m.folder_id = ?)
-             ORDER BY m.date DESC LIMIT ?"
+            "SELECT {MSG_COLS} FROM mail_messages m
+             WHERE m.account_id IN (SELECT value FROM json_each(?)) AND m.id IN (SELECT value FROM json_each(?)) AND (? IS NULL OR m.account_id = ?)
+             AND (? IS NULL OR m.folder_id = ?) ORDER BY m.date DESC LIMIT ?"
         )))
-        .bind(user_id)
+        .bind(serde_json::to_string(&visible)?)
         .bind(serde_json::to_string(&ids)?)
         .bind(account_id)
         .bind(account_id)
