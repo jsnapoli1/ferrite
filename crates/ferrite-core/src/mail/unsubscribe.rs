@@ -71,6 +71,12 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Tests only (`FERRITE_MAIL_ALLOW_PRIVATE_FETCH=1`): one-click unsubscribe may use plain
+/// http and reach local servers.
+pub fn allow_private_fetch() -> bool {
+    std::env::var("FERRITE_MAIL_ALLOW_PRIVATE_FETCH").is_ok_and(|v| v == "1")
+}
+
 /// `Weekly news <news.example.org>` → "Weekly news"; `<news.example.org>` → its id.
 fn list_name(list_id: &str) -> Option<String> {
     let l = list_id.trim();
@@ -84,6 +90,7 @@ fn list_name(list_id: &str) -> Option<String> {
 
 /// Parses the header values. `post` is `List-Unsubscribe-Post`.
 pub fn parse(list_unsubscribe: &str, post: Option<&str>, list_id: Option<&str>) -> Option<Unsubscribe> {
+    let http_ok = allow_private_fetch();
     let one_click_allowed = post.is_some_and(|p| p.split_whitespace().collect::<String>().eq_ignore_ascii_case("List-Unsubscribe=One-Click"));
     let mut out = Unsubscribe {
         one_click: None,
@@ -100,6 +107,7 @@ pub fn parse(list_unsubscribe: &str, post: Option<&str>, list_id: Option<&str>) 
         let Ok(u) = Url::parse(&raw) else { continue };
         match u.scheme() {
             "https" if out.one_click.is_none() && one_click_allowed => out.one_click = Some(u.to_string()),
+            "http" if out.one_click.is_none() && one_click_allowed && http_ok => out.one_click = Some(u.to_string()),
             "https" | "http" if out.url.is_none() => out.url = Some(u.to_string()),
             "mailto" if out.mailto.is_none() => out.mailto = parse_mailto(&u),
             _ => {}

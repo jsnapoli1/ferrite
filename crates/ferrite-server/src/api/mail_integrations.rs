@@ -282,11 +282,7 @@ async fn add_to_contacts(State(s): State<AppState>, auth: Auth, Json(b): Json<Ad
 
 // ---- unsubscribe ---------------------------------------------------------------------------
 
-/// Tests only (`FERRITE_MAIL_ALLOW_PRIVATE_FETCH=1`): one-click unsubscribe may reach local
-/// http servers.
-fn allow_private_fetch() -> bool {
-    std::env::var("FERRITE_MAIL_ALLOW_PRIVATE_FETCH").is_ok_and(|v| v == "1")
-}
+use ferrite_core::mail::unsubscribe::allow_private_fetch;
 
 /// DNS that only answers with public addresses, so a list's URL cannot point the server at
 /// an internal service (also not by re-resolving between check and connect).

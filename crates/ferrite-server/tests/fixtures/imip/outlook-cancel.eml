@@ -1,0 +1,23 @@
+From: Organizer One <org@example.org>
+To: Alice <alice@example.test>
+Subject: Canceled: {SUMMARY}
+Date: {DATE}
+Message-ID: <{MSGID}>
+Thread-Topic: {SUMMARY}
+X-MS-Has-Attach:
+X-MS-TNEF-Correlator:
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="_000_DB9PR02MB0000_"
+
+--_000_DB9PR02MB0000_
+Content-Type: text/plain; charset="us-ascii"
+Content-Transfer-Encoding: quoted-printable
+
+The meeting has been canceled.
+
+--_000_DB9PR02MB0000_
+Content-Type: text/calendar; charset="utf-8"; method=CANCEL
+Content-Transfer-Encoding: base64
+
+{CALENDAR_BASE64}
+--_000_DB9PR02MB0000_--

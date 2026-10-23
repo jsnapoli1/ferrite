@@ -352,20 +352,30 @@ impl Core {
     }
 
     async fn record_imip(&self, a: &Account, message_key: &str, part: &ItipPart, o: &ImipOutcome) -> Result<()> {
-        sqlx::query(
+        self.log_imip(a, message_key, part, o, false).await
+    }
+
+    /// Logs what a message led to. The user's own actions replace the entry; automatic
+    /// processing (`automatic`) never overwrites one (the user may have acted meanwhile).
+    async fn log_imip(&self, a: &Account, message_key: &str, part: &ItipPart, o: &ImipOutcome, automatic: bool) -> Result<()> {
+        let sql = if automatic {
+            "INSERT INTO mail_imip_log (account_id, message_id, method, uid, status, detail, processed_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(account_id, message_id) DO NOTHING"
+        } else {
             "INSERT INTO mail_imip_log (account_id, message_id, method, uid, status, detail, processed_at) VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(account_id, message_id) DO UPDATE SET method = excluded.method, uid = excluded.uid, status = excluded.status,
-             detail = excluded.detail, processed_at = excluded.processed_at",
-        )
-        .bind(&a.id)
-        .bind(message_key)
-        .bind(&part.method)
-        .bind(itip::uid(&part.cal).unwrap_or_default())
-        .bind(o.status)
-        .bind(&o.detail)
-        .bind(now())
-        .execute(&self.db)
-        .await?;
+             detail = excluded.detail, processed_at = excluded.processed_at"
+        };
+        sqlx::query(sql)
+            .bind(&a.id)
+            .bind(message_key)
+            .bind(&part.method)
+            .bind(itip::uid(&part.cal).unwrap_or_default())
+            .bind(o.status)
+            .bind(&o.detail)
+            .bind(now())
+            .execute(&self.db)
+            .await?;
         Ok(())
     }
 
@@ -540,7 +550,11 @@ impl Core {
                 let uid = crate::groupware::parse_object(data)?.uid;
                 match self.put_dav_object(&c, &object_uri(&uid), data, None, true).await {
                     Ok((o, _)) => o,
-                    Err(Error::PreconditionFailed) => self.put_dav_object(&c, &format!("{}.ics", new_id()), data, None, true).await?.0,
+                    // Stored meanwhile (automatic processing of the same invitation): update it.
+                    Err(Error::PreconditionFailed) | Err(Error::Conflict(_)) => match self.own_object_by_uid(user_id, &uid).await? {
+                        Some((c, o)) => self.put_dav_object(&c, &o.uri, data, None, false).await?.0,
+                        None => self.put_dav_object(&c, &format!("{}.ics", new_id()), data, None, true).await?.0,
+                    },
                     Err(e) => return Err(e),
                 }
             }
@@ -1077,7 +1091,7 @@ impl Core {
                 Err(e) => ImipOutcome::new("error", e.to_string(), None),
             };
             tracing::info!(account = %a.id, method = %part.method, status = outcome.status, detail = %outcome.detail, "iMIP message processed");
-            self.record_imip(a, &key, &part, &outcome).await?;
+            self.log_imip(a, &key, &part, &outcome, true).await?;
         }
         Ok(())
     }
