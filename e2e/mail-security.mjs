@@ -25,7 +25,7 @@
 // of Mailvelope's documented client API (display container and encrypting editor), light,
 // dark and 390px screenshots. Prints {ok, errors}; any console error fails the run.
 import { chromium } from 'playwright';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createServer as createTcp } from 'node:net';
 import { createServer as createHttp } from 'node:http';
@@ -174,7 +174,11 @@ await new Promise((r) => smtp.listen(SMTP_PORT, '127.0.0.1', r));
 function deliver(raw) {
   const f = join(tmpdir(), `ferrite-sec-${process.pid}-${Math.random().toString(36).slice(2)}.eml`);
   writeFileSync(f, raw.replace(/\r?\n/g, '\r\n'));
-  execFileSync('bash', [join(here, 'mail-server.sh'), 'deliver', 'alice', f, mailDir], { stdio: 'inherit' });
+  try {
+    execFileSync('bash', [join(here, 'mail-server.sh'), 'deliver', 'alice', f, mailDir], { stdio: 'inherit' });
+  } finally {
+    rmSync(f, { force: true });
+  }
 }
 const msg = (from, subject, id, headers, body, date = new Date().toUTCString()) => `From: ${from}\r\nTo: Alice <alice@example.test>\r\nSubject: ${subject}\r\nDate: ${date}\r\nMessage-ID: <${id}>\r\nMIME-Version: 1.0\r\n${headers}\r\n${body}`;
 const plain = 'Content-Type: text/plain; charset=utf-8\r\n';
