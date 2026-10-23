@@ -135,7 +135,8 @@ function pickFiles(ctx) {
  * forward | edit), to }.
  */
 export async function openComposer(ctx, opts) {
-  let template = null;
+  // `prefill` (e.g. from a mailto: link) fills the fields like a reply template does.
+  let template = opts.prefill || null;
   if (opts.fromMessage) {
     try {
       ({ compose: template } = await api.get(`/api/mail/messages/${encodeURIComponent(opts.fromMessage)}/compose?mode=${opts.mode}`));

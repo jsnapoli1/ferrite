@@ -376,7 +376,7 @@ async fn inbox_management_against_a_real_imap_server() {
     let p = b.get("/api/mail/preferences").await["prefs"].clone();
     assert_eq!(
         (p["layout"].as_str(), p["threaded"].as_bool(), p["sort"].as_str()),
-        (Some("vertical"), Some(true), Some("newest"))
+        (Some("vertical"), Some(false), Some("newest"))
     );
     let p = b
         .send(Method::PUT, "/api/mail/preferences", json!({"layout": "horizontal", "compact": true}))

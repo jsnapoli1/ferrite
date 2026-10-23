@@ -346,7 +346,8 @@ impl Core {
         let mut tx = self.mail_tx().await?;
         if let Some(subs) = subscribed.filter(|s| !s.is_empty()) {
             for f in &folders {
-                let on = f.role.as_deref() == Some("inbox") || subs.iter().any(|s| *s == f.name);
+                // Containers (\Noselect) follow their children.
+                let on = !f.selectable || f.role.as_deref() == Some("inbox") || subs.iter().any(|s| *s == f.name);
                 if on != f.subscribed {
                     sqlx::query("UPDATE mail_folders SET subscribed = ? WHERE id = ?")
                         .bind(on)
@@ -390,14 +391,17 @@ impl Core {
         }
         tx.commit().await?;
         match self.namespaces_of(&a.id).await? {
-            Some(ns) => self.mark_shared(&a.id, &ns).await?,
+            Some(ns) => self.mark_shared(a, &ns, Some(conn)).await?,
             None => self.load_namespaces_soon(a),
         }
         Ok(())
     }
 
-    async fn mark_shared(&self, account_id: &str, ns: &Namespaces) -> Result<()> {
-        for f in self.account_folders(account_id).await? {
+    /// Marks folders of other users' and shared namespaces. A folder seen shared for the
+    /// first time is subscribed, so what others share shows up (unsubscribing it later sticks).
+    async fn mark_shared(&self, a: &Account, ns: &Namespaces, conn: Option<&mut ImapConn>) -> Result<()> {
+        let mut newly: Vec<Folder> = Vec::new();
+        for f in self.account_folders(&a.id).await? {
             let shared = ns.is_shared(&f.name);
             if shared != f.shared {
                 sqlx::query("UPDATE mail_folders SET shared = ? WHERE id = ?")
@@ -405,6 +409,29 @@ impl Core {
                     .bind(&f.id)
                     .execute(&self.db)
                     .await?;
+                if shared && !f.subscribed && f.selectable {
+                    newly.push(f);
+                }
+            }
+        }
+        if newly.is_empty() {
+            return Ok(());
+        }
+        let mut pooled = None;
+        let conn = match conn {
+            Some(c) => c,
+            None => &mut **pooled.insert(self.imap_conn(a).await?),
+        };
+        for f in newly {
+            match conn.subscribe(&f.name, true).await {
+                Ok(()) => {
+                    sqlx::query("UPDATE mail_folders SET subscribed = 1 WHERE id = ?")
+                        .bind(&f.id)
+                        .execute(&self.db)
+                        .await?;
+                }
+                Err(e) if conn.is_broken() => return Err(e),
+                Err(e) => tracing::debug!(folder = %f.name, error = %e, "subscribing a shared folder failed"),
             }
         }
         Ok(())
@@ -433,7 +460,7 @@ impl Core {
             .bind(&a.id)
             .execute(&self.db)
             .await?;
-        self.mark_shared(&a.id, &ns).await?;
+        self.mark_shared(a, &ns, None).await?;
         self.hub
             .publish([a.user_id.as_str()], &json!({"type": "mail.changed", "account_id": a.id, "what": "folders"}));
         Ok(ns)

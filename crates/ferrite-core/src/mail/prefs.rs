@@ -39,7 +39,8 @@ pub struct MailPrefs {
     pub layout: Layout,
     /// No avatars or previews, checkboxes always shown.
     pub compact: bool,
-    /// One row per conversation (else one per message).
+    /// One row per conversation in the list (else one per message; opening a message shows
+    /// its conversation either way).
     pub threaded: bool,
     pub sort: Sort,
     /// Starred messages in their own section at the top of the list.
@@ -58,7 +59,7 @@ impl Default for MailPrefs {
         MailPrefs {
             layout: Layout::Vertical,
             compact: false,
-            threaded: true,
+            threaded: false,
             sort: Sort::Newest,
             favorites_top: true,
             show_unsubscribed: false,
@@ -305,7 +306,7 @@ mod tests {
         let p: MailPrefs = serde_json::from_value(layered(&[&base, &admin, &user])).unwrap();
         assert_eq!(p.layout, Layout::List, "admin default applies");
         assert!(!p.compact, "the user's choice wins");
-        assert!(p.threaded);
+        assert!(!p.threaded);
         assert!(validate_prefs_patch(&json!({"sort": "oldest"})).is_ok());
         assert!(validate_prefs_patch(&json!({"sort": "sideways"})).is_err());
         assert!(validate_prefs_patch(&json!({"layout": 3})).is_err());
