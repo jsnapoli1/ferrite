@@ -12,15 +12,24 @@
 //! * `crypto`: passwords at rest. * `imap`: connections and pool. * `sync`: folder and
 //!   message sync, IDLE. * `store`: reading and acting on cached mail. * `compose`: replies,
 //!   drafts, sending. * `parse`: MIME, threading, sanitizing. * `autoconfig`: provider
-//!   settings from Thunderbird's ISPDB.
+//!   settings from Thunderbird's ISPDB. * `richtext`, `mime`: composed HTML and the MIME
+//!   structure of outgoing mail. * `aliases`, `textblocks`: identities, signatures, composer
+//!   settings, snippets. * `outbox`: queued, scheduled and retried sending. * `reading`: read
+//!   receipts, attached messages, printing.
 
+pub mod aliases;
 pub mod autoconfig;
 pub mod compose;
 pub mod crypto;
 pub mod imap;
+pub mod mime;
+pub mod outbox;
 pub mod parse;
+pub mod reading;
+pub mod richtext;
 pub mod store;
 pub mod sync;
+pub mod textblocks;
 
 use crate::mailer::{SmtpSecurity, SmtpSettings};
 use crate::util::{new_id, now};

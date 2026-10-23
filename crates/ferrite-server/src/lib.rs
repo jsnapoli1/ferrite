@@ -89,6 +89,7 @@ impl AppState {
         });
         api::talk::moderation::spawn_background(self);
         self.core.spawn_mail_background();
+        self.core.spawn_mail_outbox();
         let core = self.core.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(3600));

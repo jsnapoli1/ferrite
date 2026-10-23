@@ -152,7 +152,7 @@ fn truncate(s: &str, max: usize) -> &str {
 }
 
 /// The document served in the message iframe.
-fn html_document(s: &parse::Sanitized) -> String {
+pub(crate) fn html_document(s: &parse::Sanitized) -> String {
     const BASE: &str = "html{color-scheme:light}body{margin:0;padding:12px 4px;font:14px/1.5 ui-sans-serif,system-ui,-apple-system,\"Segoe UI\",Roboto,Arial,sans-serif;\
          color:#16191f;background:#fff;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{max-width:100%}pre{white-space:pre-wrap}\
          blockquote{margin:0 0 0 .4em;padding-left:.8em;border-left:3px solid #dde1e8;color:#4a5263}a{color:#c2410c}";
