@@ -1,0 +1,22 @@
+From: Bob <bob@example.test>
+To: Alice <alice@example.test>
+Subject: Encrypted OAEP
+Date: Mon, 19 Oct 2026 09:00:00 +0000
+Message-ID: <encrypted-oaep@example.test>
+MIME-Version: 1.0
+Content-Disposition: attachment; filename="smime.p7m"
+Content-Type: application/pkcs7-mime; smime-type=enveloped-data; name="smime.p7m"
+Content-Transfer-Encoding: base64
+
+MIICBwYJKoZIhvcNAQcDoIIB+DCCAfQCAQAxggFOMIIBSgIBADAyMBoxGDAWBgNV
+BAMMD0ZlcnJpdGUgVGVzdCBDQQIUKtB/6g3zcLBrbwDX631vOyd8K30wDQYJKoZI
+hvcNAQEHMAAEggEAISTo6Eqov7RiDsdiQApUXYJ+4493fGOfZ5ZCUUttO7AbFIwm
+rt53Z3WfL3SvDhx3J6CdxHwD7bVOt9ZrkpQH8g3yitGLtPAp4i0JZl4hw+muSYeo
+/0MFi6WILBHwu+uzxTo1zvM4YU2TdwydOnaZQPx3l0IDaNxGQPBNfszuS7n8BVcX
+UuJ6bJNsbra9MYu/Tkat0nIilsLM7HzWTqTsqbo531sbpx7ooign7hwo1+IVWDFc
+jvzRNjEFzhgGycIUkBKXFuX0ph7/jqvnScl5NZEbYJvI/Ik1An5kiKZiegg8dtiT
+mS5QFiYXfwpGv+h4ZEcnv1Qn//5z8CUQ1UicpjCBnAYJKoZIhvcNAQcBMB0GCWCG
+SAFlAwQBAgQQHXaE9F5npCkPR2CkamzfAIBwSHmtB7HIkb7aF/36IelLqMXlujgt
+6Hy4d0xL+uii4RssWkh+LS2QrO5FGIKJeqflTTrgk7hJM/4Nefv1hkjAJ00U4vyh
+EtukajiRScOmVdVlwCN/4rseKUIEhv/TswJCMTRxj5SZ/bmAY7CK0N8urw==
+

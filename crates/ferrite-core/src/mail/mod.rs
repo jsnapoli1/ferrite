@@ -17,10 +17,14 @@
 pub mod autoconfig;
 pub mod compose;
 pub mod crypto;
+pub mod dkim;
 pub mod imap;
 pub mod parse;
+pub mod phishing;
+pub mod smime;
 pub mod store;
 pub mod sync;
+pub mod trust;
 
 use crate::mailer::{SmtpSecurity, SmtpSettings};
 use crate::util::{new_id, now};

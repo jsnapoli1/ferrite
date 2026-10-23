@@ -1,0 +1,22 @@
+From: Bob <bob@example.test>
+To: Alice <alice@example.test>
+Subject: Encrypted 3DES
+Date: Mon, 19 Oct 2026 09:00:00 +0000
+Message-ID: <encrypted-3des@example.test>
+MIME-Version: 1.0
+Content-Disposition: attachment; filename="smime.p7m"
+Content-Type: application/pkcs7-mime; smime-type=enveloped-data; name="smime.p7m"
+Content-Transfer-Encoding: base64
+
+MIIB9gYJKoZIhvcNAQcDoIIB5zCCAeMCAQAxggFOMIIBSgIBADAyMBoxGDAWBgNV
+BAMMD0ZlcnJpdGUgVGVzdCBDQQIUKtB/6g3zcLBrbwDX631vOyd8K30wDQYJKoZI
+hvcNAQEBBQAEggEAXaD2sSdIrxIJcAtm1Vt79yDOBWyLtOEt0COO1nTqsHAUKNQm
+ioWhOIRmukL91Sqt3BUoqJXSi2SQKwjdt2GxE0mbeQcHjH/dBb9wXzVvEHtOyrD9
+DQoRU/HRCHB6QEJPUXpPmkwsiPBsIXRjPIrbcGHxL5N2oMGQHr73SAEG919OjxPE
+WlFnLRpcJRMNlZj0jFZcMzZxqWA3DbK7OMRl1EC7cm4oWwHjaKuGf2lY6yrLRzr2
+NBJY+4qGPYQj/QvznGvXBKz98kk71XCt7/fkPPYMIhz4Buw/sihC2MTn50ZS/C8l
+jizR2JbyEp3x4E0Fsq937t6/7co1H7LXpaZ9xzCBiwYJKoZIhvcNAQcBMBQGCCqG
+SIb3DQMHBAhZvi9kRJKPyIBo3tKWHxjnseTxhJ2WJ5xkWethMdWxmr1J71g1iK2F
+83SOTUe/Y3OZS15qXncffuoXO73R+ndHUG5YdlE94UDOHhletfands3igunEWes1
+ALm7l2g79llcN/YgISuj78CpeuejC5vlJEY=
+
