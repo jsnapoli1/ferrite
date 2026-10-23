@@ -15,6 +15,8 @@
 # mailbox a 10 MiB storage quota (IMAP QUOTA). OAUTH2_INTROSPECTION_URL=http://… also accepts
 # OAuth 2.0 bearer tokens (SASL XOAUTH2/OAUTHBEARER), validated by POSTing them to that token
 # introspection endpoint (RFC 7662; it answers {"active": true, "username": "<user>"}).
+# With SIEVE=1 and POSTFIX=0, mail Sieve sends (vacation replies) is captured in
+# DIR/outgoing/ instead.
 #
 # Mailboxes (domain example.test): alice@example.test / alice-mail-pw, bob@example.test /
 # bob-mail-pw. Ports: IMAP $IMAP_PORT (3143), SMTP $SMTP_PORT (3587). Then, for the Rust
@@ -182,6 +184,20 @@ service managesieve-login {
   }
 }
 EOF
+    if [ "$POSTFIX" != 1 ]; then
+      # No MTA: mail that Sieve sends (vacation replies, redirects) is captured as files in
+      # $DIR/outgoing/ instead (one .eml each, the sendmail arguments in a .args next to it).
+      mkdir -p "$DIR/outgoing"
+      chown vmail:vmail "$DIR/outgoing"
+      cat >"$DIR/sendmail-capture" <<EOF
+#!/bin/sh
+f="$DIR/outgoing/\$(date +%s%N)"
+printf '%s\n' "\$*" >"\$f.args"
+cat >"\$f.eml"
+EOF
+      chmod 755 "$DIR/sendmail-capture"
+      echo "sendmail_path = $DIR/sendmail-capture" >>"$DIR/dovecot.conf"
+    fi
   fi
 }
 

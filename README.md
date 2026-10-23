@@ -35,7 +35,7 @@ cargo build --release
 | **Boards** | Kanban boards with columns, cards (drag or keyboard), labels, due dates, assignees, comments, links to files/folders/conversations/URLs, read-only members and archive. |
 | **Live documents** | Real-time co-editing (CRDT, Yjs-compatible) of **Markdown/text**, **spreadsheets** (formulas: arithmetic, refs, SUM/AVERAGE/MIN/MAX/COUNT), **mind maps** (`.fmind`) and **canvases** (`.fcanvas`: notes, frames, files, embedded mind maps and boards, arrows). They show peers' presence and cursors, and save automatically, with versions. |
 | **Calendar and contacts** | CalDAV and CardDAV at Nextcloud-compatible URLs. Month/week/list views. **Recurring events are expanded** (RRULE, EXDATE, RDATE, overridden instances), DST-correct with IANA time zones. Changes from any client or tab appear live. **Sharing** with users and groups (read-only or read-write) and public subscription links. **Invitations** with RSVPs: Ferrite users get them in their calendar, everyone else by email with Accept/Maybe/Decline links (no account needed); the server schedules, so nobody gets an invitation twice. Contacts can be edited. |
-| **Mail** | Webmail for your existing **IMAP/SMTP accounts** (settings found automatically for well-known providers). Three panes (one at a time on phones), **conversations**, HTML mail sanitized and shown in a sandboxed frame with **remote images blocked** until you ask, attachments (download or **save to Files**), read/flag/move/archive/delete with multi-select and keyboard shortcuts, search (cached mail and the mail server), replies and forwards with quoting, attachments from upload or Files, drafts and sent mail filed on the server. **New mail arrives live** (IMAP IDLE) with a notification, and every account is **synced in the background** at an admin-set interval. Passwords are encrypted at rest. **Google and Microsoft accounts sign in with OAuth 2.0** (XOAUTH2). Settings are found from the provider database, the domain's own autoconfig/autodiscover or its **MX records**, with a connection test. Accounts can be **shared with other users** (they read and send, but can't remove the account or change its sign-in), reordered, and show their **quota**. **Report spam / Not spam**. Admins get **provisioning templates** (accounts created for users by domain or group) and Mail settings (who may add accounts, anti-abuse alerts, attachment limit, sync interval, AI, UI defaults, TLS and local-server policy). |
+| **Mail** | Webmail for your existing **IMAP/SMTP accounts** (settings found automatically for well-known providers). Three panes (one at a time on phones), **conversations**, HTML mail sanitized and shown in a sandboxed frame with **remote images blocked** until you ask, attachments (download or **save to Files**), read/flag/move/archive/delete with multi-select and keyboard shortcuts, search (cached mail and the mail server), replies and forwards with quoting, attachments from upload or Files, drafts and sent mail filed on the server. **New mail arrives live** (IMAP IDLE) with a notification, and every account is **synced in the background** at an admin-set interval. Passwords are encrypted at rest. **Google and Microsoft accounts sign in with OAuth 2.0** (XOAUTH2). Settings are found from the provider database, the domain's own autoconfig/autodiscover or its **MX records**, with a connection test. Accounts can be **shared with other users** (they read and send, but can't remove the account or change its sign-in), reordered, and show their **quota**. **Report spam / Not spam**. **Filters and an autoresponder** on the mail server (Sieve over ManageSieve: visual rules in Nextcloud Mail's format, the raw script, an out-of-office reply that can follow your absence in Settings → Profile). **Meeting invitations** in mail show as cards (your time zone, guests, conflicts) to accept, decline or propose a new time; guests' replies from any mail client update your events, cancellations mark them cancelled. **Travel bookings** (schema.org) become cards to add to the calendar; any message can become an event or a task; senders can be added to contacts; **one-click unsubscribe**. With AI allowed: thread summaries, reply suggestions, translation and follow-up reminders. Admins get **provisioning templates** (accounts created for users by domain or group) and Mail settings (who may add accounts, anti-abuse alerts, attachment limit, sync interval, AI, UI defaults, TLS and local-server policy). |
 | **Search** | One search across files, messages, cards, events, contacts and mail. Full text always; **semantic** (by meaning) when an embedding model is configured. |
 | **MCP** | Ferrite is an **MCP server**: 81 tools, resources and prompts over Streamable HTTP and stdio, for both protocol eras. It is also an **MCP client**: it uses the Crafting Apps' MCP servers and any MCP servers you add. |
 | **AI** | Bring your own model: any **OpenAI-compatible** server (Ollama, llama.cpp, LM Studio, vLLM, …) or **Anthropic's Claude API**. The assistant uses the same MCP tools with the user's own permissions, and is **read-only unless the user allows changes**. Typing `@assistant` in any conversation brings in the Talk bot. Per-user consent. |
@@ -163,7 +163,7 @@ HTTP client configuration:
 { "mcpServers": { "ferrite": { "url": "https://your-server/mcp", "headers": { "Authorization": "Bearer <app token>" } } } }
 ```
 
-**Tools (81)**, each annotated read-only or destructive, and each limited by the token's scopes:
+**Tools (89)**, each annotated read-only or destructive, and each limited by the token's scopes:
 
 | Group | Tools |
 |---|---|
@@ -171,7 +171,7 @@ HTTP client configuration:
 | Talk | `talk_rooms` `talk_read` `talk_post` `talk_create_room` `talk_direct` `talk_share_file` `talk_react` `talk_poll` `talk_search` `talk_lobby` `talk_breakouts` `talk_breakouts_start` `talk_breakouts_stop` `talk_breakouts_broadcast` |
 | Boards | `boards_list` `boards_get` `boards_create` `boards_add_card` `boards_update_card` `boards_move_card` `boards_assign` `boards_comment` `boards_link` `boards_my_cards` |
 | Live documents | `docs_create` `docs_read` `docs_append` `docs_replace` `sheet_set` `mindmap_add` `mindmap_update` `canvas_add` `canvas_connect` |
-| Mail | `mail_accounts` `mail_list` `mail_read` `mail_search` `mail_draft` `mail_send` `mail_mark` `mail_move` `mail_delete` `mail_report_spam` `mail_delegations` `mail_delegate` `mail_undelegate` `mail_provision` |
+| Mail | `mail_accounts` `mail_list` `mail_read` `mail_search` `mail_draft` `mail_send` `mail_mark` `mail_move` `mail_delete` `mail_report_spam` `mail_delegations` `mail_delegate` `mail_undelegate` `mail_provision` `mail_filters` `mail_filter_add` `mail_filter_remove` `mail_out_of_office` `mail_out_of_office_set` `mail_invitation_respond` `mail_summarize_thread` `mail_unsubscribe` |
 | Calendar and contacts | `calendar_events` `calendar_create_event` `calendar_update_event` `calendar_delete_event` `calendar_share` `calendar_unshare` `calendar_respond` `contacts_search` `contacts_create` `contacts_update` |
 | Everything else | `search` (hybrid full-text + semantic) `notifications` `activity` `users_search` |
 | Crafting Apps | `craft_apps` `craft_open` `craft_call` `craft_close` |
@@ -289,6 +289,7 @@ link_by_email = false                       # link to the account with the same,
 - `FERRITE_CRAFT_BIN_DIR`
 - `FERRITE_REQUIRE_2FA`
 - `FERRITE_PUSH_ALLOW_INSECURE` (`1`: accept `http`/private push endpoints; tests only)
+- `FERRITE_MAIL_ALLOW_PRIVATE_FETCH` (`1`: one-click unsubscribe may use `http` and private addresses; tests only)
 
 **Command line:**
 
@@ -357,7 +358,7 @@ This is an honest map against Nextcloud's core feature set: ✅ done, 🟡 parti
 | Collaborative text | ✅ | Markdown |
 | Collaborative office (Collabora/OnlyOffice) | 🟡 | Live spreadsheets and text built in. Word/Excel/PowerPoint and more through the Crafting Apps (desktop over WebDAV, or headless via MCP), but no in-browser rendering of .docx/.xlsx/.pptx |
 | Mind maps and whiteboards | ✅ | Canvases with embedded files, mind maps and boards |
-| Calendar (CalDAV) | ✅ | Recurrence expansion, sharing (users, groups, public links), invitations with server-side scheduling (RFC 6638) and email RSVPs. Replies emailed back from guests' own mail clients aren't read (they use the link). VTODO tasks are read-only in the web UI |
+| Calendar (CalDAV) | ✅ | Recurrence expansion, sharing (users, groups, public links), invitations with server-side scheduling (RFC 6638) and email RSVPs. Replies emailed back from guests' own mail clients are read when the organizer has the mail account in Ferrite. VTODO tasks are read-only in the web UI |
 | Contacts (CardDAV) | ✅ | |
 | Mail | ✅ | Webmail for IMAP/SMTP accounts, Google/Microsoft OAuth, delegation, provisioning (no POP3); see [docs/mail-parity.md](docs/mail-parity.md) |
 | Activity stream, notifications | ✅ | |
@@ -399,6 +400,7 @@ start real servers and cover:
 - the assistant and Talk bot against a mock model
 - semantic search against a mock embedder
 - webmail against a **real IMAP/SMTP server** (Dovecot and Postfix; `e2e/mail-server.sh` starts them, and the test runs when `FERRITE_TEST_IMAP` is set, see `crates/ferrite-server/tests/mail.rs`)
+- Sieve filters, the autoresponder, invitations in mail (fixtures from real clients), unsubscribe and mail AI against a real Dovecot with ManageSieve (`SIEVE=1 e2e/mail-server.sh start`; see `crates/ferrite-server/tests/mail_integrations.rs`)
 - a Craft app driven over MCP
 
 CI-style checks are `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --check`.
@@ -428,6 +430,7 @@ cd e2e && FERRITE_URL=http://127.0.0.1:8821 node files.mjs
 | `invites.mjs` | Calendar sharing and public links, guests with suggestions, invitation by email (the script runs an SMTP sink; set `[smtp]` to 127.0.0.1:8836), answers from the dialog and from the public page, read-only and read-write shares |
 | `push.mjs` | Service worker and manifest, Settings → Notifications, pushes to a mock push service decrypted independently, push handling and notification clicks in the service worker (run the server with `FERRITE_PUSH_ALLOW_INSECURE=1`) |
 | `mail.mjs` | Mail against a real Dovecot/Postfix server (`mail-server.sh start` first): account setup, folders, threads, sanitized HTML and remote images, attachments to Files, keyboard shortcuts, reply/compose with autocomplete and attachments, live arrival over IDLE, archive/delete, drafts, search, dark and phone layouts |
+| `mail-integrations.mjs` | Filters, the Sieve script and the autoresponder against a real Dovecot with Sieve (`SIEVE=1`, see its header), a filter from a message, the absence in Settings, an invitation answered by mail, a flight booking into the calendar, one-click unsubscribe against a mock list server, contacts, AI summary/replies/translation/follow-ups against a mock model, an event and a task from a message, dark and phone layouts (run the server with `FERRITE_MAIL_ALLOW_PRIVATE_FETCH=1`) |
 | `mail-accounts.mjs` | Mail accounts against two Dovecot instances (one validating OAuth tokens by introspection, see its header) with a mock OAuth provider and SMTP sink run by the script: Mail admin settings, connection test, quota, drag-and-drop account order, sharing an account and the delegate's view, report spam, a provisioning template and the provisioned account, connecting a Google account through the consent screen, dark and phone layouts |
 
 ## License
