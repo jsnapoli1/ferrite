@@ -6,8 +6,9 @@
 //! private, loopback, link-local and other internal answers, so a name cannot be re-pointed
 //! between the check and the connection), redirects are followed by hand (at most
 //! [`MAX_REDIRECTS`], each checked again). Requests carry no cookies and no Referer, time out
-//! after [`TIMEOUT`], and bodies stop at a size limit; images must really be raster images
-//! (sniffed, whatever the server claims), so the proxy never serves HTML or SVG.
+//! after [`TIMEOUT`], and bodies stop at a size limit; images must really be images (sniffed,
+//! whatever the server claims): raster formats, or SVG for the proxy, which serves it with a
+//! sandboxing CSP so it can never run as a document on Ferrite's origin.
 //!
 //! `[mail_security] proxy_allow_private` (tests only) lifts the address check.
 
@@ -160,11 +161,43 @@ fn without_url(e: &reqwest::Error) -> String {
     s
 }
 
-/// A remote image for the proxy: (sniffed type, bytes).
+/// A remote raster image: (sniffed type, bytes).
 pub async fn image(url: &str, max: usize, allow_private: bool) -> Result<(&'static str, Vec<u8>)> {
     let f = get(url, "image/avif,image/webp,image/png,image/jpeg,image/gif,image/*;q=0.8", max, allow_private).await?;
     let kind = sniff_image(&f.data).ok_or_else(|| Error::bad("not an image"))?;
     Ok((kind, f.data))
+}
+
+/// A remote image for the proxy: raster formats, or SVG (which the proxy serves sandboxed).
+pub async fn proxied_image(url: &str, max: usize, allow_private: bool) -> Result<(&'static str, Vec<u8>)> {
+    let f = get(url, "image/avif,image/webp,image/png,image/jpeg,image/gif,image/svg+xml,image/*;q=0.8", max, allow_private).await?;
+    if let Some(kind) = sniff_image(&f.data) {
+        return Ok((kind, f.data));
+    }
+    if looks_like_svg(&f.data) {
+        return Ok(("image/svg+xml", f.data));
+    }
+    Err(Error::bad("not an image"))
+}
+
+/// SVG: UTF-8 whose first element (after an XML declaration, comments or a doctype) is `<svg`.
+pub fn looks_like_svg(data: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(data) else { return false };
+    let mut rest = text.trim_start_matches('\u{feff}').trim_start();
+    loop {
+        if let Some(r) = rest.strip_prefix("<?") {
+            let Some(e) = r.find("?>") else { return false };
+            rest = r[e + 2..].trim_start();
+        } else if let Some(r) = rest.strip_prefix("<!--") {
+            let Some(e) = r.find("-->") else { return false };
+            rest = r[e + 3..].trim_start();
+        } else if rest.len() >= 9 && rest[..9].eq_ignore_ascii_case("<!doctype") {
+            let Some(e) = rest.find('>') else { return false };
+            rest = rest[e + 1..].trim_start();
+        } else {
+            return rest.len() >= 5 && rest[..4].eq_ignore_ascii_case("<svg") && (rest.as_bytes()[4].is_ascii_whitespace() || rest.as_bytes()[4] == b'>');
+        }
+    }
 }
 
 /// Icon links of a home page, best first: apple-touch-icon, then icons by declared size.
@@ -307,6 +340,15 @@ mod tests {
         let r = PublicOnlyResolver;
         let name: reqwest::dns::Name = "localhost".parse().unwrap();
         assert!(reqwest::dns::Resolve::resolve(&r, name).await.is_err());
+    }
+
+    #[test]
+    fn svg_detection() {
+        assert!(looks_like_svg(b"<svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>"));
+        assert!(looks_like_svg(b"<?xml version=\"1.0\"?>\n<!-- c -->\n<!DOCTYPE svg>\n<svg>\n</svg>"));
+        assert!(!looks_like_svg(b"<html><svg></svg></html>"));
+        assert!(!looks_like_svg(b"<svgx>"));
+        assert!(!looks_like_svg(b"\xff\xfe<svg>"));
     }
 
     #[test]

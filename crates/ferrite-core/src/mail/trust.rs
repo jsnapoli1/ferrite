@@ -247,6 +247,10 @@ impl Core {
         if cur.index_decrypted && !next.index_decrypted {
             self.mail_drop_decrypted_index(user_id).await?;
         }
+        if !cur.index_decrypted && next.index_decrypted {
+            // Encrypted mail read before is decrypted (and indexed) again when next needed.
+            self.smime_forget_encrypted_bodies(user_id).await?;
+        }
         self.hub.publish([user_id], &serde_json::json!({"type": "mail.security", "what": "settings"}));
         Ok(next)
     }

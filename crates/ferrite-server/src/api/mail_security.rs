@@ -184,7 +184,7 @@ async fn proxy(State(s): State<AppState>, auth: Auth, Query(q): Query<ProxyQ>) -
     scope(&auth)?;
     let url = s.core.mail_proxy_check(&auth.user.id, &q.u, q.e, &q.s)?;
     let allow_private = s.core.config.mail_security.proxy_allow_private;
-    let (mime, data) = match mail_fetch::image(&url, mail_fetch::MAX_IMAGE, allow_private).await {
+    let (mime, data) = match mail_fetch::proxied_image(&url, mail_fetch::MAX_IMAGE, allow_private).await {
         Ok(x) => x,
         Err(e) => {
             tracing::debug!(error = %e, "image proxy fetch failed");
@@ -203,7 +203,9 @@ async fn proxy(State(s): State<AppState>, auth: Auth, Query(q): Query<ProxyQ>) -
     let h = resp.headers_mut();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
     h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-    h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; sandbox"));
+    // An SVG opened directly is a document: no scripts, no requests, no same origin.
+    h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; sandbox"));
+    h.insert(header::CONTENT_DISPOSITION, HeaderValue::from_static("inline; filename=\"image\""));
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=3600"));
     h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     h.insert("cross-origin-resource-policy", HeaderValue::from_static("same-origin"));
@@ -256,7 +258,7 @@ async fn network_avatar(s: &AppState, email: &str, gravatar: bool) -> Option<Str
     if let Some(hit) = cached(s, &key).await {
         return hit;
     }
-    let found = tokio::time::timeout(Duration::from_secs(20), mail_fetch::favicon(&domain, allow_private)).await.ok().flatten();
+    let found = tokio::time::timeout(Duration::from_secs(8), mail_fetch::favicon(&domain, allow_private)).await.ok().flatten();
     let _ = s.core.mail_avatar_cache_put(&key, found.as_ref().map(|(m, d)| (*m, d.as_slice()))).await;
     found.map(|(m, d)| data_uri(m, &d))
 }

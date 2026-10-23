@@ -163,7 +163,7 @@ HTTP client configuration:
 { "mcpServers": { "ferrite": { "url": "https://your-server/mcp", "headers": { "Authorization": "Bearer <app token>" } } } }
 ```
 
-**Tools (76)**, each annotated read-only or destructive, and each limited by the token's scopes:
+**Tools (80)**, each annotated read-only or destructive, and each limited by the token's scopes:
 
 | Group | Tools |
 |---|---|
@@ -171,7 +171,7 @@ HTTP client configuration:
 | Talk | `talk_rooms` `talk_read` `talk_post` `talk_create_room` `talk_direct` `talk_share_file` `talk_react` `talk_poll` `talk_search` `talk_lobby` `talk_breakouts` `talk_breakouts_start` `talk_breakouts_stop` `talk_breakouts_broadcast` |
 | Boards | `boards_list` `boards_get` `boards_create` `boards_add_card` `boards_update_card` `boards_move_card` `boards_assign` `boards_comment` `boards_link` `boards_my_cards` |
 | Live documents | `docs_create` `docs_read` `docs_append` `docs_replace` `sheet_set` `mindmap_add` `mindmap_update` `canvas_add` `canvas_connect` |
-| Mail | `mail_accounts` `mail_list` `mail_read` `mail_search` `mail_draft` `mail_send` `mail_mark` `mail_move` `mail_delete` |
+| Mail | `mail_accounts` `mail_list` `mail_read` `mail_search` `mail_draft` `mail_send` `mail_mark` `mail_move` `mail_delete` `mail_trusted_senders` `mail_trusted_senders_edit` `mail_internal_addresses` `mail_internal_addresses_edit` |
 | Calendar and contacts | `calendar_events` `calendar_create_event` `calendar_update_event` `calendar_delete_event` `calendar_share` `calendar_unshare` `calendar_respond` `contacts_search` `contacts_create` `contacts_update` |
 | Everything else | `search` (hybrid full-text + semantic) `notifications` `activity` `users_search` |
 | Crafting Apps | `craft_apps` `craft_open` `craft_call` `craft_close` |
@@ -259,6 +259,10 @@ username = "ferrite@example.org"
 password = "…"
 from = "Ferrite <ferrite@example.org>"
 
+[mail_security]
+dns_server = "127.0.0.1:53"                 # DNS for DKIM key lookups (default: the system resolver)
+smime_trust_store = "/etc/ssl/smime-cas.pem" # S/MIME trust anchors (default: the system CA bundle)
+
 [craft]
 bin_dir = "/opt/craft/bin"                  # where <app>-cli binaries live (PATH is also searched)
 [craft.commands.gridcraft]                  # optional per-app override of the MCP launch command
@@ -285,6 +289,7 @@ link_by_email = false                       # link to the account with the same,
 - `FERRITE_CRAFT_BIN_DIR`
 - `FERRITE_REQUIRE_2FA`
 - `FERRITE_PUSH_ALLOW_INSECURE` (`1`: accept `http`/private push endpoints; tests only)
+- `FERRITE_MAIL_DNS`, `FERRITE_SMIME_TRUST_STORE` (the `[mail_security]` settings), `FERRITE_MAIL_PROXY_ALLOW_PRIVATE` (`1`: the mail image proxy and favicon fetcher may reach private addresses; tests only)
 
 **Command line:**
 
@@ -318,7 +323,9 @@ ferrite 2fa-reset bob                           # turn off bob's two-factor auth
 - **User files** are served with `Content-Security-Policy: sandbox`, and only safe types render inline. Everything else downloads.
 - **AI:** the assistant and the Talk bot act through the same tools with the **requesting user's** permissions, and are read-only unless the user allows changes for that request. Stdio MCP servers (which run commands) can only be added by admins.
 - **Crafting Apps** run confined to a per-session work folder, and the original file is locked while they work.
-- **Mail account passwords** are encrypted at rest (ChaCha20-Poly1305, key derived from the server secret, bound to the account) and never returned by the API. HTML mail is sanitized on the server and shown in a sandboxed frame without scripts; remote images load only when asked.
+- **Mail account passwords** are encrypted at rest (ChaCha20-Poly1305, key derived from the server secret, bound to the account) and never returned by the API. HTML mail is sanitized on the server and shown in a sandboxed frame without scripts whose CSP allows images only from Ferrite itself.
+- **Mail privacy:** remote images load only when asked (or for senders and domains the user trusts), and then through Ferrite's image proxy: URLs are HMAC-signed per user and expire, requests carry no cookies or referrer, the same SSRF guard as Web Push applies to every redirect, bodies are size- and time-limited and must really be images (SVG is served sandboxed). Sender pictures come from the user's contacts or the sender domain's favicon, fetched by the server and cached; Gravatar only when an admin allows it. The reader shows phishing hints (contact name with another address, an address in the display name, future dates, misleading links, Reply-To in another domain, the server's `$Phishing` flag), external senders, and DKIM results (RFC 6376/8463, verified once per message).
+- **S/MIME:** private keys (from PKCS#12 or PEM) are encrypted at rest like mail passwords and never returned. Signatures are checked against the system (or configured) trust store plus issuers the user trusts; signers' certificates are kept for encrypting to them. Decrypted mail is kept out of previews, global search, embeddings and the assistant unless the user allows it; deleting the key forgets it. PGP is handled entirely by the Mailvelope extension in the browser.
 - **Web Push** endpoints must be `https` and resolve to public addresses (checked at subscribe time and before every send), so subscriptions can't be used to reach internal services. Payloads are end-to-end encrypted to the device.
 - **Recording** is limited to moderators (checked on the server), everyone in the call sees that it's on, and the files go only to the moderator's Files and the conversation.
 - **Invitation links** for external guests carry an HMAC of organizer, event and attendee; answers are recorded only on a button press, so mail scanners opening links change nothing.
@@ -422,7 +429,8 @@ cd e2e && FERRITE_URL=http://127.0.0.1:8821 node files.mjs
 | `security.mjs` | 2FA set-up in Settings, sign-in with a TOTP code (computed in the test) and with a recovery code, the admin's 2FA view, SSO through a mock OpenID Connect provider served by the script (cancel and success); needs the `[[oidc]]` block from its header |
 | `invites.mjs` | Calendar sharing and public links, guests with suggestions, invitation by email (the script runs an SMTP sink; set `[smtp]` to 127.0.0.1:8836), answers from the dialog and from the public page, read-only and read-write shares |
 | `push.mjs` | Service worker and manifest, Settings → Notifications, pushes to a mock push service decrypted independently, push handling and notification clicks in the service worker (run the server with `FERRITE_PUSH_ALLOW_INSECURE=1`) |
-| `mail.mjs` | Mail against a real Dovecot/Postfix server (`mail-server.sh start` first): account setup, folders, threads, sanitized HTML and remote images, attachments to Files, keyboard shortcuts, reply/compose with autocomplete and attachments, live arrival over IDLE, archive/delete, drafts, search, dark and phone layouts |
+| `mail.mjs` | Mail against a real Dovecot/Postfix server (`mail-server.sh start` first; or Dovecot only with `mail-relay.mjs` as the SMTP server): account setup, folders, threads, sanitized HTML and remote images (run the server with `FERRITE_MAIL_PROXY_ALLOW_PRIVATE=1`, the test image is local), attachments to Files, keyboard shortcuts, reply/compose with autocomplete and attachments, live arrival over IDLE, archive/delete, drafts, search, dark and phone layouts |
+| `mail-security.mjs` | Mail security against a real Dovecot (no Postfix): DKIM (keys and DNS served by the script), phishing hints, external senders, remote images through the proxy and trusted senders, contact photos, S/MIME import, decryption, signatures and sign+encrypt sending, view source, ZIP of attachments, PGP with and without a mock of Mailvelope's client API, dark and phone layouts (see its header) |
 
 ## License
 
