@@ -6,6 +6,8 @@ pub mod files;
 pub mod groupware;
 pub mod mail;
 pub mod mail_security;
+pub mod mail_accounts;
+pub mod mail_admin;
 pub mod push;
 pub mod security;
 pub mod talk;
@@ -70,6 +72,8 @@ pub fn router() -> Router<AppState> {
         .merge(calendar_sharing::router())
         .merge(mail::router())
         .merge(mail_security::router())
+        .merge(mail_accounts::router())
+        .merge(mail_admin::router())
         .route("/api/{*rest}", get(not_found).post(not_found).put(not_found).patch(not_found).delete(not_found))
 }
 
@@ -129,11 +133,12 @@ async fn setup(State(s): State<AppState>, headers: HeaderMap, Json(c): Json<Cred
             username: c.username,
             display_name: c.display_name,
             email: c.email,
-            password: c.password,
+            password: c.password.clone(),
             is_admin: true,
             quota_bytes: None,
         })
         .await?;
+    s.core.mail_password_login(&u.id, &c.password).await;
     security::password_signed_in(&s, &u, &headers).await
 }
 
@@ -147,11 +152,12 @@ async fn register(State(s): State<AppState>, headers: HeaderMap, Json(c): Json<C
             username: c.username,
             display_name: c.display_name,
             email: c.email,
-            password: c.password,
+            password: c.password.clone(),
             is_admin: false,
             quota_bytes: None,
         })
         .await?;
+    s.core.mail_password_login(&u.id, &c.password).await;
     security::password_signed_in(&s, &u, &headers).await
 }
 
@@ -163,6 +169,8 @@ async fn login(State(s): State<AppState>, headers: HeaderMap, Json(c): Json<Cred
     match s.core.authenticate(&c.username, &c.password).await {
         Ok(u) => {
             s.throttle.succeed(&key);
+            // Provisioning in "login password" mode needs the password the user just proved.
+            s.core.mail_password_login(&u.id, &c.password).await;
             security::password_signed_in(&s, &u, &headers).await
         }
         Err(e) => {
@@ -203,6 +211,7 @@ async fn update_me(State(s): State<AppState>, auth: Auth, Json(u): Json<MeUpdate
             .await
             .map_err(|_| ApiError(Error::bad("current password is wrong")))?;
     }
+    let new_password = u.password.clone();
     let user = s
         .core
         .update_user(
@@ -216,6 +225,9 @@ async fn update_me(State(s): State<AppState>, auth: Auth, Json(u): Json<MeUpdate
             },
         )
         .await?;
+    if let Some(p) = new_password {
+        s.core.mail_password_login(&auth.user.id, &p).await;
+    }
     Ok(Json(json!({"user": user})))
 }
 

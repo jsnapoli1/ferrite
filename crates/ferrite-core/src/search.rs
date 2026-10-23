@@ -20,6 +20,8 @@ pub struct SearchHit {
 struct Access {
     rooms: Vec<String>,
     boards: Vec<String>,
+    /// Mail accounts delegated to the user (their mail is indexed under the owner).
+    mail_delegated: Vec<String>,
 }
 
 /// One full-text row that semantic search found similar to the query.
@@ -102,9 +104,15 @@ impl Core {
         .bind(crate::util::now())
         .fetch_all(&self.db)
         .await?;
+        let mail_delegated =
+            sqlx::query_scalar("SELECT d.account_id FROM mail_delegations d JOIN users u ON u.id = d.user_id WHERE d.user_id = ? AND u.disabled = 0")
+                .bind(user_id)
+                .fetch_all(&self.db)
+                .await?;
         Ok(Access {
             rooms,
             boards: self.accessible_board_ids(user_id).await?,
+            mail_delegated,
         })
     }
 
@@ -127,6 +135,13 @@ impl Core {
             },
             "message" => access.rooms.contains(&scope),
             "card" => access.boards.contains(&scope),
+            "mail" if scope != user_id && !access.mail_delegated.is_empty() => {
+                let account: Option<String> = sqlx::query_scalar("SELECT account_id FROM mail_messages WHERE id = ?")
+                    .bind(&id)
+                    .fetch_optional(&self.db)
+                    .await?;
+                account.is_some_and(|a| access.mail_delegated.contains(&a))
+            }
             _ => scope == user_id,
         };
         if !visible {

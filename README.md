@@ -31,13 +31,13 @@ cargo build --release
 |---|---|
 | **Files** | Upload/download (drag and drop, multi-file progress), folders, rename/move/copy, favorites, recent, quotas, **versions** (restore any), **trash** (30-day retention, restore), **locks**, content-addressed storage with **deduplication** (BLAKE3), full-text search inside text files, previews for images, PDF, text, audio and video. |
 | **Sharing** | Share with users, groups or a Talk conversation (read / edit / create / delete / reshare bits). Public links can have a password, an expiry, and an "upload" mode (file drop). |
-| **Talk** | Group, public, one-to-one and note-to-self conversations. Markdown, replies, reactions, edits, deletes, @mentions with unread badges, typing indicators, polls, file sharing (from Files or by upload, drop or paste). **Guests** join public conversations by link. **Video/audio calls** at up to **720p, 30 fps** with screen sharing, raise hand, speaker detection, and mute/camera indicators; routed through the built-in **SFU** with simulcast (each person receives the resolution their screen shows), with peer-to-peer as the fallback. **Server-side recording** (one WebM per person, no re-encoding). **Moderation:** lobby (with an opening time), room passwords, who may start calls, ask to mute / mute everyone, lower hands (a raised-hands queue), remove from a call. **Breakout rooms** (automatic, manual or free choice) with live moves, broadcast, help requests and a timer. |
+| **Talk** | Group, public, one-to-one and note-to-self conversations. Markdown, replies, reactions, edits, deletes, @mentions with unread badges, typing indicators, polls, file sharing (from Files or by upload, drop or paste). **Guests** join public conversations by link. **Video/audio calls** at **720p, 30 fps** by default, configurable up to **4K, 60 fps** ([what each step needs](#call-quality)), with screen sharing, raise hand, speaker detection, and mute/camera indicators; routed through the built-in **SFU** with simulcast (each person receives the resolution their screen shows), with peer-to-peer as the fallback. **Server-side recording** (one WebM per person, no re-encoding). **Moderation:** lobby (with an opening time), room passwords, who may start calls, ask to mute / mute everyone, lower hands (a raised-hands queue), remove from a call. **Breakout rooms** (automatic, manual or free choice) with live moves, broadcast, help requests and a timer. |
 | **Boards** | Kanban boards with columns, cards (drag or keyboard), labels, due dates, assignees, comments, links to files/folders/conversations/URLs, read-only members and archive. |
 | **Live documents** | Real-time co-editing (CRDT, Yjs-compatible) of **Markdown/text**, **spreadsheets** (formulas: arithmetic, refs, SUM/AVERAGE/MIN/MAX/COUNT), **mind maps** (`.fmind`) and **canvases** (`.fcanvas`: notes, frames, files, embedded mind maps and boards, arrows). They show peers' presence and cursors, and save automatically, with versions. |
 | **Calendar and contacts** | CalDAV and CardDAV at Nextcloud-compatible URLs. Month/week/list views. **Recurring events are expanded** (RRULE, EXDATE, RDATE, overridden instances), DST-correct with IANA time zones. Changes from any client or tab appear live. **Sharing** with users and groups (read-only or read-write) and public subscription links. **Invitations** with RSVPs: Ferrite users get them in their calendar, everyone else by email with Accept/Maybe/Decline links (no account needed); the server schedules, so nobody gets an invitation twice. Contacts can be edited. |
-| **Mail** | Webmail for your existing **IMAP/SMTP accounts** (settings found automatically for well-known providers). Three panes (one at a time on phones), **conversations**, HTML mail sanitized and shown in a sandboxed frame with **remote images blocked** until you ask, attachments (download or **save to Files**), read/flag/move/archive/delete with multi-select and keyboard shortcuts, search (cached mail and the mail server), replies and forwards with quoting, attachments from upload or Files, drafts and sent mail filed on the server. **New mail arrives live** (IMAP IDLE) with a notification. Passwords are encrypted at rest. |
+| **Mail** | Webmail for your existing **IMAP/SMTP accounts** (settings found automatically for well-known providers). Three panes (one at a time on phones), **conversations**, HTML mail sanitized and shown in a sandboxed frame with **remote images blocked** until you ask, attachments (download or **save to Files**), read/flag/move/archive/delete with multi-select and keyboard shortcuts, search (cached mail and the mail server), replies and forwards with quoting, attachments from upload or Files, drafts and sent mail filed on the server. **New mail arrives live** (IMAP IDLE) with a notification, and every account is **synced in the background** at an admin-set interval. Passwords are encrypted at rest. **Google and Microsoft accounts sign in with OAuth 2.0** (XOAUTH2). Settings are found from the provider database, the domain's own autoconfig/autodiscover or its **MX records**, with a connection test. Accounts can be **shared with other users** (they read and send, but can't remove the account or change its sign-in), reordered, and show their **quota**. **Report spam / Not spam**. Admins get **provisioning templates** (accounts created for users by domain or group) and Mail settings (who may add accounts, anti-abuse alerts, attachment limit, sync interval, AI, UI defaults, TLS and local-server policy). |
 | **Search** | One search across files, messages, cards, events, contacts and mail. Full text always; **semantic** (by meaning) when an embedding model is configured. |
-| **MCP** | Ferrite is an **MCP server**: 76 tools, resources and prompts over Streamable HTTP and stdio, for both protocol eras. It is also an **MCP client**: it uses the Crafting Apps' MCP servers and any MCP servers you add. |
+| **MCP** | Ferrite is an **MCP server**: 81 tools, resources and prompts over Streamable HTTP and stdio, for both protocol eras. It is also an **MCP client**: it uses the Crafting Apps' MCP servers and any MCP servers you add. |
 | **AI** | Bring your own model: any **OpenAI-compatible** server (Ollama, llama.cpp, LM Studio, vLLM, …) or **Anthropic's Claude API**. The assistant uses the same MCP tools with the user's own permissions, and is **read-only unless the user allows changes**. Typing `@assistant` in any conversation brings in the Talk bot. Per-user consent. |
 | **Notifications** | Live in the app, and **Web Push** to browsers and phones (installable app; iPhone from the Home Screen): mentions, direct messages, shares, assignments, invitations and incoming calls (Join/Dismiss), with per-category settings. |
 | **Admin** | Users, groups, quotas, disabling, password reset, app tokens with scopes, server stats (memory, dedup savings, SFU traffic and recordings). |
@@ -104,8 +104,8 @@ side-by-side performance claims.
   - The first offer/answer goes over the WebSocket; later renegotiation runs over a WebRTC data channel.
   - Open **UDP 10000** (configurable) on the server.
   - When the SFU is disabled or its port is busy, calls fall back to a peer-to-peer mesh automatically. The server tells all participants which transport to use, so they always agree.
-- **Video quality and frame rate:** cameras and screens are captured at up to 720p, 30 fps.
-  - Through the SFU, each sender encodes three simulcast layers (320×180, 640×360, 1280×720, all at 30 fps). Each receiver asks for the layer its tile needs, from the tile's size on screen (the smallest while the tab is hidden). The SFU switches layers only on keyframes, and tells every sender the highest layer anyone wants, so unwatched layers are paused.
+- **Video quality and frame rate:** cameras and screens are captured at up to the server's ceiling, 720p at 30 fps by default (`[calls]`, see [Call quality](#call-quality)).
+  - Through the SFU, each sender encodes three simulcast layers: full, half and quarter size (at 720p: 1280×720, 640×360, 320×180), all at the full frame rate. Each receiver asks for the layer its tile needs, from the tile's size on screen relative to the ceiling (the smallest while the tab is hidden). The SFU switches layers only on keyframes, and tells every sender the highest layer anyone wants, so unwatched layers are paused.
   - When bandwidth or CPU is short, cameras keep their frame rate and lower resolution first; screen shares balance both so text stays readable.
   - Peer to peer, each connection gets its own encode, halved in resolution once there are several peers.
 - **Recording** (moderators, through the SFU): the SFU writes every participant's audio and best video layer straight into one WebM file per person, with no decoding or re-encoding. Everyone in the call sees a "Recording" indicator and the chat gets notices. When it stops (by a moderator, when the call ends, or after 4 hours), the files go into the moderator's Files under `Talk/Recordings/<conversation> <date time>/` and are shared into the chat. Peer-to-peer calls can't be recorded, since the server never sees their media.
@@ -163,7 +163,7 @@ HTTP client configuration:
 { "mcpServers": { "ferrite": { "url": "https://your-server/mcp", "headers": { "Authorization": "Bearer <app token>" } } } }
 ```
 
-**Tools (80)**, each annotated read-only or destructive, and each limited by the token's scopes:
+**Tools (85)**, each annotated read-only or destructive, and each limited by the token's scopes:
 
 | Group | Tools |
 |---|---|
@@ -171,7 +171,7 @@ HTTP client configuration:
 | Talk | `talk_rooms` `talk_read` `talk_post` `talk_create_room` `talk_direct` `talk_share_file` `talk_react` `talk_poll` `talk_search` `talk_lobby` `talk_breakouts` `talk_breakouts_start` `talk_breakouts_stop` `talk_breakouts_broadcast` |
 | Boards | `boards_list` `boards_get` `boards_create` `boards_add_card` `boards_update_card` `boards_move_card` `boards_assign` `boards_comment` `boards_link` `boards_my_cards` |
 | Live documents | `docs_create` `docs_read` `docs_append` `docs_replace` `sheet_set` `mindmap_add` `mindmap_update` `canvas_add` `canvas_connect` |
-| Mail | `mail_accounts` `mail_list` `mail_read` `mail_search` `mail_draft` `mail_send` `mail_mark` `mail_move` `mail_delete` `mail_trusted_senders` `mail_trusted_senders_edit` `mail_internal_addresses` `mail_internal_addresses_edit` |
+| Mail | `mail_accounts` `mail_list` `mail_read` `mail_search` `mail_draft` `mail_send` `mail_mark` `mail_move` `mail_delete` `mail_report_spam` `mail_delegations` `mail_delegate` `mail_undelegate` `mail_provision` `mail_trusted_senders` `mail_trusted_senders_edit` `mail_internal_addresses` `mail_internal_addresses_edit` |
 | Calendar and contacts | `calendar_events` `calendar_create_event` `calendar_update_event` `calendar_delete_event` `calendar_share` `calendar_unshare` `calendar_respond` `contacts_search` `contacts_create` `contacts_update` |
 | Everything else | `search` (hybrid full-text + semantic) `notifications` `activity` `users_search` |
 | Crafting Apps | `craft_apps` `craft_open` `craft_call` `craft_close` |
@@ -242,6 +242,10 @@ require_two_factor = false                  # true: every account must use 2FA (
 enabled = true
 udp_bind = "0.0.0.0:10000"                  # open this UDP port
 advertise = ["203.0.113.7"]                 # public IP(s) browsers should reach; default: this machine's IP
+
+[calls]                                     # see "Call quality" below for what each step needs
+max_resolution = "720p"                     # 360p, 480p, 720p, 1080p, 1440p or 2160p (4k)
+max_fps = 30                                # 15 to 60
 
 [[ice_servers]]                             # only needed across NATs
 urls = ["turn:turn.example.org:3478"]
@@ -324,6 +328,7 @@ ferrite 2fa-reset bob                           # turn off bob's two-factor auth
 - **AI:** the assistant and the Talk bot act through the same tools with the **requesting user's** permissions, and are read-only unless the user allows changes for that request. Stdio MCP servers (which run commands) can only be added by admins.
 - **Crafting Apps** run confined to a per-session work folder, and the original file is locked while they work.
 - **Mail account passwords** are encrypted at rest (ChaCha20-Poly1305, key derived from the server secret, bound to the account) and never returned by the API. HTML mail is sanitized on the server and shown in a sandboxed frame without scripts whose CSP allows images only from Ferrite itself.
+- **Mail access** goes through one check (owner or delegate, with the right the operation needs); delegates can't remove an account, change how it signs in, or share it further, and ids of the owner's other accounts are refused. OAuth tokens and provisioning secrets are sealed like passwords; the OAuth flow uses PKCE with its state bound to the browser session and usable once. Mail servers on local or private addresses are refused unless an admin allows them (checked on the addresses actually connected to), and certificates are verified unless an admin turns that off. Provisioning in "login password" mode keeps (sealed) the sign-in passwords of the users it applies to; the admin page explains the trade-off against a master password.
 - **Mail privacy:** remote images load only when asked (or for senders and domains the user trusts), and then through Ferrite's image proxy: URLs are HMAC-signed per user and expire, requests carry no cookies or referrer, the same SSRF guard as Web Push applies to every redirect, bodies are size- and time-limited and must really be images (SVG is served sandboxed). Sender pictures come from the user's contacts or the sender domain's favicon, fetched by the server and cached; Gravatar only when an admin allows it. The reader shows phishing hints (contact name with another address, an address in the display name, future dates, misleading links, Reply-To in another domain, the server's `$Phishing` flag), external senders, and DKIM results (RFC 6376/8463, verified once per message).
 - **S/MIME:** private keys (from PKCS#12 or PEM) are encrypted at rest like mail passwords and never returned. Signatures are checked against the system (or configured) trust store plus issuers the user trusts; signers' certificates are kept for encrypting to them. Decrypted mail is kept out of previews, global search, embeddings and the assistant unless the user allows it; deleting the key forgets it. PGP is handled entirely by the Mailvelope extension in the browser.
 - **Web Push** endpoints must be `https` and resolve to public addresses (checked at subscribe time and before every send), so subscriptions can't be used to reach internal services. Payloads are end-to-end encrypted to the device.
@@ -361,7 +366,7 @@ This is an honest map against Nextcloud's core feature set: ✅ done, 🟡 parti
 | Mind maps and whiteboards | ✅ | Canvases with embedded files, mind maps and boards |
 | Calendar (CalDAV) | ✅ | Recurrence expansion, sharing (users, groups, public links), invitations with server-side scheduling (RFC 6638) and email RSVPs. Replies emailed back from guests' own mail clients aren't read (they use the link). VTODO tasks are read-only in the web UI |
 | Contacts (CardDAV) | ✅ | |
-| Mail | ✅ | Webmail for IMAP/SMTP accounts (no POP3, no OAuth sign-in: use app passwords; no mail filters or vacation replies) |
+| Mail | ✅ | Webmail for IMAP/SMTP accounts, Google/Microsoft OAuth, delegation, provisioning (no POP3); see [docs/mail-parity.md](docs/mail-parity.md) |
 | Activity stream, notifications | ✅ | |
 | Users and groups admin | ✅ | |
 | LDAP/AD, SAML/OIDC single sign-on | 🟡 | OpenID Connect (any provider, several at once, auto-create, admin group, link by email). No LDAP or SAML |
@@ -389,7 +394,7 @@ e2e/               Playwright browser tests
 docs/bench/        benchmark results
 ```
 
-**Rust tests:** `cargo test --workspace` runs 125 tests. They include end-to-end tests that
+**Rust tests:** `cargo test --workspace` runs 147 tests. They include end-to-end tests that
 start real servers and cover:
 - login/CSRF and tokens
 - files, sharing, WebDAV, CalDAV/CardDAV
@@ -420,7 +425,7 @@ cd e2e && FERRITE_URL=http://127.0.0.1:8821 node files.mjs
 | `files.mjs` | Files, sharing dialog, public links (password, upload), versions, trash, Settings (profile, AI, tokens/MCP, MCP servers, Craft, admin), the assistant against a mock model, mobile layouts |
 | `talk.mjs` | Two-user chat (mentions, unread, replies, reactions, edit/delete, typing, polls, files), a video call (connect, mute/hand/camera/screen-share indicators, leave), guest join, deep links, narrow layouts |
 | `sfu.mjs` | Three-person call through the SFU: one connection each, video decoded from both others, server forwarding counters, clean leave, and a live switch to a larger simulcast layer when a tile grows |
-| `callfps.mjs` | Frame-rate probe for N people (`PEOPLE`, `CAMERA=<y4m>` for a 720p60 test camera, `MIN_FPS` to fail below a rate): per-layer encode rate, resolution and limitation reason, decoded fps per receiver |
+| `callfps.mjs` | Frame-rate probe for N people (`PEOPLE`, `CAMERA=<y4m>` for a test camera of any size, `VIEWPORT` for the window size, `MIN_FPS` to fail below a rate): per-layer encode rate, resolution and limitation reason, decoded fps per receiver |
 | `recording.mjs` | Recording permissions, indicator, one WebM per person in Files and in the chat, ffprobe-checked VP8/Opus content and duration, automatic stop when the call ends |
 | `moderation.mjs` | Lobby (waiting screen, who waits, live opening), guest password, raised-hands queue, ask to mute, mute everyone, remove and rejoin, who may start calls, breakout rooms (manual assignment, live chat and call moves for users and a guest, broadcast, help request, stop and return), phone and dark layouts |
 | `boards.mjs` | Boards, card modal, drag and keyboard moves, read-only members, and the four live editors with two users co-editing |
@@ -431,6 +436,7 @@ cd e2e && FERRITE_URL=http://127.0.0.1:8821 node files.mjs
 | `push.mjs` | Service worker and manifest, Settings → Notifications, pushes to a mock push service decrypted independently, push handling and notification clicks in the service worker (run the server with `FERRITE_PUSH_ALLOW_INSECURE=1`) |
 | `mail.mjs` | Mail against a real Dovecot/Postfix server (`mail-server.sh start` first; or Dovecot only with `mail-relay.mjs` as the SMTP server): account setup, folders, threads, sanitized HTML and remote images (run the server with `FERRITE_MAIL_PROXY_ALLOW_PRIVATE=1`, the test image is local), attachments to Files, keyboard shortcuts, reply/compose with autocomplete and attachments, live arrival over IDLE, archive/delete, drafts, search, dark and phone layouts |
 | `mail-security.mjs` | Mail security against a real Dovecot (no Postfix): DKIM (keys and DNS served by the script), phishing hints, external senders, remote images through the proxy and trusted senders, contact photos, S/MIME import, decryption, signatures and sign+encrypt sending, view source, ZIP of attachments, PGP with and without a mock of Mailvelope's client API, dark and phone layouts (see its header) |
+| `mail-accounts.mjs` | Mail accounts against two Dovecot instances (one validating OAuth tokens by introspection, see its header) with a mock OAuth provider and SMTP sink run by the script: Mail admin settings, connection test, quota, drag-and-drop account order, sharing an account and the delegate's view, report spam, a provisioning template and the provisioned account, connecting a Google account through the consent screen, dark and phone layouts |
 
 ## License
 

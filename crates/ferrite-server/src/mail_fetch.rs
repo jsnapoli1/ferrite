@@ -12,7 +12,7 @@
 //!
 //! `[mail_security] proxy_allow_private` (tests only) lifts the address check.
 
-use crate::push::is_public;
+use ferrite_core::net::is_public;
 use ferrite_core::mail::security::sniff_image;
 use ferrite_core::{Error, Result};
 use reqwest::{StatusCode, Url};

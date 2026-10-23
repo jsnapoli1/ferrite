@@ -481,7 +481,8 @@ impl Core {
 
     /// Assigns (or with `cert_id: None` removes) the certificate of an account address.
     pub async fn smime_set_identity(&self, user_id: &str, input: &IdentityInput) -> Result<Vec<IdentityView>> {
-        let account = self.mail_account(user_id, &input.account_id).await?;
+        // Which key an account signs with is part of how it authenticates its mail.
+        let account = self.mail_access(user_id, &input.account_id, super::delegation::MailRight::Authenticate).await?;
         let email = input.email.as_deref().unwrap_or(&account.email).trim().to_lowercase();
         if super::parse::Addr::parse(&email).is_none() {
             return Err(Error::bad(format!("{email:?} is not an email address")));

@@ -2,7 +2,7 @@
 // what the encoder actually sends (fps, resolution, bitrate, and WebRTC's own reason when it
 // holds back), and, per receiver, the decoded frame rate of each remote participant.
 //
-//   FERRITE_URL=http://127.0.0.1:8850 [PEOPLE=3] [SECONDS=6] [CAMERA=/path/cam.y4m] [MIN_FPS=25] node callfps.mjs
+//   FERRITE_URL=http://127.0.0.1:8850 [PEOPLE=3] [SECONDS=6] [CAMERA=/path/cam.y4m] [MIN_FPS=25] [VIEWPORT=960x640] node callfps.mjs
 //
 // CAMERA feeds Chromium a Y4M file as the webcam (e.g. 720p60 from ffmpeg's testsrc2); without
 // it Chromium's built-in fake camera is used. With MIN_FPS the run fails if any receiver
@@ -13,6 +13,9 @@ const base = process.env.FERRITE_URL || 'http://127.0.0.1:8850';
 const people = Number(process.env.PEOPLE || 3);
 const seconds = Number(process.env.SECONDS || 6);
 const minFps = process.env.MIN_FPS ? Number(process.env.MIN_FPS) : null;
+// Window size; tiles must be large for receivers to ask for the top layer (e.g. 2400x1600).
+const [vw, vh] = (process.env.VIEWPORT || '960x640').split('x').map(Number);
+const viewport = { width: vw, height: vh };
 const H = { 'X-Ferrite-Request': '1' };
 const T = 30000;
 const errors = [];
@@ -70,7 +73,7 @@ try {
   const { room } = await api(admin, 'POST', '/api/talk/rooms', { kind: 'group', name: 'FPS probe', invite: names.slice(1) });
   const pages = [];
   for (const n of names) {
-    const ctx = await browser.newContext({ viewport: { width: 960, height: 640 } });
+    const ctx = await browser.newContext({ viewport });
     await ctx.grantPermissions(['camera', 'microphone'], { origin: base });
     const page = await ctx.newPage();
     page.on('console', (m) => { if (m.type() === 'error') errors.push(`${n}: ${m.text()}`); });

@@ -75,6 +75,7 @@ impl Target {
             security: SmtpSecurity::None,
             username: self.user.clone(),
             password: self.pass.clone(),
+            xoauth2: false,
         }
     }
 
@@ -375,12 +376,8 @@ async fn security_apis_without_a_mail_server() {
         Err(ferrite_core::Error::Forbidden)
     ));
 
-    // Admin switch for Gravatar; avatars without a source are null (initials).
-    assert_eq!(b.get("/api/admin/mail/avatars").await["gravatar"], false);
-    let (st, _) = b.call(Method::PUT, "/api/admin/mail/avatars", Some(json!({"gravatar": true}))).await;
-    assert!(st.is_success());
-    assert!(core.mail_gravatar_enabled().await.unwrap());
-    b.call(Method::PUT, "/api/admin/mail/avatars", Some(json!({"gravatar": false}))).await;
+    // Gravatar is off unless the admin allows it; avatars without a source are null (initials).
+    assert!(!core.mail_gravatar().await);
     let av = b.get("/api/mail/avatars?emails=nobody@nonexistent.invalid,not-an-address").await;
     assert_eq!(av["avatars"], json!({"nobody@nonexistent.invalid": null}), "{av}");
     let miss: Option<Option<Vec<u8>>> = sqlx::query_scalar("SELECT data FROM mail_avatar_cache WHERE key = 'favicon:nonexistent.invalid'")
@@ -423,8 +420,6 @@ async fn security_apis_without_a_mail_server() {
     bob.post("/api/auth/login", json!({"username": "bob", "password": "bob-password-1"})).await;
     assert_eq!(bob.get("/api/mail/trusted-senders").await["entries"], json!([]));
     assert_eq!(bob.get("/api/mail/smime/certificates").await["certificates"], json!([]));
-    let (st, _) = bob.call(Method::GET, "/api/admin/mail/avatars", None).await;
-    assert_eq!(st, StatusCode::FORBIDDEN);
     let (st, _) = bob.call(Method::DELETE, &format!("/api/mail/smime/certificates/{}", cert["id"].as_str().unwrap()), None).await;
     assert_eq!(st, StatusCode::NOT_FOUND);
     let (st, _) = bob.call(Method::GET, &url, None).await;
@@ -464,6 +459,8 @@ async fn mail_security_against_a_real_imap_server() {
     })
     .await;
     let (smtp_port, mut sink) = ferrite_core::mailer::sink::sink().await;
+    let (st, v) = b.call(Method::PATCH, "/api/admin/mail/settings", Some(json!({"allow_local_servers": true}))).await;
+    assert!(st.is_success(), "{v}");
     let account = b
         .post(
             "/api/mail/accounts",

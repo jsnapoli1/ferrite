@@ -1,7 +1,8 @@
 //! Mail security and privacy API: the reader's security report, trusted senders, internal
 //! addresses, settings, the remote image proxy, sender avatars, view source, attachments as
-//! a ZIP, the S/MIME certificate store, and the admin's avatar setting. Everything requires
-//! the `mail` scope (the admin endpoint `admin`) and only touches the caller's own data.
+//! a ZIP and the S/MIME certificate store. Everything requires the `mail` scope and only
+//! touches the caller's own data (messages through the central access check; Gravatar is the
+//! admin's `gravatar` mail setting).
 
 use super::files::content_disposition;
 use crate::AppState;
@@ -48,7 +49,6 @@ pub fn router() -> Router<AppState> {
         .route("/api/mail/smime/certificates/{id}", delete(delete_certificate))
         .route("/api/mail/smime/certificates/{id}/pem", get(certificate_pem))
         .route("/api/mail/smime/identities", get(identities).put(set_identity))
-        .route("/api/admin/mail/avatars", get(admin_avatars).put(admin_set_avatars))
 }
 
 fn scope(auth: &Auth) -> Result<(), ApiError> {
@@ -278,7 +278,7 @@ async fn avatars(State(s): State<AppState>, auth: Auth, Query(q): Query<AvatarsQ
     emails.sort();
     emails.dedup();
     emails.truncate(MAX_AVATARS);
-    let gravatar = s.core.mail_gravatar_enabled().await?;
+    let gravatar = s.core.mail_gravatar().await;
     let uid = auth.user.id.clone();
     let results: Vec<(String, Option<String>)> = futures::stream::iter(emails)
         .map(|email| {
@@ -381,22 +381,4 @@ async fn identities(State(s): State<AppState>, auth: Auth) -> ApiResult<Json<Val
 async fn set_identity(State(s): State<AppState>, auth: Auth, Json(b): Json<IdentityInput>) -> ApiResult<Json<Value>> {
     scope(&auth)?;
     Ok(Json(json!({"identities": s.core.smime_set_identity(&auth.user.id, &b).await?})))
-}
-
-/// Admin: whether sender avatars may come from Gravatar (off by default). The admin page is
-/// built by the accounts workstream on this API.
-async fn admin_avatars(State(s): State<AppState>, auth: Auth) -> ApiResult<Json<Value>> {
-    auth.require_admin()?;
-    Ok(Json(json!({"gravatar": s.core.mail_gravatar_enabled().await?})))
-}
-
-#[derive(Deserialize)]
-struct AvatarSettings {
-    gravatar: bool,
-}
-
-async fn admin_set_avatars(State(s): State<AppState>, auth: Auth, Json(b): Json<AvatarSettings>) -> ApiResult<Json<Value>> {
-    auth.require_admin()?;
-    s.core.mail_set_gravatar_enabled(b.gravatar).await?;
-    Ok(Json(json!({"gravatar": b.gravatar})))
 }

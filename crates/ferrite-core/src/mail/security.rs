@@ -318,7 +318,7 @@ impl Core {
     /// With the opt-in: decrypts (and so indexes) encrypted messages of the searched folders
     /// that were never opened, a bounded number per search.
     pub(crate) async fn mail_index_pending_encrypted(&self, user_id: &str, a: &super::Account, f: &super::store::Folder) -> Result<()> {
-        if !self.mail_security_settings(user_id).await?.index_decrypted || self.smime_decryption_keys(user_id).await?.is_empty() {
+        if !self.mail_security_settings(user_id).await?.index_decrypted || self.smime_decryption_keys(&a.user_id).await?.is_empty() {
             return Ok(());
         }
         let uids = {
@@ -367,8 +367,10 @@ impl Core {
 
     /// The message with its S/MIME layers removed (for attachments and inline parts).
     pub async fn mail_readable_raw(&self, user_id: &str, id: &str) -> Result<(super::store::MessageSummary, Vec<u8>)> {
+        let (a, _) = self.message_row(user_id, id).await?;
         let (m, raw) = self.mail_raw(user_id, id).await?;
-        let u = self.mail_unwrap(user_id, &raw).await;
+        // Decrypted with the account owner's keys (a delegate reads on their behalf).
+        let u = self.mail_unwrap(&a.user_id, &raw).await;
         Ok((m, u.raw))
     }
 
@@ -445,9 +447,10 @@ impl Core {
     pub async fn mail_security_report(&self, user_id: &str, id: &str) -> Result<SecurityReport> {
         let (a, m) = self.message_row(user_id, id).await?;
         let (_, raw) = self.mail_raw(user_id, id).await?;
-        let unwrapped = self.mail_unwrap(user_id, &raw).await;
+        // The account owner's keys decrypt; signers are collected for the owner too.
+        let unwrapped = self.mail_unwrap(&a.user_id, &raw).await;
         for c in &unwrapped.verified_signers {
-            if let Err(e) = self.smime_collect(user_id, c).await {
+            if let Err(e) = self.smime_collect(&a.user_id, c).await {
                 tracing::debug!(error = %e, "collecting a signer certificate failed");
             }
         }
@@ -892,16 +895,6 @@ impl Core {
         .execute(&self.db)
         .await?;
         Ok(())
-    }
-
-    /// Whether the admin allowed Gravatar lookups (off by default: it tells a third party
-    /// who mails the server's users).
-    pub async fn mail_gravatar_enabled(&self) -> Result<bool> {
-        Ok(self.kv_get("mail.avatars.gravatar").await?.as_deref() == Some("1"))
-    }
-
-    pub async fn mail_set_gravatar_enabled(&self, on: bool) -> Result<()> {
-        self.kv_set("mail.avatars.gravatar", if on { "1" } else { "0" }).await
     }
 }
 
