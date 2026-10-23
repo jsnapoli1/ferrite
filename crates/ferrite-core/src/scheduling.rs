@@ -680,7 +680,7 @@ impl Core {
 
     /// Records an attendee's answer in the organizer's copy, notifies the organizer and
     /// refreshes the other internal attendees' copies.
-    async fn apply_reply(
+    pub(crate) async fn apply_reply(
         &self,
         org_user: &User,
         uid: &str,

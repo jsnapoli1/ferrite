@@ -4,6 +4,7 @@
 //! the WebDAV layer, the MCP server and the AI assistant, so every surface enforces exactly
 //! the same permissions.
 
+pub mod absence;
 pub mod auth;
 pub mod blobs;
 pub mod boards;

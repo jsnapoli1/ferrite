@@ -279,13 +279,19 @@ impl FerriteTools {
         definitions()
             .iter()
             .chain(crate::mail_tools::definitions())
+            .chain(crate::mail_integration_tools::definitions())
             .filter(|t| ctx.allows(scope_of(&t.name)) || scope_of(&t.name) == "read")
             .cloned()
             .collect()
     }
 
     pub async fn call(&self, ctx: &UserCtx, name: &str, args: Value) -> Result<ToolResult, RpcError> {
-        if !definitions().iter().chain(crate::mail_tools::definitions()).any(|t| t.name == name) {
+        if !definitions()
+            .iter()
+            .chain(crate::mail_tools::definitions())
+            .chain(crate::mail_integration_tools::definitions())
+            .any(|t| t.name == name)
+        {
             return Err(RpcError::invalid_params(format!("Unknown tool: {name}")));
         }
         let scope = scope_of(name);
@@ -1164,6 +1170,7 @@ impl FerriteTools {
                 Ok(ToolResult::json(json!({"users": users})))
             }
 
+            n if crate::mail_integration_tools::handles(n) => crate::mail_integration_tools::dispatch(core, ctx, n, a).await,
             n if n.starts_with("mail_") => crate::mail_tools::dispatch(core, ctx, n, a).await,
             "craft_apps" => Ok(ToolResult::json(json!({"apps": self.craft.availability()}))),
             "craft_open" => {

@@ -12,15 +12,27 @@
 //! * `crypto`: passwords at rest. * `imap`: connections and pool. * `sync`: folder and
 //!   message sync, IDLE. * `store`: reading and acting on cached mail. * `compose`: replies,
 //!   drafts, sending. * `parse`: MIME, threading, sanitizing. * `autoconfig`: provider
-//!   settings from Thunderbird's ISPDB.
+//!   settings from Thunderbird's ISPDB. * `managesieve`, `sieve`, `filters`: Sieve filters
+//!   and the autoresponder. * `imip`: meeting invitations. * `itinerary`: travel reservations.
+//!   * `unsubscribe`: List-Unsubscribe. * `people`: contacts for senders and recipients.
+//!   * `integrations`: their per-account settings.
 
+pub mod agenda;
 pub mod autoconfig;
 pub mod compose;
 pub mod crypto;
+pub mod filters;
 pub mod imap;
+pub mod imip;
+pub mod integrations;
+pub mod itinerary;
+pub mod managesieve;
 pub mod parse;
+pub mod people;
+pub mod sieve;
 pub mod store;
 pub mod sync;
+pub mod unsubscribe;
 
 use crate::mailer::{SmtpSecurity, SmtpSettings};
 use crate::util::{new_id, now};

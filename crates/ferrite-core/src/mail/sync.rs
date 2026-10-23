@@ -391,6 +391,7 @@ impl Core {
         // A fresh window: everything from its oldest UID up is cached, and the folder is
         // complete when the window holds every message.
         let mut window: Option<(u32, bool)> = None;
+        let incremental = matches!(p.fetch, FetchNew::From(_));
         let fetched = match p.fetch {
             FetchNew::None => Vec::new(),
             FetchNew::Newest(n) => {
@@ -441,6 +442,10 @@ impl Core {
                 [a.user_id.as_str()],
                 &json!({"type": "mail.changed", "account_id": a.id, "folder_id": folder.id, "what": "messages"}),
             );
+        }
+        // Mail that just arrived (not a first look at old mail): meeting invitations and replies.
+        if incremental && folder.role.as_deref() == Some("inbox") {
+            self.after_new_mail(a, &folder.id, report.new.iter().map(|m| m.id.clone()).collect());
         }
         Ok(report)
     }

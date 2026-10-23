@@ -5,6 +5,7 @@ pub mod calendar_sharing;
 pub mod files;
 pub mod groupware;
 pub mod mail;
+pub mod mail_integrations;
 pub mod push;
 pub mod security;
 pub mod talk;
@@ -68,6 +69,7 @@ pub fn router() -> Router<AppState> {
         .merge(push::router())
         .merge(calendar_sharing::router())
         .merge(mail::router())
+        .merge(mail_integrations::router())
         .route("/api/{*rest}", get(not_found).post(not_found).put(not_found).patch(not_found).delete(not_found))
 }
 
