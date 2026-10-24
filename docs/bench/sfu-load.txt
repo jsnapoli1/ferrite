@@ -1,0 +1,28 @@
+# cargo run --release -p ferrite-sfu --example sfu-load -- PEOPLE FPS KBPS 10, 2026-10-24
+# Intel(R) Xeon(R) Processor @ 2.80GHz, 4 vCPU, Linux 6.18.44-fc-v153; the load generator (one thread per participant) runs on the same cores
+# sfu_cpu_core_share: CPU time of the SFU thread / wall time. Everyone receives everyone (no simulcast); KBPS is the
+# top-layer bitrate of a step (1500: 720p30, 6183: 1080p60, 20797: 2160p60), plus 50 Opus-sized packets/s each.
+
+## before: every client polled and given a timeout on every packet
+## people=4 fps=30 kbps=1500 load=1.47
+{"people": 4, "fps": 30, "kbps": 1500, "sfu_cpu_core_share": 0.105, "forwarded_mbit_per_s": 18.4, "forwarded_writes_per_s": 960.0, "forwarded_mbit_per_s_per_core": 175.0, "received_video_fps_per_stream": 30.0, "received_audio_pps_per_stream": 50.0}
+## people=8 fps=30 kbps=1500 load=1.14
+{"people": 8, "fps": 30, "kbps": 1500, "sfu_cpu_core_share": 0.369, "forwarded_mbit_per_s": 85.8, "forwarded_writes_per_s": 4477.0, "forwarded_mbit_per_s_per_core": 232.0, "received_video_fps_per_stream": 30.0, "received_audio_pps_per_stream": 50.0}
+## people=12 fps=30 kbps=1500 load=1.04
+{"people": 12, "fps": 30, "kbps": 1500, "sfu_cpu_core_share": 0.832, "forwarded_mbit_per_s": 203.1, "forwarded_writes_per_s": 10607.0, "forwarded_mbit_per_s_per_core": 244.0, "received_video_fps_per_stream": 30.1, "received_audio_pps_per_stream": 50.0}
+## people=4 fps=60 kbps=6183 load=1.34
+{"people": 4, "fps": 60, "kbps": 6183, "sfu_cpu_core_share": 0.218, "forwarded_mbit_per_s": 74.6, "forwarded_writes_per_s": 1320.0, "forwarded_mbit_per_s_per_core": 342.0, "received_video_fps_per_stream": 60.0, "received_audio_pps_per_stream": 50.0}
+## people=4 fps=60 kbps=20797 load=1.04
+{"people": 4, "fps": 60, "kbps": 20797, "sfu_cpu_core_share": 0.558, "forwarded_mbit_per_s": 249.9, "forwarded_writes_per_s": 1320.0, "forwarded_mbit_per_s_per_core": 448.0, "received_video_fps_per_stream": 60.0, "received_audio_pps_per_stream": 50.0}
+
+## after: only clients with input or a due timer are polled; the socket address and read timeout are not set per packet
+## people=4 fps=30 kbps=1500 load=2.35
+{"people": 4, "fps": 30, "kbps": 1500, "sfu_cpu_core_share": 0.087, "forwarded_mbit_per_s": 18.4, "forwarded_writes_per_s": 961.0, "forwarded_mbit_per_s_per_core": 212.0, "received_video_fps_per_stream": 30.1, "received_audio_pps_per_stream": 50.0}
+## people=8 fps=30 kbps=1500 load=1.83
+{"people": 8, "fps": 30, "kbps": 1500, "sfu_cpu_core_share": 0.321, "forwarded_mbit_per_s": 85.8, "forwarded_writes_per_s": 4476.0, "forwarded_mbit_per_s_per_core": 267.0, "received_video_fps_per_stream": 30.0, "received_audio_pps_per_stream": 50.0}
+## people=12 fps=30 kbps=1500 load=1.42
+{"people": 12, "fps": 30, "kbps": 1500, "sfu_cpu_core_share": 0.776, "forwarded_mbit_per_s": 201.8, "forwarded_writes_per_s": 10532.0, "forwarded_mbit_per_s_per_core": 260.0, "received_video_fps_per_stream": 29.9, "received_audio_pps_per_stream": 50.0}
+## people=4 fps=60 kbps=6183 load=1.55
+{"people": 4, "fps": 60, "kbps": 6183, "sfu_cpu_core_share": 0.191, "forwarded_mbit_per_s": 74.5, "forwarded_writes_per_s": 1318.0, "forwarded_mbit_per_s_per_core": 390.0, "received_video_fps_per_stream": 59.9, "received_audio_pps_per_stream": 50.0}
+## people=4 fps=60 kbps=20797 load=1.21
+{"people": 4, "fps": 60, "kbps": 20797, "sfu_cpu_core_share": 0.48, "forwarded_mbit_per_s": 250.3, "forwarded_writes_per_s": 1322.0, "forwarded_mbit_per_s_per_core": 521.0, "received_video_fps_per_stream": 59.3, "received_audio_pps_per_stream": 50.0}

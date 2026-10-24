@@ -233,6 +233,8 @@ fn run(socket: UdpSocket, rx: Receiver<Command>, counters: Arc<Counters>) {
     let mut recordings: HashMap<String, record::RoomRecording> = HashMap::new();
     let mut queue: VecDeque<Propagated> = VecDeque::new();
     let mut buf = vec![0u8; 2000];
+    let Ok(local) = socket.local_addr() else { return };
+    let mut read_timeout: Option<Duration> = None;
     loop {
         let before = clients.len();
         clients.retain(|c| c.rtc.is_alive());
@@ -257,6 +259,7 @@ fn run(socket: UdpSocket, rx: Receiver<Command>, counters: Arc<Counters>) {
                 Ok(Command::RemoveSession(s)) => {
                     for c in clients.iter_mut().filter(|c| c.session == s) {
                         c.rtc.disconnect();
+                        c.dirty = true;
                     }
                 }
                 Ok(Command::StartRecording { room, dir, reply }) => {
@@ -289,9 +292,19 @@ fn run(socket: UdpSocket, rx: Receiver<Command>, counters: Arc<Counters>) {
             update_published_layers(&mut clients, &recordings);
         }
 
-        let mut timeout = Instant::now() + Duration::from_millis(100);
+        // Only clients that were given something, or whose timer is due, can have output:
+        // polling just those keeps the cost of a packet independent of the call's size.
+        let now = Instant::now();
+        let mut timeout = now + Duration::from_millis(100);
         for c in clients.iter_mut() {
-            timeout = timeout.min(c.poll_until_timeout(&mut queue, &socket));
+            if c.next_timeout <= now {
+                c.handle_input(Input::Timeout(now));
+                c.dirty = true;
+            }
+            if std::mem::take(&mut c.dirty) {
+                c.next_timeout = c.poll_until_timeout(&mut queue, &socket);
+            }
+            timeout = timeout.min(c.next_timeout);
         }
 
         if let Some(p) = queue.pop_front() {
@@ -300,23 +313,31 @@ fn run(socket: UdpSocket, rx: Receiver<Command>, counters: Arc<Counters>) {
         }
 
         let wait = timeout.saturating_duration_since(Instant::now()).max(Duration::from_millis(1));
-        let _ = socket.set_read_timeout(Some(wait));
+        // Waking early is harmless, late is not: only shorten the wait, or lengthen it when it
+        // is well off, to save a system call per packet.
+        if read_timeout.is_none_or(|t| wait < t || wait > t + Duration::from_millis(5)) {
+            let _ = socket.set_read_timeout(Some(wait));
+            read_timeout = Some(wait);
+        }
         buf.resize(2000, 0);
         match socket.recv_from(&mut buf) {
             Ok((n, source)) => {
                 buf.truncate(n);
-                if let (Ok(contents), Ok(destination)) = (buf.as_slice().try_into(), socket.local_addr()) {
+                if let Ok(contents) = buf.as_slice().try_into() {
                     let input = Input::Receive(
                         Instant::now(),
                         Receive {
                             proto: Protocol::Udp,
                             source,
-                            destination,
+                            destination: local,
                             contents,
                         },
                     );
                     match clients.iter_mut().find(|c| c.rtc.accepts(&input)) {
-                        Some(c) => c.handle_input(input),
+                        Some(c) => {
+                            c.handle_input(input);
+                            c.dirty = true;
+                        }
                         None => debug!(%source, "no SFU client accepts this packet"),
                     }
                 }
@@ -326,11 +347,6 @@ fn run(socket: UdpSocket, rx: Receiver<Command>, counters: Arc<Counters>) {
                 // ICMP port unreachable and similar transient errors: keep serving.
                 debug!(error = %e, "SFU socket read error");
             }
-        }
-
-        let now = Instant::now();
-        for c in clients.iter_mut() {
-            c.handle_input(Input::Timeout(now));
         }
     }
 }
@@ -354,6 +370,7 @@ fn update_published_layers(clients: &mut [Client], recordings: &HashMap<String, 
         let sender = &mut clients[i];
         if sender.published_top != Some(top) && sender.send_channel(&serde_json::json!({"type": "publish", "max": LAYERS[top]}).to_string()) {
             sender.published_top = Some(top);
+            sender.dirty = true;
         }
     }
 }
@@ -381,6 +398,7 @@ fn propagate(
         }
     }
     for c in clients.iter_mut().filter(|c| c.id != origin && c.room == room) {
+        c.dirty = true;
         match p {
             Propagated::TrackOpen(_, _, track) => c.track_open(track.clone()),
             Propagated::MediaData(_, _, data) => {
@@ -540,6 +558,11 @@ struct Client {
     published_top: Option<usize>,
     /// Preferences changed or the data channel opened: recompute what senders publish.
     layers_dirty: bool,
+    /// Something was handed to this client (a packet, media to forward, a command) since it
+    /// was last polled, so it may have output.
+    dirty: bool,
+    /// When str0m next wants time to pass for this client (its last `Output::Timeout`).
+    next_timeout: Instant,
 }
 
 impl Client {
@@ -557,6 +580,8 @@ impl Client {
             layer_prefs: HashMap::new(),
             published_top: None,
             layers_dirty: false,
+            dirty: true,
+            next_timeout: Instant::now(),
         }
     }
 
