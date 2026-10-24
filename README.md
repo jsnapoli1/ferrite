@@ -114,6 +114,49 @@ side-by-side performance claims.
 - **Moderation:** moderators can hold everyone else in a **lobby** (optionally until a set time), ask people to mute, lower hands, remove someone from the call, and limit starting calls to moderators. **Breakout rooms** are child conversations of the main one: participants' clients move into their room's chat and call when they start and come back when they stop (by hand or on a timer); their chats stay readable.
 - **Assistant in Talk:** in rooms where it is enabled, mentioning `@assistant` makes the AI answer in the thread, using the asker's permissions.
 
+### Call quality
+
+The ceiling is `[calls] max_resolution` (360p to 2160p, "4k" also works) and `max_fps` (15 to 60), or
+`FERRITE_CALL_RESOLUTION` / `FERRITE_CALL_FPS`. The default is 720p at 30 fps. Below the ceiling everything adapts by
+itself: each receiver gets the simulcast layer its tile needs, and senders lower resolution when bandwidth or CPU runs
+short. A higher ceiling therefore only helps people whose machines and links can carry it, and costs the others nothing.
+
+**What limits it is the sender's CPU and uplink, not Ferrite.** Browsers encode VP8 in software (`libvpx`, which is what
+Chrome reports for these calls), so every sender encodes three layers on its CPU. Measured with the same libraries
+(`docs/bench/codec-cost.sh`; CPU time per frame on one thread of a 2.8 GHz Xeon vCPU, so faster desktop cores need less):
+
+| Ceiling | Sender: CPU for the three layers | Sender: upload | Receiver: one full-size view | Decoding it | Recording, per person |
+|---|---|---|---|---|---|
+| 720p 30 (default) | 0.7 core | 2.1 Mbit/s | 1.5 Mbit/s | 0.06 core | 0.7 GB/h |
+| 1080p 30 | 1.1 cores | 4.3 Mbit/s | 3.1 Mbit/s | 0.12 core | 1.4 GB/h |
+| 1080p 60 | 2.1 cores | 8.6 Mbit/s | 6.2 Mbit/s | 0.2 core | 2.8 GB/h |
+| 2160p 30 | 3.6 cores | 14.4 Mbit/s | 10.4 Mbit/s | 0.4 core | 4.7 GB/h |
+| 2160p 60 | 7.7 cores | 28.8 Mbit/s | 20.8 Mbit/s | 0.7 core | 9.4 GB/h |
+
+The bitrates are the encoders' targets (0.055 bits per pixel at 720p, a little less per pixel as resolution grows), and
+smaller tiles use the smaller layers (a quarter and a sixteenth of the pixels). Capture, scaling and drawing come on top.
+In the browser: two people on one 4-vCPU machine (about two cores each) keep 30 fps at 720p30, while at 1080p30 Chrome
+reports itself CPU-limited and falls back to 720p at about 14 fps (`e2e/callfps.mjs` with a 1080p test camera). So:
+
+- **1080p 30** needs a recent laptop or desktop with a few cores to spare and about 5 Mbit/s up.
+- **1080p 60** wants a fast quad-core or better that the call has mostly to itself, and about 10 Mbit/s up.
+- **2160p (4K)** is beyond software VP8 on ordinary machines (3.6 cores at 30 fps, 7.7 at 60): it needs hardware video
+  encoding, most widely available for H.264, and 15–30 Mbit/s up. Ferrite's SFU negotiates
+  VP8 only today (str0m supports the others; WebM recordings could hold VP9 or AV1, H.264 would need MP4).
+- Peer-to-peer calls (no SFU) encode once per peer, so these costs multiply by the number of peers: keep the ceiling at
+  720p if the SFU is off.
+
+**The server forwards, it never decodes.** `crates/ferrite-sfu/examples/sfu-load.rs` runs participants in-process
+against the SFU; its thread (one core) forwards 210–270 Mbit/s per core at 720p30 frame sizes and 390–520 Mbit/s per core at
+1080p60–2160p60, where frames are larger (`docs/bench/sfu-load.txt`). Examples: 12 people all watching each other at
+720p30 = 200 Mbit/s out for 0.78 core; 4 people at 2160p60 = 250 Mbit/s out for 0.48 core. Outgoing traffic is about
+*participants × full-size views each × top bitrate*, plus the small layers, so the server's uplink is usually the
+first limit: a 4K60 call of 4 people needs about 250 Mbit/s up from the server. For 1080p and above, let the kernel
+give the SFU bigger socket buffers (it asks for 4 MiB and logs a warning when it gets less):
+`sysctl -w net.core.rmem_max=4194304 net.core.wmem_max=4194304`.
+
+Recording keeps the top layer of everyone at full bitrate (the table's last column is the disk it needs).
+
 ## ArtCraft Crafting Apps
 
 The **ArtCraft** suite ([storytold/artcraft](https://github.com/storytold/artcraft)) is a family
@@ -243,7 +286,7 @@ enabled = true
 udp_bind = "0.0.0.0:10000"                  # open this UDP port
 advertise = ["203.0.113.7"]                 # public IP(s) browsers should reach; default: this machine's IP
 
-[calls]                                     # see "Call quality" below for what each step needs
+[calls]                                     # see "Call quality" (under Talk) for what each step needs
 max_resolution = "720p"                     # 360p, 480p, 720p, 1080p, 1440p or 2160p (4k)
 max_fps = 30                                # 15 to 60
 
@@ -367,7 +410,7 @@ This is an honest map against Nextcloud's core feature set: ✅ done, 🟡 parti
 | Mind maps and whiteboards | ✅ | Canvases with embedded files, mind maps and boards |
 | Calendar (CalDAV) | ✅ | Recurrence expansion, sharing (users, groups, public links), invitations with server-side scheduling (RFC 6638) and email RSVPs. Replies emailed back from guests' own mail clients are read when the organizer has the mail account in Ferrite. VTODO tasks are read-only in the web UI |
 | Contacts (CardDAV) | ✅ | |
-| Mail | ✅ | Webmail for IMAP/SMTP accounts, Google/Microsoft OAuth, delegation, provisioning (no POP3); see [docs/mail-parity.md](docs/mail-parity.md) |
+| Mail | ✅ | The Nextcloud Mail feature set, row by row in [docs/mail-parity.md](docs/mail-parity.md): inbox management (priority inbox, tags, quick actions, snooze, folders, unified views, advanced search), rich and plain composing with every common MIME format, outbox with undo and send later, aliases, signatures, text blocks, read receipts, S/MIME and PGP (Mailvelope), phishing and DKIM checks, an image proxy, Sieve filters and autoresponder, invitations and itineraries, Google/Microsoft OAuth, delegation, provisioning and admin settings. IMAP and SMTP, like Nextcloud Mail (neither speaks POP3); JMAP is left out (internal-only in Nextcloud Mail 6.0) |
 | Activity stream, notifications | ✅ | |
 | Users and groups admin | ✅ | |
 | LDAP/AD, SAML/OIDC single sign-on | 🟡 | OpenID Connect (any provider, several at once, auto-create, admin group, link by email). No LDAP or SAML |
